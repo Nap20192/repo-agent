@@ -5,6 +5,7 @@ from pathlib import Path
 
 from scanner.adapter.domain import consult, extract
 from scanner.core.domain import DomainMap, Entity, Rule
+
 from tests.test_graph import FakeRun, FakeStage, FakeVerifier, _run
 from tests.test_stages import Node
 

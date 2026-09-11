@@ -6,6 +6,7 @@ import logging
 import os
 import time
 from collections.abc import AsyncGenerator, Callable
+from pathlib import Path
 from typing import Any
 
 from google.adk.agents import BaseAgent
@@ -26,6 +27,7 @@ class PipelineV2(_Graph):
     the Investigator (= Verifier) drains it in batches until empty, round limit or budget; then Critic."""
 
     architect: BaseAgent | None = None
+    domain_modeler: BaseAgent | None = None  # Architect → DomainModeler → ThreatModeler
     threat_modeler: BaseAgent | None = None
     threats: list[Threat] = Field(default_factory=list)  # explicit threats (tests) — merged with the ThreatModel's
     locate: Callable[[str], tuple[str, int] | None] | None = None  # symbol → (file, line) for synthetic anchors
@@ -78,9 +80,18 @@ class PipelineV2(_Graph):
             }
             async for ev in self._stage(ctx, self.architect, "architecture_model", skeleton, arts, timings):
                 yield ev
+        am = arts.get("architecture_model") or ArchitectureModel().model_dump()
+        if self.domain_modeler is not None:
+            from scanner.adapter.domain import (
+                extract,  # adapter stays importable without the graph
+            )
+
+            skeleton = extract(Path(self.target), self.index).model_dump() if Path(self.target).is_dir() else {}
+            async for ev in self._stage(ctx, self.domain_modeler, "domain_map", {"architecture_model": am, "skeleton": skeleton}, arts, timings):
+                yield ev
         if self.threat_modeler is not None:
-            am = arts.get("architecture_model") or ArchitectureModel().model_dump()
-            async for ev in self._stage(ctx, self.threat_modeler, "threat_model", {"architecture_model": am}, arts, timings):
+            payload = {"architecture_model": am, "domain_map": arts.get("domain_map") or {}}
+            async for ev in self._stage(ctx, self.threat_modeler, "threat_model", payload, arts, timings):
                 yield ev
             if arts.get("threat_model"):
                 try:
