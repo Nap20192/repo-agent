@@ -65,7 +65,7 @@ def test_scan_vulnshop():
 def test_js_route_with_named_handler_and_semicolon(tmp_path):
     (tmp_path / "s.js").write_text('const app = require("express")();\nfunction render(req, res) {}\napp.get("/r", render);\napp.post("/x", (req, res) => res.send(1));\n')
     eps = entry_points(tmp_path)
-    assert [(c.file, c.line, c.symbol) for c in eps] == [("s.js", 3, "render")]  # inline arrow handlers are not entry points
+    assert [(c.file, c.line, c.symbol, c.route) for c in eps] == [("s.js", 3, "render", ["GET /r"]), ("s.js", 4, "", ["POST /x"])]  # inline handler: no symbol, route is the identity
 
 
 def test_osv_anchors_aggregate_per_package(tmp_path, monkeypatch):
@@ -96,3 +96,55 @@ def test_read_lines_refuses_symlink_escape(tmp_path):
     (tmp_path / "t" / "link").symlink_to(tmp_path / "outside.txt")
     with pytest.raises(FileNotFoundError):
         read_lines(tmp_path / "t", "link", 1)
+
+
+def test_semgrep_packs_per_language_and_excludes(tmp_path, monkeypatch):
+    from scanner.adapter import static as st
+    (tmp_path / "a.py").write_text("x = 1\n")
+    (tmp_path / "b.js").write_text("var y = 1;\n")
+    seen = {}
+
+    def fake_run(cmd, target, timeout=600):
+        seen["cmd"] = cmd
+        return '{"runs": []}'
+
+    monkeypatch.setattr(st, "_run", fake_run)
+    monkeypatch.delenv("SEMGREP_CONFIG", raising=False)
+    st._semgrep(tmp_path)
+    cmd = seen["cmd"]
+    cfgs = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--config"]
+    assert "p/python" in cfgs and "p/flask" in cfgs and "p/javascript" in cfgs and "p/nodejs" in cfgs and "auto" not in cfgs
+    assert "--metrics=off" in cmd
+    excl = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--exclude"]
+    assert {".github", "docs", "artifacts", "*.md", "*.html", "*.yml", "node_modules", "*_test.go", "test_*.py"} <= set(excl)
+    monkeypatch.setenv("SEMGREP_CONFIG", "p/custom")
+    st._semgrep(tmp_path)
+    assert [c for i, c in enumerate(seen["cmd"]) if seen["cmd"][i - 1] == "--config"] == ["p/custom"]
+
+
+def test_entry_points_all_frameworks(tmp_path):
+    (tmp_path / "s.ts").write_text('app.get("/x", (req, res) => { res.send(1); });\nrouter.route("/y").get(list);\napp.post("/z", async (req, res) => {\n')
+    (tmp_path / "urls.py").write_text('urlpatterns = [\n    path("a/", views.index),\n    re_path(r"^b/$", views.show_b, name="b"),\n]\n')
+    (tmp_path / "api.py").write_text('router = APIRouter()\n\n@router.get("/items")\nasync def items():\n    pass\n')
+    (tmp_path / "web.php").write_text("<?php\nRoute::get('/u', [UserCtl::class, 'show']);\n")
+    (tmp_path / "page.php").write_text("<?php\n$x = 1;\n$id = $_GET['id'];\n")
+    (tmp_path / "r.go").write_text('package main\nfunc main() {\n\tr.Get("/c", chiHandler)\n\tg.GET("/d", ginHandler)\n\thttp.Handle("/e", eHandler)\n}\n')
+    got = {(c.file, c.line, c.symbol, tuple(c.route)) for c in entry_points(tmp_path)}
+    assert ("s.ts", 1, "", ("GET /x",)) in got
+    assert ("s.ts", 2, "list", ("GET /y",)) in got
+    assert ("s.ts", 3, "", ("POST /z",)) in got
+    assert ("urls.py", 2, "index", ()) in got and ("urls.py", 3, "show_b", ()) in got
+    assert ("api.py", 4, "items", ()) in got
+    assert ("web.php", 2, "UserCtl.show", ("GET /u",)) in got
+    assert ("page.php", 3, "", ("page.php",)) in got
+    assert {("r.go", 3, "chiHandler", ()), ("r.go", 4, "ginHandler", ()), ("r.go", 5, "eHandler", ())} <= got
+
+
+def test_js_route_detector_is_linear_on_adversarial_lines(tmp_path):
+    import time
+    evil = 'app.get("/x", ' + "a" * 5000 + " " * 5000 + ")"
+    (tmp_path / "e.js").write_text(evil + "\n" + 'app.get("/y", (req, res) => res.send(1));\n')
+    t0 = time.monotonic()
+    eps = entry_points(tmp_path)
+    assert time.monotonic() - t0 < 1.0
+    assert [(c.line, c.route) for c in eps] == [(2, ["GET /y"])]  # the long line is skipped, the inline handler found

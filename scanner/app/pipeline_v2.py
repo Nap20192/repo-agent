@@ -103,7 +103,10 @@ class PipelineV2(_Graph):
         done: set[str] = set()
         queue = reconcile(from_anchors(anchors) + hyps, [], done)
         if self.entry_points_fn is not None:  # plan-stage rule: no entry point stays unexamined
-            queue = reconcile(coverage(self.entry_points_fn(), queue, done), queue, done)
+            baseline, minted_entries = coverage(self.entry_points_fn(), queue, done)
+            if minted_entries:
+                self.store.save_anchors(minted_entries)  # inline handlers / PHP pages: anchors at file:line
+            queue = reconcile(baseline, queue, done)
         rnd = int(ctx.session.state.get(core.STATE_ROUND) or 0)
         stop = ""
         while queue:

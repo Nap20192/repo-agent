@@ -174,3 +174,16 @@ def test_read_file_default_window_and_grep_cap(tmp_path):
     (tmp_path / "noise.txt").write_text(("needle " + "x" * 100 + "\n") * 200)
     out = t["grep"]("needle")["output"]
     assert len(out) <= tools.GREP_CAP
+
+
+def test_synthetic_anchor_takes_model_cwe(tmp_path):
+    (tmp_path / "s.js").write_text('app.get("/ping", (req, res) => exec("ping " + req.query.h));\n')
+    ep = Anchor(id="ep1", tool="entrypoint", rule_id="GET /ping", cwe="", severity="low", file="s.js", line=1)
+    run = FakeRun([ep])
+    t = {f.__name__: f for f in tools.verifier_tools(run, tmp_path, reader=lambda f, l: (tmp_path / f).read_text())}
+    out = t["report_finding"]("ep1", "cmdi", "confirmed", ['exec("ping " + req.query.h)'], cwe="CWE-78")
+    assert out["status"] == "confirmed" and out["cwe"] == "CWE-78"
+    sql = Anchor(id="a1", tool="gosec", cwe="CWE-89", severity="high", file="s.js", line=1)
+    run2 = FakeRun([sql])
+    t2 = {f.__name__: f for f in tools.verifier_tools(run2, tmp_path, reader=lambda f, l: (tmp_path / f).read_text())}
+    assert t2["report_finding"]("a1", "x", "confirmed", ["exec("], cwe="CWE-78")["status"] == "error"  # real anchors still fixed

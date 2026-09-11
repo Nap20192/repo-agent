@@ -143,10 +143,22 @@ def _gosec(target: Path) -> list[Anchor]:
     return anchors_from_sarif(_run(["gosec", "-fmt", "sarif", "-quiet", "-no-fail", "./..."], target), "gosec", target)
 
 
+# registry packs per language (validated against the registry; p/express does not exist)
+_SEMGREP_PACKS = {"go": ["p/golang"], "python": ["p/python", "p/flask", "p/django"],
+                  "javascript": ["p/javascript", "p/nodejs"], "typescript": ["p/typescript", "p/nodejs"], "php": ["p/php"]}
+# noise sources semgrep should not scan: CI, docs, fixtures, tests, templates
+_SEMGREP_EXCLUDES = [".github", "docs", "artifacts", "*.md", "*.html", "*.yml", "*.yaml", "*.txt",
+                     "**/test/**", "**/tests/**", "*_test.go", "*.test.js", "test_*.py", *sorted(SKIP_DIRS)]
+
+
 def _semgrep(target: Path) -> list[Anchor]:
-    cfg = os.environ.get("SEMGREP_CONFIG", "auto")
-    metrics = [] if cfg == "auto" else ["--metrics=off"]  # semgrep refuses `auto` with metrics off
-    out = _run(["semgrep", "--sarif", "--quiet", *metrics, "--config", cfg, "."], target)
+    if cfg := os.environ.get("SEMGREP_CONFIG"):
+        cfgs, metrics = [cfg], ([] if cfg == "auto" else ["--metrics=off"])  # semgrep refuses `auto` with metrics off
+    else:
+        cfgs = sorted({p for lang in detect_langs(target) for p in _SEMGREP_PACKS.get(lang, [])}) or ["p/default"]
+        metrics = ["--metrics=off"]
+    args = [a for c in cfgs for a in ("--config", c)] + [a for e in _SEMGREP_EXCLUDES for a in ("--exclude", e)]
+    out = _run(["semgrep", "--sarif", "--quiet", *metrics, *args, "."], target)
     return anchors_from_sarif(out, "semgrep", target)
 
 
@@ -260,10 +272,28 @@ def _run_jobs(target: Path, jobs) -> ScanResult:
 
 # --- entry points (text detectors) ---------------------------------------------------
 
-_GO_ROUTE = re.compile(r"\.(?:HandleFunc|Handle|GET|POST|PUT|DELETE|PATCH|Any)\(\s*\"[^\"]*\"\s*,\s*([\w.]+)")
+_GO_ROUTE = re.compile(r"\.(?:HandleFunc|Handle|GET|POST|PUT|DELETE|PATCH|Any|Get|Post|Put|Delete|Patch|Options|Head)\(\s*\"[^\"]*\"\s*,\s*([\w.]+)")
 _PY_ROUTE = re.compile(r"^\s*@\S+\.(?:route|get|post|put|delete|patch|api_route|websocket)\(\s*[\"'][^\"']+[\"']")
 _PY_DEF = re.compile(r"^\s*(?:async\s+)?def\s+(\w+)")
-_JS_ROUTE = re.compile(r"\b(?:app|router|server)\.(?:get|post|put|delete|patch|all|use)\(\s*[\"'`][^\"'`]*[\"'`]\s*,.*?([A-Za-z_$][\w$]*)\s*\)*\s*;?\s*$")
+_DJANGO_URL = re.compile(r"^\s*(?:path|re_path|url)\(\s*r?[\"'][^\"']*[\"']\s*,\s*([\w.]+)")
+_JS_METHODS = r"(?:get|post|put|delete|patch|all|use)"
+_JS_ROUTE = re.compile(rf"\b(?:app|router|server)\.({_JS_METHODS})\(\s*[\"'`]([^\"'`]*)[\"'`]\s*,[^;]{{0,200}}?([A-Za-z_$][\w$]*)\s*\)*\s*;?\s*$")
+FILE_CAP = 2 * 1024 * 1024  # never slurp a multi-GB file for a small window (read_file, dominance)
+MAX_DETECT_LINE = 1000  # entry detectors skip longer lines: minified bundles and adversarial input, no backtracking budget
+_JS_INLINE = re.compile(rf"\b(?:app|router|server)\.({_JS_METHODS})\(\s*[\"'`]([^\"'`]*)[\"'`]\s*,\s*(?:async\s*)?(?:\([^)]*\)\s*=>|\w+\s*=>|function\s*\()")
+_JS_CHAIN = re.compile(rf"\.route\(\s*[\"'`]([^\"'`]*)[\"'`]\s*\)\.({_JS_METHODS})\(\s*([A-Za-z_$][\w$]*)")
+_PHP_ROUTE = re.compile(r"Route::(get|post|put|delete|patch|any|match)\(\s*['\"]([^'\"]*)['\"]\s*,\s*\[\s*(\w+)::class\s*,\s*['\"](\w+)['\"]")
+_PHP_INPUT = re.compile(r"\$_(?:GET|POST|REQUEST)\b")
+
+
+def _js_entries(rel: str, i: int, ln: str) -> list[Candidate]:
+    if m := _JS_CHAIN.search(ln):
+        return [Candidate(kind="entry", file=rel, line=i, symbol=m.group(3), route=[f"{m.group(2).upper()} {m.group(1)}"])]
+    if m := _JS_INLINE.search(ln):  # inline handler: no symbol, the route is the identity
+        return [Candidate(kind="entry", file=rel, line=i, symbol="", route=[f"{m.group(1).upper()} {m.group(2)}"])]
+    if m := _JS_ROUTE.search(ln):
+        return [Candidate(kind="entry", file=rel, line=i, symbol=m.group(3), route=[f"{m.group(1).upper()} {m.group(2)}"])]
+    return []
 
 
 def entry_points(target: Path) -> list[Candidate]:
@@ -271,7 +301,7 @@ def entry_points(target: Path) -> list[Candidate]:
     out = []
     for p in files(target):
         lang = LANG_EXT.get(p.suffix)
-        if lang is None or lang == "php":
+        if lang is None:
             continue
         try:
             lines = p.read_text(errors="replace").splitlines()
@@ -279,8 +309,10 @@ def entry_points(target: Path) -> list[Candidate]:
             log.warning("entry_points: unreadable %s: %s", p, e)
             continue
         rel = str(p.relative_to(target))
-        pending = False
+        pending = php_input_seen = False
         for i, ln in enumerate(lines, 1):
+            if len(ln) > MAX_DETECT_LINE:
+                continue
             if lang == "go":
                 if m := _GO_ROUTE.search(ln):
                     out.append(Candidate(kind="entry", file=rel, line=i, symbol=m.group(1)))
@@ -290,8 +322,17 @@ def entry_points(target: Path) -> list[Candidate]:
                 elif pending and (m := _PY_DEF.match(ln)):
                     out.append(Candidate(kind="entry", file=rel, line=i, symbol=m.group(1)))
                     pending = False
-            elif m := _JS_ROUTE.search(ln):
-                out.append(Candidate(kind="entry", file=rel, line=i, symbol=m.group(1)))
+                elif m := _DJANGO_URL.match(ln):
+                    out.append(Candidate(kind="entry", file=rel, line=i, symbol=m.group(1).rsplit(".", 1)[-1]))
+            elif lang == "php":
+                if m := _PHP_ROUTE.search(ln):
+                    out.append(Candidate(kind="entry", file=rel, line=i, symbol=f"{m.group(3)}.{m.group(4)}",
+                                         route=[f"{m.group(1).upper()} {m.group(2)}"]))
+                elif not php_input_seen and _PHP_INPUT.search(ln):  # plain PHP page: the file is the boundary
+                    php_input_seen = True
+                    out.append(Candidate(kind="entry", file=rel, line=i, symbol="", route=[rel]))
+            else:
+                out += _js_entries(rel, i, ln)
     return out
 
 

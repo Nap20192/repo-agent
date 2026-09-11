@@ -90,21 +90,29 @@ def reconcile(new: list[Hypothesis], queue: list[Hypothesis], done: set[str]) ->
     return sorted(merged.values(), key=lambda h: -h.priority)
 
 
-def coverage(entry_points: list[Candidate], queue: list[Hypothesis], done: set[str]) -> list[Hypothesis]:
+def coverage(entry_points: list[Candidate], queue: list[Hypothesis], done: set[str]) -> tuple[list[Hypothesis], list[Anchor]]:
     """Plan-stage rule (Shannon): an entry point no item examines is never examined by anything downstream.
     Every entry point not covered by a queued/done item (same symbol, or its file in `reads`) becomes a
-    low-priority baseline "entry" hypothesis on its handler symbol."""
+    low-priority baseline "entry" hypothesis: on its handler symbol, or — for inline handlers and plain
+    PHP pages that have no symbol — on a synthetic anchor (tool "entrypoint") minted at file:line so the
+    anchor-only gate still applies. Returns (hypotheses, minted anchors)."""
     covered_syms = {h.symbol for h in queue if h.symbol} | {k.split("|", 1)[0] for k in done if "|" in k}
     covered_files = {f for h in queue for f in h.reads}
-    out = []
+    hyps: list[Hypothesis] = []
+    minted: list[Anchor] = []
     for c in entry_points:
-        if not c.symbol or c.symbol in covered_syms or c.file in covered_files:
+        if (c.symbol and (c.symbol in covered_syms or c.file in covered_files)) or (not c.symbol and not c.file):
             continue
-        out.append(Hypothesis(
-            kind="entry", symbol=c.symbol, reads=[c.file] if c.file else [], priority=10,
-            claim=f"Baseline: untrusted input entering {c.symbol} ({c.file}:{c.line}) reaches a dangerous sink unsanitized",
-        ))
-    return out
+        where = c.symbol or " ".join(c.route) or c.file
+        claim = f"Baseline: untrusted input entering {where} ({c.file}:{c.line}) reaches a dangerous sink unsanitized"
+        h = Hypothesis(kind="entry", symbol=c.symbol, reads=[c.file] if c.file else [], priority=10, claim=claim)
+        if not c.symbol:
+            a = Anchor(id=new_anchor_id("entrypoint", where, c.file, c.line), tool="entrypoint", rule_id=where,
+                       severity="low", file=c.file, line=c.line, message=claim)
+            minted.append(a)
+            h.anchor_id = a.id
+        hyps.append(h)
+    return hyps, minted
 
 
 def adversarial_sweep(candidates: list[Candidate], fraction: float = 0.25, seed: int = 0) -> list[Hypothesis]:

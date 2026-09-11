@@ -17,13 +17,14 @@ from pathlib import Path
 
 from scanner import core
 from scanner.adapter import static
+from scanner.adapter.dominance import make_check_dominance
 from scanner.adapter.owasp import consult_owasp
 from scanner.adapter.skills import list_skills, load_skill
 from scanner.core import Finding
 from scanner.core.ports import Index
 
 OUT_CAP = 20_000
-FILE_CAP = 2 * 1024 * 1024  # never slurp a multi-GB file for a 60-line window
+FILE_CAP = static.FILE_CAP
 GREP_CAP = 4_000
 DEF_CAP = 120  # lines of a definition body returned by lsp_definition
 SYM_CAP = 200  # symbols listed by lsp_symbols
@@ -36,7 +37,7 @@ def _err(reason: str) -> dict:
 
 
 def _mismatch(name: str, got, want) -> str | None:
-    if not got or got == want:
+    if not got or not want or got == want:  # an anchor without the value (synthetic: no CWE) cannot disagree
         return None
     return f"{name} {got!r} does not match anchor's {want!r}"
 
@@ -339,6 +340,8 @@ def verifier_tools(run, target: Path, reader: Callable[[str, int], str] | None =
         bad = [m for m in (_mismatch("cwe", cwe, a.cwe), _mismatch("file", file, a.file), _mismatch("line", line, a.line)) if m]
         if bad:
             return "; ".join(bad) + "; coordinates come from the anchor — omit them or pick the right anchor_id"
+        if not a.cwe and cwe:  # synthetic anchors (entrypoint/threatmodel) carry no class: the model's CWE is recorded
+            a = a.model_copy(update={"cwe": cwe.strip().upper()})
         f = Finding(
             anchor_id=a.id, hypothesis_id=hypothesis_id, cwe=a.cwe, file=a.file, line=a.line,
             title=title, severity=severity or a.severity, status=status,
@@ -388,7 +391,9 @@ def critic_tools(run, target: Path, in_target: Callable[[list[str]], bool] | Non
         upd = run.set_status(f.id, core.UNCERTAIN, [f"critic: {reason}", *quotes], f"critic disproved {f.id}: {reason}")
         return upd.model_dump() if upd else _err("update failed")
 
-    return [disprove_finding, *_code_tools(target), *_lsp_tools(target, index or _default_index(target)), *_common_tools(run), list_skills, load_skill]
+    idx = index or _default_index(target)
+    return [disprove_finding, make_check_dominance(target, idx), *_code_tools(target), *_lsp_tools(target, idx),
+            *_common_tools(run), list_skills, load_skill]
 
 
 def architect_tools(run, target: Path, index: Index | None = None) -> list[Callable]:
