@@ -1,0 +1,127 @@
+# Board — rewrite of git-agent3 workflow on ADK Python
+
+Goal: `scan full --target <path>` = pre-pass (scanners → Anchors) → candidates → rounds
+`lead → verify ×N → lead …` with grounding + evidence gates → SARIF/summary, exit 0/1/2.
+Source workflow: `/home/vnkjd/Projects/git-agent3` (docs/ARCHITECTURE.md, internal/app/fullscan).
+Not replicated: hexagonal layout, Docker sandbox, go/ssa, LSP index, Domain Map builder.
+
+## Cards
+
+_v1 (Lead ⇄ Verifier, `FullScan`) removed 2026-09-12; the only graph is `PipelineV2`._
+
+| id | title | owner | state | files | merge gate |
+|---|---|---|---|---|---|
+| 00 | core types + pure rules | main | merged | scanner/core.py | `python scanner/core.py` prints `core ok` |
+| 01 | static scanners → anchors, entry points, symbol check; sqlite store + SARIF/summary | adapters | merged | scanner/static.py, scanner/store.py, tests/test_store.py, tests/test_static.py | `uv run pytest tests/test_store.py tests/test_static.py`; `static.scan` on samples/02-vulnshop returns ≥2 anchors with CWE-89/CWE-78 |
+| 02 | ADK function tools with gates | tools | merged | scanner/tools.py, tests/test_tools.py | `uv run pytest tests/test_tools.py`; report_finding refuses: unknown anchor, coord mismatch, missing consult ref, unmatched quote |
+| 03 | Lead/Verifier agents, FullScan graph, CLI, eval | graph | merged (reviewed: python, security, code, silent-failure; dev-team) | scanner/agents.py, scanner/main.py, scanner/__main__.py, tests/test_graph.py, eval/dataset.json | `uv run pytest tests/test_graph.py` with fake agents: 2 rounds, dossiers stored, finish on `route=finish`, budget → finish |
+| 04 | integration: real run on samples/02-vulnshop | user (needs LLM key) | blocked | .env | exit 2, SARIF has CWE-89 + CWE-78, `/safe` not confirmed |
+| 05 | v2 step 1: Critic (adversarial pass, disprove → uncertain) | main | merged | scanner/agents.py, scanner/tools.py, scanner/store.py | `uv run pytest`; disprove gate refuses unknown/non-confirmed/unquoted; FullScan runs critic after the loop |
+| 06 | v2 step 2: Reconciler (pure fn: anchors + threats → queue) + Investigator loop (queue-driven, no Lead), `PIPELINE=v2` | main | merged | scanner/reconcile.py, scanner/agents.py | `uv run pytest`; ollama smoke on 02-vulnshop drains the queue, exit 0 |
+| 07 | v2 step 3: Architect + ThreatModeler stages, artifacts in State, synthetic anchors for grounded threats, consult_owasp (static tables) | main | merged (reviewed: code, python) | scanner/owasp.py, scanner/artifacts.py, scanner/agents.py, scanner/tools.py, scanner/store.py | `uv run pytest`; eval with a real model: 08-idor-go confirmed via threat path, 0 FP on 03 (blocked on card 04) |
+| 08 | eval on samples with a real model (v1 removed; v2 is the only graph) | user (needs LLM key) | blocked | — | `PIPELINE=v2 uv run python -m scanner eval` vs v1: recall ≥, FP == 0 |
+| 09 | package layout core/adapter/app + observe (tracing, compaction) + persistent sessions | main | merged | scanner/core/{types,rules}.py, scanner/adapter/{static,store,owasp,tools}.py, scanner/app/{instructions,callbacks,agents,graph,fullscan,pipeline_v2,reconcile,observe,runner}.py, scanner/main.py, web/fullscan/agent.py | `uv run pytest` all green; `adk web web --port 8080 --session_service_uri=sqlite:///.state/sessions.db` lists run-<n>-<target> under app `fullscan` |
+| 11 | Shannon prompts: operating principles, research/review/critic rules, calibrate (report-only fn), plan coverage | shannon-prompts | merged | scanner/app/instructions.py, scanner/app/calibrate.py, scanner/app/reconcile.py | pytest green; attribution kept |
+| 12 | Strix skills corpus + load_skill/list_skills tools | strix-skills | merged | scanner/skills/, scanner/adapter/skills.py, scanner/adapter/tools.py | pytest green; skill_for(cwe) map |
+| 13 | wiring: calibrate (core) → summary/SARIF properties, coverage → queue, skill hint → verify payload | main | merged | scanner/core/calibrate.py, scanner/adapter/store.py, scanner/app/pipeline_v2.py, scanner/app/graph.py | pytest green |
+| 14 | LSP index: core port `Index` + adapters per language (Go/Python/TS/JS) + grep fallback + multiplexer; JSON-RPC stdio client; gopls integration test | lsp-core | merged | scanner/core/ports.py, scanner/adapter/index/*.py, tests/test_lsp*.py | fake-server round-trip, fallback without binaries, gopls on samples/02-vulnshop |
+| 15 | lsp_* tools, read_file 60-line window, grep cap, tool_window_callback(keep=3) | tools-window | merged | scanner/adapter/tools.py, scanner/app/callbacks.py, scanner/app/agents.py, tests/test_tools.py, tests/test_callbacks.py | tools with FakeIndex; window test on synthetic LlmRequest |
+| 16 | wiring: build_agent/prepare use the Index; close on scan_full; reviewers (code + security: 2 critical, 3 high fixed); GATE 2 | main | merged, awaiting GATE 2 | scanner/app/runner.py, tests/test_graph.py | pytest green; code+security review clean |
+| 17 | static pre-pass verified on mixed-language trees (synthetic mono-repo, bakery, NodeGoat, DVWA, govulnlab): osv aggregation per package + OSV_MAX, JS routes with `;`, php grep prefix, per-language grep scope, LSP-first routing, missing-target check | main | merged | scanner/adapter/static.py, scanner/adapter/index/{grep,__init__}.py, scanner/app/runner.py, tests/test_static.py, tests/test_lsp_multilang.py | pytest green; NodeGoat osv 300 → ≤40, entry points 0 → 20 |
+| 18 | per-node unit tests + agent contract tests (tools named in instructions exist, skills exist, payload keys match) | node-tests | running | tests/test_stages.py, tests/test_contracts.py | pytest green; every stage of PipelineV2 covered in isolation |
+| 19 | live per-agent eval harness (pass@k on a local/cheap model, scorecard JSON), marker `live` | live-eval | running | eval/agents.py, tests/live/, pyproject markers | `uv run python -m eval.agents` produces a scorecard; default pytest unaffected |
+| 20 | workflow improvements: parallel scanners in pre-pass, JSON-retry nudge for stages/verifier, stage timings in summary | workflow-improve | running | scanner/adapter/static.py, scanner/app/{graph,pipeline_v2}.py, scanner/adapter/store.py, tests/test_workflow_improvements.py | pytest green; pre-pass wall time ≤ slowest scanner |
+| 21 | R&D team: project skill `ecc-rnd` + catalog-diff script that finds new ECC skills/agents/commands and proposes how to apply them; first report | rnd-team | running | .claude/skills/ecc-rnd/SKILL.md, scripts/ecc_rnd.py, docs/rnd/ | script runs; first report lists concrete proposals |
+| 22 | R&D proposal #1: CLAUDE.md contract for agents; preamble names each agent's own verdict tool | main | merged | CLAUDE.md, scanner/app/instructions.py | contracts test green |
+| 10 | workflow e2e test + tracing check | workflow-test | merged (Jaeger: 10 spans on a fake run) | tests/test_workflow.py, tests/test_observe.py | `uv run pytest tests/test_workflow.py tests/test_observe.py` green (unit-level, done); pending: real run with `OTEL_EXPORTER_OTLP_ENDPOINT` set shows spans in Jaeger and the session in `adk web` |
+
+Blocked (04, 08): нужен LLM-ключ с запасом квоты — прогон на `.targets/bakery` упёрся в `429 RESOURCE_EXHAUSTED`.
+
+## Contract (module APIs — owners must match these exactly)
+
+### scanner/core.py (done)
+Types (pydantic, `extra=ignore`): `Anchor, Candidate, Hypothesis, Dossier, Finding`.
+Rules: `new_anchor_id, norm_severity, select_candidates, merge_duplicates, ground_hypothesis(h, has_anchor, has_symbol)->str|None,
+validate_finding(f)->str|None, required_consults(a)->(bool,bool,str), check_consulted(a, evidence)->str|None, is_consult_ref`.
+Constants: `CONFIRMED/REJECTED/UNCERTAIN, KINDS, STATE_ROUND, STATE_BUDGET_EXHAUSTED, STATE_STOP_REASON`.
+
+### scanner/adapter/static.py (card 01)
+```python
+class ScanResult(BaseModel): anchors: list[Anchor]; ran: list[str]; failed: dict[str, str]
+def detect_langs(target: Path) -> set[str]            # {"go","python","javascript","typescript","php"}
+def scan(target: Path, skip_deps: bool = False) -> ScanResult
+    # gosec -fmt sarif -quiet -no-fail ./...  (if go)         → tool "gosec"
+    # semgrep --sarif --quiet --metrics=off --config <SEMGREP_CONFIG or auto> .  (if non-go langs or env) → "semgrep"
+    # osv-scanner --format json -r .  (unless skip_deps)      → "osv", rule_id = advisory id (GHSA-/CVE-), file = manifest, line 1
+    # gitleaks detect --no-banner --report-format json --report-path /dev/stdout --exit-code 0 → "gitleaks", cwe "CWE-798"
+    # missing binary / failure → failed[tool] = reason, never raises. Anchors go through merge_duplicates.
+    # SARIF: cwe from result.properties.cwe|cwe_ids|tags, then rule.properties, then rule.relationships[target.toolComponent.name=="CWE"]
+def entry_points(target: Path) -> list[Candidate]      # kind="entry", symbol=<func name>, file, line; text detectors:
+    # go: http.HandleFunc/Handle("/x", h), r.HandleFunc, r.GET/POST(...); python: @app.route/get/post..., FastAPI; js: app.get/post/router.x
+def has_symbol(target: Path, fqn: str) -> bool         # last "." segment is defined: func|def|function|class|const|var <name>
+def read_lines(target: Path, file: str, line: int, window: int = 3) -> str   # raises FileNotFoundError
+```
+### scanner/adapter/store.py (card 01)
+```python
+class Store:
+    def __init__(self, path: str)                      # sqlite, schema created; tables runs, anchors, hypotheses, dossiers, findings, gate_log, notes
+    def start_run(self, target: str) -> "Run"          # marks orphan running runs as stopped
+class Run:
+    id: int; target: str
+    def save_anchors(self, anchors: list[Anchor]) -> None
+    def anchors(self) -> list[Anchor]
+    def anchor(self, id: str) -> Anchor | None
+    def put_hypotheses(self, round: int, hs: list[Hypothesis]) -> None
+    def put_dossiers(self, round: int, ds: list[Dossier]) -> None
+    def report(self, f: Finding) -> Finding            # assigns id "f_<n>"; dup (same anchor_id, or same cwe+file+line) → returns existing (higher confidence replaces status/evidence/confidence)
+    def findings(self) -> list[Finding]
+    def log_gate(self, anchor_id: str, reason: str) -> None
+    def add_note(self, text: str, ref: str = "") -> None
+    def notes(self) -> list[dict]                      # [{"time","text","ref"}]
+    def finish(self, status: str, reason: str = "") -> None   # done|stopped|failed
+    def write_report(self, out_dir: Path) -> Path      # SARIF 2.1.0 of confirmed findings → out_dir/report.sarif
+    def write_summary(self, out_dir: Path) -> Path     # {"run_id","target","confirmed","rejected","uncertain","findings":[...],"gate_refusals":n} → out_dir/summary.json
+```
+### scanner/adapter/tools.py (card 02)
+```python
+def lead_tools(run: Run, candidates: Callable[[], list[Candidate]], has_symbol: Callable[[str], bool]) -> list[Callable]
+    # list_candidates(kind="", cwe="", severity="", limit=0), dispatch(hypothesis: dict) -> {"hypothesis_id","accepted","reason"},
+    # list_anchors(cwe="", severity="", file="", limit=0), list_findings(), note_add(text, ref=""), note_list(), consult_knowledge(query)
+def verifier_tools(run: Run, target: Path, has_symbol) -> list[Callable]
+    # list_anchors, report_finding(anchor_id, title, status, evidence: list[str], hypothesis_id="", severity="", confidence=0.0, cwe="", file="", line=0)
+    #   gate order: anchor exists → cwe/file/line empty-or-equal → check_consulted (unless uncertain) → confirmed: at least one non-consult
+    #   evidence line found (strip-compare) in read_lines(file, line) → validate_finding → run.report; refusal → run.log_gate + {"status":"error","reason":...}
+    # list_findings, read_file(path, start=1, end=200) (inside target only), grep(pattern, path=".") (rg/grep -n, inside target),
+    # shell(command) (cwd=target, timeout 60s, output capped 20k; ponytail: host exec, no sandbox),
+    # note_add, note_list, consult_knowledge(query) (osv.dev: /v1/vulns/<id> or /v1/query {package,version}; returns advisory + "knowledge:<id>"),
+    # consult_domain(entity) (heuristic: grep entity decl + owner/user-id comparisons nearby; returns "domain:<entity>" ref)
+# Every tool returns a dict; errors as {"status":"error","reason":...} — never raise into the model.
+```
+### scanner/app/{agents,graph,fullscan,pipeline_v2}.py (card 03)
+```python
+LEAD_INSTRUCTION / VERIFIER_INSTRUCTION: port the Go prompts + lead-planning / verifier-proof skill text (inline, no skill loader).
+def budget_callback(limit: int, per_branch: bool) -> before_model_callback  # counts calls; over limit → state[STATE_BUDGET_EXHAUSTED]=True and return LlmResponse(error) that ends the turn
+def log_tools_callback(tool, args, ctx) -> None
+def new_lead(model, tools, max_calls) -> LlmAgent     # include_contents="none"; instruction gets RoundInput via state key "round_input" ({round_input})
+def new_verifier(model, tools, max_calls) -> LlmAgent # include_contents="none"; hypothesis JSON via instruction (clone per hypothesis)
+class FullScan(BaseAgent):  # ctor(name, lead, verifier, run, candidates_fn, has_anchor, has_symbol, max_rounds=4, max_hyps=8, max_parallel=3)
+    # loop: RoundInput{round,target,candidates,last_round} → state → run lead (sub-branch) → parse RoundOutput JSON best-effort from final text
+    #   (no valid JSON → finish) → gate hypotheses (ground_hypothesis, cap max_hyps, assign ids h<round>-<n>) → run.put_hypotheses
+    #   → route: dispatch&&accepted&&round+1<max_rounds ? verify : finish
+    # verify: ParallelAgent per chunk of max_parallel with verifier.clone(name=f"verify_r{r}_{i}", instruction=base+hypothesis JSON)
+    #   → dossier per hypothesis from STORE facts (findings with hypothesis_id, else anchor_id w/o foreign id; best of confirmed>rejected>uncertain),
+    #   model JSON only adds notes/new_hypotheses → run.put_dossiers → loop
+    # budget exhausted (state flag) → finish; stop reason → state[STATE_STOP_REASON]; state via yielded Event(actions=EventActions(state_delta=...))
+```
+### scanner/main.py + scanner/app/runner.py (card 03)
+`python -m scanner full --target <path> [--deps]` → Store(STATE_PATH or .state/state.db) → static.scan → run.save_anchors → candidates = entry_points + sink anchors
+→ model from env (GOOGLE_API_KEY → `LLM_MODEL` or "gemini-flash-latest"; else LiteLlm(model=f"openai/{LLM_MODEL or gpt-4.1}", api_base=LLM_BASE_URL, api_key=LLM_API_KEY))
+→ Runner(app_name="scanner", agent=FullScan, session_service=InMemorySessionService()) → report to `.runs/<unixtime>/` → print summary → exit 2 if confirmed, 1 on error, 0 clean.
+`python -m scanner eval [dataset.json]` → per case run full, precision/recall/F1 by (cwe, file, |line-expected|<=tolerance); exit 0 iff all expected confirmed and no false positives.
+Env: LEAD_MAX_MODEL_CALLS=40, VERIFIER_MAX_MODEL_CALLS=30, BUGFINDER_MAX_ROUNDS=4, BUGFINDER_MAX_HYPS=8, STATE_PATH, SEMGREP_CONFIG. `.env` loaded if present (python-dotenv is not installed: parse KEY=VALUE lines manually).
+
+## Rules for owners
+- Only touch your card's files. Tests: pytest, minimal, no fixtures beyond tmp_path.
+- ADK 2.9.0 is installed in `.venv` (`uv run ...`); read the source under `.venv/lib/python3.13/site-packages/google/adk/` when unsure.
+- Ponytail: stdlib first, no abstractions with one implementation, mark deliberate corners with `# ponytail:`.
+- Finish with a handoff: what works, what's skipped, how to run the merge gate.

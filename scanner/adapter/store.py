@@ -1,0 +1,171 @@
+"""State: one sqlite file per scanner. Runs, anchors, hypotheses, dossiers, findings, gate log, notes;
+SARIF/summary are exports, the db is the truth. Ported from git-agent3 internal/adapter/state."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import time
+from pathlib import Path
+
+from scanner.core import (
+    CONFIRMED,
+    REJECTED,
+    UNCERTAIN,
+    Anchor,
+    Dossier,
+    Finding,
+    Hypothesis,
+    calibrate,
+)
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS runs(id INTEGER PRIMARY KEY, target TEXT, status TEXT, reason TEXT, started REAL, finished REAL);
+CREATE TABLE IF NOT EXISTS anchors(run INTEGER, id TEXT, json TEXT, PRIMARY KEY(run, id));
+CREATE TABLE IF NOT EXISTS hypotheses(run INTEGER, round INTEGER, id TEXT, json TEXT);
+CREATE TABLE IF NOT EXISTS dossiers(run INTEGER, round INTEGER, hypothesis_id TEXT, json TEXT);
+CREATE TABLE IF NOT EXISTS findings(run INTEGER, n INTEGER, json TEXT, PRIMARY KEY(run, n));
+CREATE TABLE IF NOT EXISTS gate_log(run INTEGER, time REAL, anchor_id TEXT, reason TEXT);
+CREATE TABLE IF NOT EXISTS notes(run INTEGER, time REAL, text TEXT, ref TEXT);
+CREATE TABLE IF NOT EXISTS artifacts(run INTEGER, stage TEXT, json TEXT, PRIMARY KEY(run, stage));
+"""
+_LEVEL = {"critical": "error", "high": "error", "medium": "warning", "low": "note", "info": "note"}
+
+
+class Store:
+    def __init__(self, path: str):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(path, check_same_thread=False)  # ponytail: one connection, tools run in threads
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.executescript(_SCHEMA)
+
+    def close(self) -> None:
+        self.db.close()
+
+    def start_run(self, target: str) -> Run:
+        with self.db:
+            self.db.execute("UPDATE runs SET status='stopped', reason='orphaned' WHERE status='running'")
+            cur = self.db.execute("INSERT INTO runs(target,status,started) VALUES(?,?,?)", (target, "running", time.time()))
+        return Run(self.db, cur.lastrowid, target)
+
+
+class Run:
+    def __init__(self, db: sqlite3.Connection, run_id: int, target: str):
+        self.db, self.id, self.target = db, run_id, target
+
+    def save_anchors(self, anchors: list[Anchor]) -> None:
+        with self.db:
+            self.db.executemany("INSERT OR REPLACE INTO anchors VALUES(?,?,?)",
+                                [(self.id, a.id, a.model_dump_json()) for a in anchors])
+
+    def anchors(self) -> list[Anchor]:
+        rows = self.db.execute("SELECT json FROM anchors WHERE run=? ORDER BY rowid", (self.id,))
+        return [Anchor.model_validate_json(r[0]) for r in rows]
+
+    def anchor(self, anchor_id: str) -> Anchor | None:
+        r = self.db.execute("SELECT json FROM anchors WHERE run=? AND id=?", (self.id, anchor_id)).fetchone()
+        return Anchor.model_validate_json(r[0]) if r else None
+
+    def put_hypotheses(self, rnd: int, hs: list[Hypothesis]) -> None:
+        with self.db:
+            self.db.executemany("INSERT INTO hypotheses VALUES(?,?,?,?)",
+                                [(self.id, rnd, h.id, h.model_dump_json()) for h in hs])
+
+    def put_dossiers(self, rnd: int, ds: list[Dossier]) -> None:
+        with self.db:
+            self.db.executemany("INSERT INTO dossiers VALUES(?,?,?,?)",
+                                [(self.id, rnd, d.hypothesis_id, d.model_dump_json()) for d in ds])
+
+    def findings(self) -> list[Finding]:
+        rows = self.db.execute("SELECT json FROM findings WHERE run=? ORDER BY n", (self.id,))
+        return [Finding.model_validate_json(r[0]) for r in rows]
+
+    def report(self, f: Finding) -> Finding:
+        """Insert or return the duplicate (same anchor, or same cwe+file+line); higher confidence replaces verdict."""
+        for i, old in enumerate(self.findings(), 1):
+            same = (f.anchor_id and old.anchor_id == f.anchor_id) or \
+                   (f.cwe and (old.cwe, old.file, old.line) == (f.cwe, f.file, f.line))
+            if not same:
+                continue
+            if f.confidence > old.confidence:
+                old = old.model_copy(update={"status": f.status, "evidence": f.evidence, "confidence": f.confidence,
+                                             "hypothesis_id": f.hypothesis_id or old.hypothesis_id})
+                with self.db:
+                    self.db.execute("UPDATE findings SET json=? WHERE run=? AND n=?", (old.model_dump_json(), self.id, i))
+            return old
+        n = self.db.execute("SELECT COALESCE(MAX(n),0)+1 FROM findings WHERE run=?", (self.id,)).fetchone()[0]
+        f = f.model_copy(update={"id": f"f_{n}"})
+        with self.db:
+            self.db.execute("INSERT INTO findings VALUES(?,?,?)", (self.id, n, f.model_dump_json()))
+        return f
+
+    def set_status(self, finding_id: str, status: str, evidence: list[str], note: str = "") -> Finding | None:
+        """Change a finding's verdict (Critic: confirmed → uncertain); evidence is appended, note recorded."""
+        for i, f in enumerate(self.findings(), 1):
+            if f.id != finding_id:
+                continue
+            f = f.model_copy(update={"status": status, "evidence": [*f.evidence, *evidence]})
+            with self.db:
+                self.db.execute("UPDATE findings SET json=? WHERE run=? AND n=?", (f.model_dump_json(), self.id, i))
+            if note:
+                self.add_note(note, finding_id)
+            return f
+        return None
+
+    def log_gate(self, anchor_id: str, reason: str) -> None:
+        with self.db:
+            self.db.execute("INSERT INTO gate_log VALUES(?,?,?,?)", (self.id, time.time(), anchor_id, reason))
+
+    def add_note(self, text: str, ref: str = "") -> None:
+        with self.db:
+            self.db.execute("INSERT INTO notes VALUES(?,?,?,?)", (self.id, time.time(), text, ref))
+
+    def notes(self) -> list[dict]:
+        rows = self.db.execute("SELECT time,text,ref FROM notes WHERE run=? ORDER BY time", (self.id,))
+        return [{"time": t, "text": x, "ref": r} for t, x, r in rows]
+
+    def put_artifact(self, stage: str, obj: dict) -> None:
+        """Stage artifact (architecture_model, threat_model, ...): one JSON per stage, replaces."""
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO artifacts VALUES(?,?,?)", (self.id, stage, json.dumps(obj)))
+
+    def artifact(self, stage: str) -> dict | None:
+        r = self.db.execute("SELECT json FROM artifacts WHERE run=? AND stage=?", (self.id, stage)).fetchone()
+        return json.loads(r[0]) if r else None
+
+    def finish(self, status: str, reason: str = "") -> None:
+        with self.db:
+            self.db.execute("UPDATE runs SET status=?, reason=?, finished=? WHERE id=?", (status, reason, time.time(), self.id))
+
+    def write_report(self, out_dir: Path) -> Path:
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        intent = (self.artifact("threat_model") or {}).get("intent", "production")
+        results = [{
+            "ruleId": f.cwe or "unknown", "level": _LEVEL.get(f.severity, "warning"),
+            "message": {"text": f.title + ("\n" + "\n".join(f.evidence) if f.evidence else "")},
+            "locations": [{"physicalLocation": {"artifactLocation": {"uri": f.file}, "region": {"startLine": f.line}}}],
+            "properties": {"finding_id": f.id, "anchor_id": f.anchor_id, "confidence": f.confidence,
+                           "calibration": calibrate(f, intent)},
+        } for f in self.findings() if f.status == CONFIRMED]
+        sarif = {"version": "2.1.0", "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+                 "runs": [{"tool": {"driver": {"name": "scanner"}}, "results": results}]}
+        p = out_dir / "report.sarif"
+        p.write_text(json.dumps(sarif, indent=1))
+        return p
+
+    def write_summary(self, out_dir: Path) -> Path:
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        fs = self.findings()
+        gate = self.db.execute("SELECT COUNT(*) FROM gate_log WHERE run=?", (self.id,)).fetchone()[0]
+        intent = (self.artifact("threat_model") or {}).get("intent", "production")
+        summary = {"run_id": self.id, "target": self.target,
+                   **{s: sum(f.status == s for f in fs) for s in (CONFIRMED, REJECTED, UNCERTAIN)},
+                   "findings": [{**f.model_dump(), "calibration": calibrate(f, intent)} for f in fs], "gate_refusals": gate,
+                   "intent": intent}
+        if (timings := self.artifact("timings")) is not None:
+            summary["timings"] = timings
+        p = out_dir / "summary.json"
+        p.write_text(json.dumps(summary, indent=1))
+        return p

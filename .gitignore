@@ -1,0 +1,10 @@
+.venv/
+.state/
+.runs/
+__pycache__/
+.env
+.targets/
+.ruff_cache/
+.pytest_cache/
+.claude/settings.local.json
+*.db

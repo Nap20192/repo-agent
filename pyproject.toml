@@ -1,0 +1,19 @@
+[project]
+name = "scanner"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "google-adk>=2.9.0",
+    "litellm>=1.100.1",
+    "opentelemetry-exporter-otlp-proto-http>=1.42.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+markers = ["live: exercises real models/servers (LIVE_EVAL=1)"]
+addopts = "-m 'not live'"

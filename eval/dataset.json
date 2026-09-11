@@ -1,0 +1,40 @@
+{
+  "_comment": "Ground truth оценки: заведомо уязвимые сэмплы с известными находками. line — строка-сток; совпадение по CWE + близости строки (tolerance) в пределах хендлера. Безопасные соседи не перечислены: любое подтверждение вне expected считается ложным (штрафует flag контроля). См. samples/README.md.",
+  "cases": [
+    {
+      "name": "hello",
+      "target": "samples/01-hello",
+      "tolerance": 6,
+      "expected": []
+    },
+    {
+      "name": "vulnshop",
+      "target": "samples/02-vulnshop",
+      "tolerance": 6,
+      "expected": [
+        {"cwe": "CWE-89", "file": "main.go", "line": 22},
+        {"cwe": "CWE-78", "file": "main.go", "line": 30}
+      ]
+    },
+    {
+      "name": "govulnlab",
+      "target": "samples/03-govulnlab",
+      "tolerance": 8,
+      "expected": [
+        {"cwe": "CWE-89", "file": "main.go", "line": 40},
+        {"cwe": "CWE-78", "file": "main.go", "line": 64},
+        {"cwe": "CWE-22", "file": "main.go", "line": 75},
+        {"cwe": "CWE-918", "file": "main.go", "line": 102},
+        {"cwe": "CWE-79", "file": "main.go", "line": 115}
+      ]
+    },
+    {
+      "name": "idor-go",
+      "target": "samples/08-idor-go",
+      "tolerance": 8,
+      "expected": [
+        {"cwe": "CWE-639", "file": "main.go", "line": 31}
+      ]
+    }
+  ]
+}
