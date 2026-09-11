@@ -37,3 +37,14 @@ def test_unknown_language_only_grep(tmp_path):
     idx = build_index(t, languages={k: v for k, v in LANGUAGES.items() if k != "go"}, client_factory=FakeClient)
     assert isinstance(idx.indexes["go"], GrepIndex) and idx.indexes["go"].extensions == (".go",)
     idx.close()
+
+
+def test_empty_callers_of_an_owned_symbol_do_not_fall_through(tmp_path):
+    """An entry point has zero callers in its own language; MultiIndex must not borrow a same-named php symbol's."""
+    t = _tree(tmp_path)
+    (t / "web" / "index.php").write_text("<?php function pingHandler() {}\nfunction main() { pingHandler(); }\n")
+    idx = build_index(t, client_factory=FakeClient)
+    assert idx.has_symbol("pingHandler") and idx.indexes["go"].has_symbol("pingHandler")
+    go_callers = idx.indexes["go"].callers("pingHandler")
+    assert idx.callers("pingHandler") == go_callers  # never the php grep answer, even if go's list is empty
+    idx.close()

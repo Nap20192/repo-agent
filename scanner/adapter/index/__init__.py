@@ -60,6 +60,8 @@ class MultiIndex:
             res = getattr(ix, method)(*args)
             if res not in (None, [], False):
                 return res
+            if method != "find_symbol" and args and ix.has_symbol(args[0]):
+                return res  # this language owns the symbol: an empty answer is the answer (e.g. an entry point has no callers)
         return empty
 
     def find_symbol(self, fqn: str): return self._first("find_symbol", fqn, empty=None)
