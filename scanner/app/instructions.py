@@ -246,17 +246,17 @@ SPECIALIST_SECTIONS = {
 - consult_knowledge(advisory id or package) is MANDATORY: cite 'knowledge:<GHSA/CVE>' (the gate requires it).
 - Then decide reachability, not just presence: the advisory's vulnerable symbol must be called on a path from
   an entry point — lsp_references / lsp_path_to_entry on the symbol, read_file/grep for the import and call.
-- patched_in above the manifest version, or an uncalled symbol → rejected with that line quoted. No shell.""",
+- patched_in above the manifest version, or an uncalled symbol → rejected with that line quoted. You have no command-line tool.""",
     "secrets": """## Specialisation: hardcoded / leaked credentials (CWE-798, CWE-312, CWE-321)
 - The anchor is a scanner fact (gitleaks/semgrep) with the secret already redacted: confirm only that the value is
   a real, committed, used secret (not a placeholder/example/test fixture) — grep for where it is read, quote the
-  line; lsp_references on the variable. Never print or reconstruct the secret. No shell.""",
+  line; lsp_references on the variable. Never print or reconstruct the secret. You have no command-line tool.""",
     "config": """## Specialisation: security misconfiguration, logging, crypto hygiene (A02, A05, A09)
 - Cookie flags (Secure/HttpOnly/SameSite), CORS origins, debug/verbose error pages, sensitive data in logs,
   weak hashing/PRNG for security decisions, TLS verification off, unpinned GitHub Actions.
 - Confirm only when the misconfiguration is on a production path and quoted at file:line; a test/dev config
   block, or a value overridden by the production config you can cite, rejects. consult_owasp for the expected
-  control; read_file/grep/lsp_definition/lsp_references to find where the setting is applied. No shell.""",
+  control; read_file/grep/lsp_definition/lsp_references to find where the setting is applied. You have no command-line tool.""",
     "taint_critic": """## Specialisation: taint findings
 - For a "sanitizer / validator / framework control" disproof you MUST call check_dominance(file, sink_line,
   control_line); disprove only when dominates is true, quoting the control line. For "unreachable" use
@@ -267,7 +267,7 @@ SPECIALIST_SECTIONS = {
   read_file/grep/shell around the evidence.""",
     "dependency_critic": """## Specialisation: dependency findings
 - consult_knowledge for patched_in vs the manifest version; lsp_references / lsp_path_to_entry for the vulnerable
-  symbol — an uncalled symbol or a patched version disproves (quote the manifest or import line). No shell.""",
+  symbol — an uncalled symbol or a patched version disproves (quote the manifest or import line). You have no command-line tool.""",
 }
 
 LANG_OVERLAYS = {

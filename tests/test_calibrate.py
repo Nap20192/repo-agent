@@ -35,3 +35,13 @@ def test_sample_intent_and_exposure_scale_down():
     assert "sample_or_test" in sample["rules_applied"] and "internal_nested" in internal["rules_applied"]
     assert calibrate(_f(severity="low"))["impact"] == 2
     assert calibrate(_f(status=REJECTED))["priority"] == "LOW"
+
+
+def test_knowledge_raises_likelihood():
+    base = calibrate(_f(cwe="CWE-78"), exposure="exposed")
+    kev = calibrate(_f(cwe="CWE-78"), exposure="exposed", knowledge={"kev": True, "epss": 0.1})
+    epss = calibrate(_f(cwe="CWE-78"), exposure="exposed", knowledge={"kev": False, "epss": 0.7})
+    cold = calibrate(_f(cwe="CWE-78"), exposure="exposed", knowledge={"kev": False, "epss": 0.1})
+    assert kev["likelihood"] == base["likelihood"] + 1 and "exploited_in_the_wild" in kev["rules_applied"]
+    assert epss["likelihood"] == base["likelihood"] + 1 and "epss_high" in epss["rules_applied"]
+    assert cold == base
