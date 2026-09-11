@@ -43,14 +43,19 @@ def priority(score: float) -> str:
     return "CRITICAL" if score >= 8 else "HIGH" if score >= 6 else "MEDIUM" if score >= 3 else "LOW"
 
 
-def calibrate(finding: Finding, intent: str = "production", exposure: str = "internal") -> dict:
-    """Report-only hazard score for one finding. Pure; see the module docstring for the tables."""
+def calibrate(finding: Finding, intent: str = "production", exposure: str = "internal", knowledge: dict | None = None) -> dict:
+    """Report-only hazard score for one finding. Pure; see the module docstring for the tables.
+    `knowledge` = the anchor's enrichment (scanner.adapter.knowledge.enrichment_for): KEV or EPSS ≥ 0.5 → likelihood +1."""
     cwe = finding.cwe.upper()
     impact = _IMPACT.get(cwe, 2)
     if finding.severity in ("low", "info"):
         impact = min(impact, 2)
     likelihood = 1 if finding.status != CONFIRMED else 2 if finding.confidence < 0.5 else 3
     rules = ["static_confirmation"]  # no sandbox: never empirically reproduced → likelihood ≤ 3, ×0.8, not CRITICAL
+    if knowledge and knowledge.get("kev"):
+        likelihood, rules = min(5, likelihood + 1), [*rules, "exploited_in_the_wild"]
+    elif knowledge and (knowledge.get("epss") or 0) >= 0.5:
+        likelihood, rules = min(5, likelihood + 1), [*rules, "epss_high"]
     mult = _EXPOSURE.get(exposure.lower(), 0.8) * 0.8
     if cwe in _USER_INTERACTION:
         mult *= 0.7

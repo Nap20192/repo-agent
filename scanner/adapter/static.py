@@ -239,7 +239,12 @@ def scan(target: Path, skip_deps: bool = False) -> ScanResult:
     if not skip_deps:
         jobs.append(("osv", _osv))
     jobs.append(("gitleaks", _gitleaks))
-    return _run_jobs(target, jobs)
+    res = _run_jobs(target, jobs)
+    if "osv" in res.ran:  # round 2 of the Knowledge consultant: aliases, CVSS, EPSS, KEV, fixed versions per package
+        from scanner.adapter import knowledge
+
+        res.anchors = knowledge.enrich_if_enabled(res.anchors)
+    return res
 
 
 def _run_jobs(target: Path, jobs) -> ScanResult:
