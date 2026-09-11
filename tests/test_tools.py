@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from scanner.adapter import tools
 from scanner.core import Anchor, Finding
 
@@ -187,3 +189,12 @@ def test_synthetic_anchor_takes_model_cwe(tmp_path):
     run2 = FakeRun([sql])
     t2 = {f.__name__: f for f in tools.verifier_tools(run2, tmp_path, reader=lambda f, l: (tmp_path / f).read_text())}
     assert t2["report_finding"]("a1", "x", "confirmed", ["exec("], cwe="CWE-78")["status"] == "error"  # real anchors still fixed
+
+
+def test_subset_filters_by_name_and_rejects_typos(tmp_path):
+    run, _ = setup(tmp_path)
+    all_ = tools.verifier_tools(run, tmp_path)
+    chosen = tools.subset(all_, {"report_finding", "grep"})
+    assert [f.__name__ for f in chosen] == ["report_finding", "grep"]
+    with pytest.raises(KeyError):
+        tools.subset(all_, {"report_finding", "grpe"})
