@@ -410,5 +410,27 @@ def architect_tools(run, target: Path, index: Index | None = None) -> list[Calla
     return [list_entry_points, list_anchors, read_file, grep, *_lsp_tools(target, index or _default_index(target)), consult_owasp, list_skills, load_skill]
 
 
+def subset(tools: list[Callable], names: set[str]) -> list[Callable]:
+    """Pick tools by function name, in `names` order of the source list; an unknown name is a build-time typo."""
+    by = {t.__name__: t for t in tools}
+    missing = names - set(by)
+    if missing:
+        raise KeyError(f"unknown tools: {sorted(missing)}")
+    return [t for t in tools if t.__name__ in names]
+
+
+_READ = {"read_file", "grep", "lsp_symbols", "lsp_definition", "lsp_references", "lsp_callers", "lsp_callees", "lsp_path_to_entry"}
+_COMMON = {"list_anchors", "list_findings", "note_add", "note_list", "consult_owasp", "load_skill", "list_skills"}
+TAINT_TOOLS = {"report_finding", "shell"} | _READ | _COMMON
+AUTHZ_TOOLS = TAINT_TOOLS | {"consult_domain"}
+DEPENDENCY_TOOLS = {"report_finding", "consult_knowledge", "read_file", "grep", "lsp_definition", "lsp_references", "lsp_path_to_entry"} | _COMMON
+SECRETS_TOOLS = {"report_finding", "read_file", "grep", "lsp_definition", "lsp_references"} | _COMMON
+CONFIG_TOOLS = {"report_finding", "read_file", "grep", "lsp_definition", "lsp_references"} | _COMMON
+TAINT_CRITIC_TOOLS = {"disprove_finding", "check_dominance", "shell"} | _READ | _COMMON
+AUTHZ_CRITIC_TOOLS = TAINT_CRITIC_TOOLS | {"consult_domain"}
+DEPENDENCY_CRITIC_TOOLS = {"disprove_finding", "consult_knowledge", "read_file", "grep", "lsp_definition", "lsp_references",
+                           "lsp_path_to_entry"} | _COMMON
+
+
 def _q(s: str) -> str:
     return "'" + s.replace("'", "'\\''") + "'"

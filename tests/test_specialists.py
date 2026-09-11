@@ -27,7 +27,10 @@ def test_route_cwe_beats_kind_then_kind_then_generic():
     assert sp.route(Hypothesis(kind="sink", cwe="CWE-338", claim="x"))[0].name == "config"  # weak PRNG: crypto hygiene
     assert sp.route(Hypothesis(kind="sink", cwe="CWE-287", claim="x"))[0].name == "authz"  # A07 authentication
     assert sp.route(Hypothesis(kind="entry", cwe="", claim="x"))[0].name == "taint"  # entry points are taint work
-    assert sp.route(Hypothesis(kind="sink", cwe="CWE-9999", claim="x"))[0].name == "verifier"  # generic fallback
+    assert sp.route(Hypothesis(kind="sink", cwe="CWE-9999", claim="x"))[0].name == "taint"  # unknown CWE: kind decides
+    assert sp.route(Hypothesis(kind="other", cwe="CWE-9999", claim="x"))[0].name == "verifier"  # generic fallback
+    assert sp.ROUTER(Hypothesis(kind="other", cwe="", claim="x"), "go", "investigate") == ("", sp.LANG_OVERLAYS["go"])
+    assert sp.ROUTER(Finding(cwe="CWE-89", title="t"), "", "critique") == ("taint_critic", "")
 
 
 def test_route_findings_for_critics():

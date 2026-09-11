@@ -96,3 +96,26 @@ def test_tools_have_docstrings_and_primitive_params(tmp_path):
         for p in inspect.signature(t).parameters.values():
             ann = typing.get_type_hints(t).get(p.name, p.annotation)
             assert ann in allowed, f"{name}.{p.name}: {ann!r} is not an ADK-schema primitive"
+
+
+def test_every_specialist_instruction_names_only_its_tools_and_skills(tmp_path):
+    """Per-specialist contract: tools named in the instruction ⊆ the specialist's tools; skills exist;
+    the Dossier/answer JSON keys match the models; every instruction starts with the shared preamble."""
+    from scanner.app import specialists as sp
+
+    (tmp_path / "main.go").write_text("package main\n")
+    agents = sp.build(MODEL, FakeRun(), tmp_path, None)
+    for spec in sp.REGISTRY:
+        agent = agents[spec.name]
+        have = {t.__name__ for t in agent.tools}
+        own = agent.instruction.removeprefix(ins.OPERATING_PRINCIPLES)
+        mentioned = set(TOOL_RX.findall(own)) | set(re.findall(r"\bcheck_dominance\b", own))
+        assert mentioned <= have, f"{spec.name}: instruction names tools it lacks: {mentioned - have}"
+        assert set(spec.skills) <= set(SKILLS), spec.name
+        assert agent.instruction.startswith(ins.OPERATING_PRINCIPLES)
+        if spec.role == "investigate":
+            assert "report_finding" in have and "disprove_finding" not in have
+            keys = set(re.findall(r'"([a-z_]+)"', own[own.index("Answer with the Dossier"):].split("}", 1)[0]))
+            assert keys <= set(Dossier.model_fields), spec.name
+        else:
+            assert "disprove_finding" in have and "report_finding" not in have
