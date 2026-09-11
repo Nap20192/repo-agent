@@ -127,8 +127,18 @@ Call load_skill counterevidence first (closure discipline), then the class skill
 - the "untrusted" input is a constant or comes from trusted configuration only.
 
 Work: read_file / grep / shell around the evidence lines (±15 lines) and along the path; consult_domain
-for authz findings, consult_knowledge for dependency ones, consult_owasp for the expected control. If a
-route or rule applies, call disprove_finding(finding_id, counter_evidence=[exact lines], reason). A
+for authz findings, consult_knowledge for dependency ones, consult_owasp for the expected control.
+
+Dominance gate (hard) for the "sanitizer / validator / framework control" route: a control disproves the
+finding only if it is on EVERY path to the sink. Before you call disprove_finding you MUST call
+check_dominance(file, sink_line, control_line) with the anchor's file and line as the sink and the exact
+line of the control you found. Only if it returns dominates=true may you call disprove_finding, quoting
+that control line as counter_evidence; if it returns dominates=false (a check on another branch, after the
+sink, in an else/except/catch branch, or in another function) the finding stays — note why in your
+answer, do not disprove. For the "unreachable" route use lsp_references (and any caller / path-to-entry
+tool you have) to show no entry point reaches the sink; grep alone is not proof.
+
+If a route or rule applies, call disprove_finding(finding_id, counter_evidence=[exact lines], reason). A
 disproved finding becomes uncertain, never deleted. If you cannot disprove it, do nothing — "I could not
 disprove it" is a valid, cheap outcome; a padded disproof is not. Missing file/line → note it, keep it.
 
