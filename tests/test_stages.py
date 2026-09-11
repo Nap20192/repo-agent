@@ -309,3 +309,106 @@ def test_budget_exit_path_sets_stop_reason():
 
 def test_anchor_fixture_sanity():
     assert isinstance(A1, Anchor) and A1.cwe == "CWE-89" and A2.cwe == "CWE-78"
+
+
+# --- 8. Specialist routing (card 33) --------------------------------------------------
+
+class Spy(FakeVerifier):
+    """Specialist stand-in: the FakeVerifier verdict logic plus a note that it was chosen (clone-safe)."""
+
+    async def _run_async_impl(self, ctx):
+        payload = json.loads(self.instruction.split("(JSON):\n", 1)[1])
+        self.store.add_note(f"spy:{self.name}:{payload.get('specialist')}:{'OVERLAY:go' in self.instruction}")
+        async for ev in FakeVerifier._run_async_impl(self, ctx):
+            yield ev
+
+
+class SpyCritic(FakeCritic):
+    async def _run_async_impl(self, ctx):
+        self.store.add_note("spyc:" + self.name)
+        async for ev in FakeCritic._run_async_impl(self, ctx):
+            yield ev
+
+
+def _router(item, lang, role):
+    if role == "investigate":
+        return ("taint", f"OVERLAY:{lang}") if getattr(item, "cwe", "") == "CWE-89" else ("", "")
+    return "taint-critic", ""
+
+
+def _routed_hyps():
+    hs = _hyps()
+    for h in hs:
+        h.reads = ["main.go"]
+    return hs
+
+
+def test_verify_routes_cwe89_to_specialist_and_others_to_fallback():
+    run, res = FakeRun(), {}
+
+    async def body(self, ctx):
+        async for ev in self._verify(ctx, 0, _routed_hyps(), res):
+            yield ev
+
+    _run(_node(run, body, specialists={"taint": Spy(name="taint", store=run)}, router=_router, max_parallel=1))
+    assert [t for t, _ in run.notes() if t.startswith("spy:")] == ["spy:verify_r0_0:taint:True"]  # name kept, payload + overlay
+    assert [d.verdict for d in res["dossiers"]] == [core.CONFIRMED, core.REJECTED, core.REJECTED]  # fallback verifier did the rest
+    if "specialist" in core.Dossier.model_fields:
+        assert [d.specialist for d in res["dossiers"]] == ["taint", "", ""]
+
+
+def test_verify_retry_reuses_the_routed_specialist():
+    class FlakySpy(Spy):
+        async def _run_async_impl(self, ctx):
+            first = not any(t == "flaky" for t, _ in self.store.notes())
+            self.store.add_note("spyname:" + self.name)
+            if first:
+                self.store.add_note("flaky")
+                yield _text_event(self.name, ctx, "prose, no braces")
+                return
+            assert "not valid JSON" in self.instruction and "OVERLAY:go" in self.instruction
+            yield _text_event(self.name, ctx, json.dumps({"hypothesis_id": "h0-1", "verdict": "uncertain", "notes": "retried"}))
+
+    run, res = FakeRun(), {}
+
+    async def body(self, ctx):
+        async for ev in self._verify(ctx, 0, _routed_hyps()[:1], res):
+            yield ev
+
+    _run(_node(run, body, specialists={"taint": FlakySpy(name="taint", store=run)}, router=_router))
+    assert [t[8:] for t, _ in run.notes() if t.startswith("spyname:")] == ["verify_r0_0", "verify_r0_0_retry"]
+    assert res["dossiers"][0].notes == "retried"
+
+
+def test_critic_pass_routes_to_specialist_and_notes_it():
+    run = FakeRun()
+    _seed(run, [core.CONFIRMED])
+
+    async def body(self, ctx):
+        async for ev in self._critic_pass(ctx):
+            yield ev
+
+    _run(_node(run, body, critic=Boom(name="critic"), specialists={"taint-critic": SpyCritic(name="taint-critic", store=run)}, router=_router))
+    assert [t for t, _ in run.notes() if t.startswith("spyc:")] == ["spyc:critic_0"]
+    assert run.findings()[0].status == core.UNCERTAIN
+    assert any(t == "critic:taint-critic reviewed f_1" for t, _ in run.notes())
+
+
+def test_router_unknown_name_falls_back_and_no_router_is_unchanged():
+    run, res = FakeRun(), {}
+
+    async def body(self, ctx):
+        async for ev in self._verify(ctx, 0, _routed_hyps(), res):
+            yield ev
+
+    _run(_node(run, body, specialists={}, router=lambda item, lang, role: ("nope", "x")))
+    assert [d.verdict for d in res["dossiers"]] == [core.CONFIRMED, core.REJECTED, core.REJECTED]
+    run, res = FakeRun(), {}
+    _run(_node(run, body))
+    assert [d.verdict for d in res["dossiers"]] == [core.CONFIRMED, core.REJECTED, core.REJECTED]
+
+
+def test_new_architect_overlay_is_appended():
+    from scanner.app.agents import new_architect
+    a = new_architect("gemini-flash-lite-latest", [], 5, overlay="GO OVERLAY")
+    assert a.instruction.endswith("GO OVERLAY")
