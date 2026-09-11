@@ -1,0 +1,43 @@
+# Eval corpus
+
+`eval/dataset.json` is the ground truth for `python -m scanner eval`: per case a target directory and the
+expected confirmed findings as `(cwe, file, line)` where `line` is the **sink** line. A finding matches when
+the CWE is equal and `|line − expected| ≤ tolerance`. Precision/recall/F1 are computed over confirmed findings
+only; the run passes when every expected finding is confirmed and nothing else is.
+
+## Rules for a case
+
+- **Safe neighbour per class.** Every vulnerable handler has a sibling that does the same job correctly
+  (parameterized query, argv without shell, `realpath` + prefix check, allow-listed host, escaped output).
+  Safe neighbours are never listed in `expected`: confirming one is a false positive and lowers precision.
+- **`sink` keyword.** Optional but recommended: the text the expected line must contain
+  (`db.Query`, `exec(`, `sendFile`, `redirect`, `eval(`…). `tests/test_eval_dataset.py` fails when a sample
+  edit moves the line, so ground truth cannot drift silently.
+- **Remote targets.** A case may carry `"url"`; `scan eval` clones it shallowly into `target` when the
+  directory is missing (`.targets/` is git-ignored, nothing is vendored). `notes` explains each expectation.
+- **Design-only defects.** Cases like `nodegoat` CWE-943 have no scanner anchor; they measure the
+  ThreatModeler → synthetic anchor path, not the pre-pass.
+
+## Commands
+
+```
+uv run python -m scanner eval --dry            # validate the dataset (clones remote targets), no model
+uv run python -m scanner eval                  # full run, exit 0 iff no FP and no FN
+uv run pytest -q tests/test_eval_dataset.py    # local cases: files, lines and sinks exist
+```
+
+## Cases
+
+| case | target | language | classes |
+|---|---|---|---|
+| hello | samples/01-hello | Go | none (control) |
+| vulnshop | samples/02-vulnshop | Go | 89, 78 (+ `/safe`) |
+| govulnlab | samples/03-govulnlab | Go | 89, 78, 22, 918, 79 |
+| idor-go | samples/08-idor-go | Go | 639 (design-only) |
+| flaskshop | samples/10-flaskshop | Python/Flask | 89, 78, 22, 918, 79, each with `_safe` |
+| expressshop | samples/11-expressshop | JS/Express | 89, 78, 22, 601, 95, each with `_safe`; inline arrow handlers |
+| nodegoat | `.targets/NodeGoat` (clone) | JS/Express | 95, 943, 601, 79, 639 |
+
+## Licenses
+
+Samples 10 and 11 are original. NodeGoat is OWASP's, Apache-2.0 — cloned at eval time, not vendored.

@@ -1,5 +1,5 @@
 {
-  "_comment": "Ground truth оценки: заведомо уязвимые сэмплы с известными находками. line — строка-сток; совпадение по CWE + близости строки (tolerance) в пределах хендлера. Безопасные соседи не перечислены: любое подтверждение вне expected считается ложным (штрафует flag контроля). См. samples/README.md.",
+  "_comment": "Ground truth: intentionally vulnerable samples with known findings. line = the sink line; a finding matches by CWE + |line - expected| <= tolerance. Safe neighbours are NOT listed: any confirmed finding outside expected counts as a false positive. `sink` = keyword the line must contain (tests/test_eval_dataset.py). `url` = clone on demand into `target` (eval/README.md).",
   "cases": [
     {
       "name": "hello",
@@ -12,8 +12,8 @@
       "target": "samples/02-vulnshop",
       "tolerance": 6,
       "expected": [
-        {"cwe": "CWE-89", "file": "main.go", "line": 22},
-        {"cwe": "CWE-78", "file": "main.go", "line": 30}
+        {"cwe": "CWE-89", "file": "main.go", "line": 22, "sink": "db.Query"},
+        {"cwe": "CWE-78", "file": "main.go", "line": 30, "sink": "exec.Command"}
       ]
     },
     {
@@ -34,6 +34,44 @@
       "tolerance": 8,
       "expected": [
         {"cwe": "CWE-639", "file": "main.go", "line": 31}
+      ]
+    },
+    {
+      "name": "flaskshop",
+      "target": "samples/10-flaskshop",
+      "tolerance": 4,
+      "expected": [
+        {"cwe": "CWE-89", "file": "app.py", "line": 21, "sink": "execute"},
+        {"cwe": "CWE-78", "file": "app.py", "line": 35, "sink": "check_output"},
+        {"cwe": "CWE-22", "file": "app.py", "line": 47, "sink": "open("},
+        {"cwe": "CWE-918", "file": "app.py", "line": 64, "sink": "requests.get"},
+        {"cwe": "CWE-79", "file": "app.py", "line": 78, "sink": "<h1>"}
+      ]
+    },
+    {
+      "name": "expressshop",
+      "target": "samples/11-expressshop",
+      "tolerance": 4,
+      "expected": [
+        {"cwe": "CWE-89", "file": "server.js", "line": 13, "sink": "db.query"},
+        {"cwe": "CWE-78", "file": "server.js", "line": 24, "sink": "exec("},
+        {"cwe": "CWE-22", "file": "server.js", "line": 32, "sink": "sendFile"},
+        {"cwe": "CWE-601", "file": "server.js", "line": 42, "sink": "redirect"},
+        {"cwe": "CWE-95", "file": "server.js", "line": 51, "sink": "eval("}
+      ]
+    },
+    {
+      "name": "nodegoat",
+      "url": "https://github.com/OWASP/NodeGoat",
+      "target": ".targets/NodeGoat",
+      "tolerance": 8,
+      "notes": "OWASP NodeGoat (Apache-2.0), cloned on demand. CWE-943 is never emitted by gosec/semgrep-auto: the NoSQL injection is reachable only through the ThreatModeler path (synthetic anchor on getByUserIdAndThreshold), so it measures design-threat recall.",
+      "expected": [
+        {"cwe": "CWE-95", "file": "app/routes/contributions.js", "line": 32, "sink": "eval(", "notes": "SSJS eval of req.body.preTax (lines 32-34 are one flaw)"},
+        {"cwe": "CWE-943", "file": "app/data/allocations-dao.js", "line": 78, "sink": "$where", "notes": "threshold interpolated into a $where JS string"},
+        {"cwe": "CWE-601", "file": "app/routes/index.js", "line": 72, "sink": "redirect", "notes": "res.redirect(req.query.url)"},
+        {"cwe": "CWE-79", "file": "app/routes/profile.js", "line": 64, "sink": "firstNameSafeString", "notes": "firstName rendered without encoding (template value={{firstNameSafeString}})"},
+        {"cwe": "CWE-639", "file": "app/routes/allocations.js", "line": 23, "sink": "getByUserIdAndThreshold", "notes": "userId taken from req.params instead of the session"}
       ]
     }
   ]

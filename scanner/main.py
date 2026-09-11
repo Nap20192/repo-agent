@@ -7,6 +7,8 @@ import argparse
 import json
 import logging
 import os
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -43,13 +45,61 @@ def score(findings: list[dict], expected: list[dict], tolerance: int) -> dict:
     f1 = 2 * p * r / (p + r) if p + r else 0.0
     return {"tp": tp, "fp": fp, "fn": fn, "precision": p, "recall": r, "f1": f1}
 
+_SAFE_URL = re.compile(r"^https://github\.com/[\w.-]+/[\w.-]+(?:\.git)?$")
+
+
+def _ensure_target(case: dict) -> Path:
+    """Clone `url` into `target` when the case is remote and the directory is missing.
+
+    The dataset is untrusted: only https://github.com/<org>/<repo> (no `ext::`, `file://`, option-shaped
+    strings), only into `.targets/` under the working directory, `--` before positionals, no auth prompts."""
+    target = Path(case["target"])
+    if not target.is_dir() and case.get("url"):
+        url = str(case["url"])
+        if not _SAFE_URL.match(url):
+            raise ValueError(f"refusing to clone {url!r}: only https://github.com/<org>/<repo>")
+        root = Path(".targets").resolve()
+        if not target.resolve().is_relative_to(root):
+            raise ValueError(f"refusing to clone into {target}: outside {root}")
+        log.info("eval: cloning %s → %s", url, target)
+        subprocess.run(["git", "clone", "--depth", "1", "--", url, str(target)], check=True, capture_output=True,
+                       text=True, timeout=300, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    return target
+
+
+def validate_case(case: dict) -> list[str]:
+    """Dataset sanity without a model: target exists, every expected file exists and the line is inside it."""
+    problems = []
+    try:
+        target = _ensure_target(case)
+    except subprocess.CalledProcessError as e:
+        return [f"clone failed: {e.stderr.strip()[:200]}"]
+    if not target.is_dir():
+        return [f"target missing: {target}"]
+    for e in case["expected"]:
+        f = target / e["file"]
+        if not f.is_file():
+            problems.append(f"{e['file']}: missing")
+            continue
+        n = len(f.read_text(errors="replace").splitlines())
+        if e["line"] > n:
+            problems.append(f"{e['file']}:{e['line']} past EOF ({n} lines)")
+    return problems
+
+
 def cmd_eval(args) -> int:
     data = json.loads(Path(args.dataset).read_text())
     ok = True
     rows = []
     for case in data["cases"]:
+        if args.dry:
+            problems = validate_case(case)
+            ok &= not problems
+            print(json.dumps({"case": case["name"], "ok": not problems, "problems": problems}))
+            continue
         try:
-            s = scan_full(Path(case["target"]))
+            target = _ensure_target(case)
+            s = scan_full(target)
             sc = score(s.get("findings", []), case["expected"], case.get("tolerance", 6))
         except Exception as e:  # noqa: BLE001
             sc = {"error": str(e), "tp": 0, "fp": 0, "fn": len(case["expected"]), "precision": 0, "recall": 0, "f1": 0}
@@ -58,6 +108,7 @@ def cmd_eval(args) -> int:
         print(json.dumps(rows[-1]))
     print(json.dumps({"all_ok": ok}))
     return 0 if ok else 1
+
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(levelname)s %(name)s: %(message)s", stream=sys.stderr)
@@ -70,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     f.set_defaults(fn=cmd_full)
     e = sub.add_parser("eval", help="precision/recall over eval/dataset.json")
     e.add_argument("dataset", nargs="?", default="eval/dataset.json")
+    e.add_argument("--dry", action="store_true", help="validate the dataset (clone remote targets) without running the model")
     e.set_defaults(fn=cmd_eval)
     args = ap.parse_args(argv)
     return args.fn(args)
