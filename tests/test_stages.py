@@ -333,7 +333,7 @@ class SpyCritic(FakeCritic):
 def _router(item, lang, role):
     if role == "investigate":
         return ("taint", f"OVERLAY:{lang}") if getattr(item, "cwe", "") == "CWE-89" else ("", "")
-    return "taint-critic", ""
+    return "taint_critic", ""
 
 
 def _routed_hyps():
@@ -388,10 +388,10 @@ def test_critic_pass_routes_to_specialist_and_notes_it():
         async for ev in self._critic_pass(ctx):
             yield ev
 
-    _run(_node(run, body, critic=Boom(name="critic"), specialists={"taint-critic": SpyCritic(name="taint-critic", store=run)}, router=_router))
+    _run(_node(run, body, critic=Boom(name="critic"), specialists={"taint_critic": SpyCritic(name="taint_critic", store=run)}, router=_router))
     assert [t for t, _ in run.notes() if t.startswith("spyc:")] == ["spyc:critic_0"]
     assert run.findings()[0].status == core.UNCERTAIN
-    assert any(t == "critic:taint-critic reviewed f_1" for t, _ in run.notes())
+    assert any(t == "critic:taint_critic reviewed f_1" for t, _ in run.notes())
 
 
 def test_router_unknown_name_falls_back_and_no_router_is_unchanged():

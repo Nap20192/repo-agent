@@ -41,10 +41,11 @@ def new_critic(model, tools: list, max_calls: int = 20) -> LlmAgent:
         before_tool_callback=log_tools_callback,
     )
 
-def new_architect(model, tools: list, max_calls: int = 40) -> LlmAgent:
+def new_architect(model, tools: list, max_calls: int = 40, overlay: str = "") -> LlmAgent:
+    """`overlay`: stack-specific instruction suffix (Go services / Node / Python web), chosen by the runner."""
     return LlmAgent(
         name="architect", description="interprets the structural skeleton into an ArchitectureModel",
-        model=model, instruction=ARCHITECT_INSTRUCTION, tools=tools, include_contents="none",
+        model=model, instruction=ARCHITECT_INSTRUCTION + (f"\n\n{overlay}" if overlay else ""), tools=tools, include_contents="none",
         before_model_callback=[budget_callback(max_calls, per_branch=True), tool_window_callback()], before_tool_callback=log_tools_callback,
     )
 

@@ -19,6 +19,7 @@ from google.genai import types
 from pydantic import BaseModel, ConfigDict, Field
 
 from scanner import core
+from scanner.adapter import static
 from scanner.adapter.skills import skill_for
 from scanner.core import Candidate, Dossier, Finding, Hypothesis
 
@@ -115,6 +116,9 @@ class _Graph(BaseAgent):
 
     verifier: BaseAgent
     critic: BaseAgent | None = None  # adversarial pass over confirmed findings
+    # specialists by name + a pure router (item, lang, role) -> (name, instruction suffix); no router = one generic agent
+    specialists: dict[str, BaseAgent] = Field(default_factory=dict)
+    router: Any = None
     store: Any  # store.Run contract
     target: str = ""
     has_anchor: Callable[[str], bool]
@@ -144,13 +148,14 @@ class _Graph(BaseAgent):
             yield ev
 
     async def _retry_json(
-        self, ctx: InvocationContext, agent: BaseAgent, name: str, label: str, payload: dict, texts: dict[str, str]
+        self, ctx: InvocationContext, agent: BaseAgent, name: str, label: str, payload: dict, texts: dict[str, str],
+        suffix: str = "",
     ) -> AsyncGenerator[Event, None]:
         """One more activation with the JSON nudge when `texts[name]` has no valid JSON; result lands in texts[name].
         Counted in session state `json_retries`. JSON_RETRY=0 disables."""
         if os.environ.get("JSON_RETRY", "1") == "0" or parse_json(texts.get(name, "")) is not None:
             return
-        retry = _activation(agent, f"{name}_retry", label, payload, suffix=JSON_NUDGE)
+        retry = _activation(agent, f"{name}_retry", label, payload, suffix=f"{suffix}\n\n{JSON_NUDGE}" if suffix else JSON_NUDGE)
         async for ev in self._run_activations(ctx, f"{name}_retry_run", [retry], texts):
             yield ev
         if (t := texts.pop(retry.name, "")):
@@ -158,6 +163,21 @@ class _Graph(BaseAgent):
         n = int(ctx.session.state.get(STATE_JSON_RETRIES) or 0) + 1
         log.info("json retry #%d for %s", n, name)
         yield self._state_event(ctx, {STATE_JSON_RETRIES: n})
+
+    def _pick(self, item, role: str) -> tuple[BaseAgent, str, str]:
+        """(agent, specialist name or "", instruction suffix): the router's choice, else the generic fallback."""
+        fallback = self.verifier if role == "investigate" else self.critic
+        if self.router is None:
+            return fallback, "", ""
+        files = list(getattr(item, "reads", None) or []) or [getattr(item, "file", "") or ""]
+        lang = next((static.LANG_EXT[s] for f in files if (s := "." + f.rsplit(".", 1)[-1]) in static.LANG_EXT), "")
+        name, suffix = self.router(item, lang, role)
+        agent = self.specialists.get(name) if name else None
+        if agent is None:
+            if name:
+                log.warning("router: unknown specialist %r for %s — using the generic %s", name, role, fallback.name)
+            return fallback, "", ""
+        return agent, name, suffix
 
     def _budget_hit(self, ctx: InvocationContext) -> bool:
         return bool(ctx.session.state.get(core.STATE_BUDGET_EXHAUSTED))
@@ -183,8 +203,10 @@ class _Graph(BaseAgent):
         JSON only adds notes/new_hypotheses. out = {"dossiers", "failed", "budget"}."""
         texts: dict[str, str] = {}
         failed = ""
-        acts = [(h, _activation(self.verifier, f"verify_r{rnd}_{i}", "Hypothesis", {**h.model_dump(), "skill": skill_for(h.cwe, h.kind)}))
-                for i, h in enumerate(accepted)]
+        routed = [self._pick(h, "investigate") for h in accepted]  # (agent, specialist name, suffix) per hypothesis
+        payloads = [{**h.model_dump(), "skill": skill_for(h.cwe, h.kind), "specialist": name} for h, (_, name, _) in zip(accepted, routed)]
+        acts = [(h, _activation(agent, f"verify_r{rnd}_{i}", "Hypothesis", payloads[i], suffix=suffix))
+                for i, (h, (agent, _, suffix)) in enumerate(zip(accepted, routed))]
         step = self.max_parallel if self.max_parallel > 0 else len(acts)
         for ci in range(0, len(acts), step):
             chunk = [a for _, a in acts[ci : ci + step]]
@@ -195,17 +217,19 @@ class _Graph(BaseAgent):
                 failed = str(e)
                 break
         if not failed:  # a verifier that answered in prose gets one nudge to hand over its Dossier JSON
-            for h, a in acts:
+            for i, (h, a) in enumerate(acts):
                 if parse_json(texts.get(a.name, "")) is None and not self._budget_hit(ctx):
-                    async for ev in self._retry_json(ctx, self.verifier, a.name, "Hypothesis",
-                                                     {**h.model_dump(), "skill": skill_for(h.cwe, h.kind)}, texts):
+                    agent, _, suffix = routed[i]  # the retry goes to the same specialist with the same overlay
+                    async for ev in self._retry_json(ctx, agent, a.name, "Hypothesis", payloads[i], texts, suffix=suffix):
                         yield ev
         budget = self._budget_hit(ctx)
         findings = self.store.findings()
         dossiers = []
         exhausted = {k.rsplit(".", 1)[-1] for k, v in ctx.session.state.items() if v and k.startswith(f"{core.STATE_BUDGET_EXHAUSTED}:")}
-        for h, a in acts:
+        for i, (h, a) in enumerate(acts):
             d = dossier_from_store(findings, h)
+            if "specialist" in Dossier.model_fields:
+                d = d.model_copy(update={"specialist": routed[i][1]})
             own_budget = a.name in exhausted  # this verifier ran out of calls; the run goes on
             raw = texts.get(a.name, "")
             md = parse_json(raw)
@@ -229,8 +253,11 @@ class _Graph(BaseAgent):
         acts = []
         for i, f in enumerate(confirmed):
             a = self.store.anchor(f.anchor_id)
-            payload = {"finding": f.model_dump(), "anchor": a.model_dump() if a else None}
-            acts.append(_activation(self.critic, f"critic_{i}", "Finding", payload))
+            agent, name, suffix = self._pick(f, "critique")
+            payload = {"finding": f.model_dump(), "anchor": a.model_dump() if a else None, "specialist": name}
+            acts.append(_activation(agent, f"critic_{i}", "Finding", payload, suffix=suffix))
+            if name:
+                self.store.add_note(f"critic:{name} reviewed {f.id}", f.id)
         step = self.max_parallel if self.max_parallel > 0 else len(acts)
         texts: dict[str, str] = {}
         for ci in range(0, len(acts), step):
