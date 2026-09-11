@@ -71,7 +71,8 @@ class LspClient:
         result = self.request("initialize", {
             "processId": None, "rootUri": root, "rootPath": str(self.root),
             "workspaceFolders": [{"uri": root, "name": "target"}],
-            "capabilities": {"textDocument": {"documentSymbol": {"hierarchicalDocumentSymbolSupport": True}}},
+            "capabilities": {"textDocument": {"documentSymbol": {"hierarchicalDocumentSymbolSupport": True},
+                                              "callHierarchy": {"dynamicRegistration": False}}},
         })
         self.notify("initialized", {})
         return result if isinstance(result, dict) else {}
@@ -91,6 +92,18 @@ class LspClient:
     def references(self, path: Path, line0: int, char0: int, include_declaration: bool = False) -> list[dict]:
         params = _pos(path, line0, char0) | {"context": {"includeDeclaration": include_declaration}}
         return _locations(self.request("textDocument/references", params))
+
+    def prepare_call_hierarchy(self, path: Path, line0: int, char0: int) -> list[dict]:
+        res = self.request("textDocument/prepareCallHierarchy", _pos(path, line0, char0))
+        return res if isinstance(res, list) else []
+
+    def incoming_calls(self, item: dict) -> list[dict]:
+        res = self.request("callHierarchy/incomingCalls", {"item": item})
+        return res if isinstance(res, list) else []
+
+    def outgoing_calls(self, item: dict) -> list[dict]:
+        res = self.request("callHierarchy/outgoingCalls", {"item": item})
+        return res if isinstance(res, list) else []
 
     # --- rpc ---------------------------------------------------------------------
     def request(self, method: str, params: dict) -> object:

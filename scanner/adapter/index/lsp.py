@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import threading
 import time
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from scanner.adapter.index.callgraph import enclosing, path_to_entry
 from scanner.adapter.index.languages import Language
 from scanner.adapter.index.rpc import LspClient, LspError
 from scanner.core.ports import Symbol
@@ -24,7 +26,8 @@ log = logging.getLogger("scanner.lsp")
 
 _KINDS = {5: "class", 6: "method", 12: "function", 23: "struct", 13: "variable", 14: "constant",
           11: "interface", 9: "constructor", 8: "field", 7: "property", 10: "enum", 2: "module"}
-_CONTAINERS = {"class", "struct", "interface", "module", "enum"}
+_CONTAINERS = {"class", "struct", "interface", "module", "enum", "method", "function", "constructor"}
+_IDENT = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
 
 
 MAX_FILES = int(os.environ.get("INDEX_MAX_FILES", "3000"))
@@ -52,6 +55,8 @@ class LspIndex:
         self._pos: dict[int, tuple[int, int, int]] = {}  # id(sym) → (range start line, sel line0, sel char0)
         self._lines: dict[str, list[str]] = {}
         self._lock = threading.RLock()  # verifiers run tools in parallel threads; one server per language
+        self._hierarchy: bool | None = None  # None = unknown until initialize; False = unsupported → approximate
+        self._calls: dict[tuple[str, int], list[tuple[str, int, str]]] = {}  # ("in"|"out", id(sym)) → result
 
     # --- port ------------------------------------------------------------------
     @_locked
@@ -94,6 +99,79 @@ class LspIndex:
         return list(self._by_file.get(file, []))
 
     @_locked
+    def callers(self, fqn: str) -> list[tuple[str, int, str]]:
+        s = self._resolve(fqn)
+        if s is None or self._client is None:
+            return []
+        key = ("in", id(s))
+        if key not in self._calls:
+            calls = self._hierarchy_calls(s, incoming=True)
+            if calls is None:  # unsupported by this server: a reference inside a function is a call from it
+                calls = [(rel, line, self._enclosing(rel, line)) for rel, line, _ in self.references(fqn)]
+            self._calls[key] = sorted(set(calls))
+        return list(self._calls[key])
+
+    @_locked
+    def callees(self, fqn: str) -> list[tuple[str, int, str]]:
+        s = self._resolve(fqn)
+        if s is None or self._client is None:
+            return []
+        key = ("out", id(s))
+        if key not in self._calls:
+            calls = self._hierarchy_calls(s, incoming=False)
+            if calls is None:  # approximation: identifiers called in the body that are known symbols
+                start, end = self._pos[id(s)][0], s.end_line
+                body = "\n".join(self._line(s.file, i) for i in range(start, end + 1))
+                calls = []
+                for ident in dict.fromkeys(_IDENT.findall(body)):
+                    hit = self._by_key.get(ident)
+                    if hit and hit[0] is not s:
+                        calls.append((hit[0].file, hit[0].line, hit[0].name))
+            self._calls[key] = sorted(set(calls))
+        return list(self._calls[key])
+
+    @_locked
+    def path_to_entry(self, fqn: str, entries: list[str], max_depth: int = 6) -> list[str] | None:
+        return path_to_entry(self.callers, fqn, entries, max_depth)
+
+    def _hierarchy_calls(self, s: Symbol, incoming: bool) -> list[tuple[str, int, str]] | None:
+        """callHierarchy via the server; None when the server does not support it (never fails the language)."""
+        if self._hierarchy is False:
+            return None
+        _, line0, char0 = self._pos[id(s)]
+        try:
+            items = self._client.prepare_call_hierarchy(self.target / s.file, line0, char0)
+            out = []
+            for item in items:
+                for c in (self._client.incoming_calls(item) if incoming else self._client.outgoing_calls(item)):
+                    other = c.get("from") if incoming else c.get("to")
+                    if not other:
+                        continue
+                    rel = self._rel(other.get("uri", ""))
+                    if rel is None:
+                        continue
+                    name = _split(other.get("name", ""), "")[1]
+                    if incoming:
+                        out += [(rel, r["start"]["line"] + 1, name) for r in c.get("fromRanges", [])]
+                    else:
+                        out.append((rel, other["selectionRange"]["start"]["line"] + 1, name))
+            return out
+        except LspError as e:
+            if _unsupported(e):
+                self._hierarchy = False
+                log.info("lsp %s: no call hierarchy (%s) — approximating from references", self.language.name, e)
+                return None
+            self._fail(f"call hierarchy: {e}")
+            return []
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            self._fail(f"call hierarchy: {e}")
+            return []
+
+    def _enclosing(self, rel: str, line: int) -> str:
+        spans = [(self._pos[id(x)][0], x.end_line, x.name) for x in self._by_file.get(rel, []) if x.kind in _CONTAINERS]
+        return enclosing(spans, line)
+
+    @_locked
     def close(self) -> None:
         c, self._client = self._client, None
         if c is not None:
@@ -114,7 +192,8 @@ class LspIndex:
         try:
             self._client = self._factory(list(self.language.command), self.target, self.language.lang_id, self.timeout)
             self._client.start()
-            self._client.initialize()
+            caps = (self._client.initialize() or {}).get("capabilities", {})
+            self._hierarchy = None if caps.get("callHierarchyProvider") else False
             n = total = 0
             deadline = time.monotonic() + self.timeout * 4
             for f in self._files():
@@ -179,6 +258,11 @@ class LspIndex:
                 self._lines[rel] = []
         ls = self._lines[rel]
         return ls[line - 1] if 0 < line <= len(ls) else ""
+
+
+def _unsupported(e: LspError) -> bool:
+    m = str(e).lower()
+    return any(w in m for w in ("not found", "unhandled", "unsupported", "not supported", "unknown method", "-32601"))
 
 
 def _split(raw: str, container: str) -> tuple[str, str]:

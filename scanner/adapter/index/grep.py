@@ -6,9 +6,11 @@ import re
 from pathlib import Path
 
 from scanner.adapter import static
+from scanner.adapter.index.callgraph import enclosing, path_to_entry
 from scanner.core.ports import Symbol
 
 _DEF = re.compile(rf"^(?P<indent>\s*)(?:export\s+|async\s+)*(?P<kw>{static._DEF_KW})\s+(?P<name>\w+)")
+_CALL = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
 _KIND = {"func": "function", "def": "function", "function": "function", "class": "class", "type": "struct",
          "const": "constant", "var": "variable", "let": "variable"}
 
@@ -71,6 +73,39 @@ class GrepIndex:
             if kind in ("class", "struct"):
                 stack.append((indent, m.group("name")))
         return out
+
+    def callers(self, fqn: str) -> list[tuple[str, int, str]]:
+        """A reference inside a definition body is a call from it (body = until the next def, ≤ 40 lines)."""
+        out = []
+        for rel, line, _ in self.references(fqn):
+            syms = self.symbols(rel)
+            spans = [(s.line, self._body_end(rel, s.line), s.name) for s in syms if s.kind in ("function", "method")]
+            out.append((rel, line, enclosing(spans, line)))
+        return sorted(set(out))
+
+    def callees(self, fqn: str) -> list[tuple[str, int, str]]:
+        """Identifiers called in the body that resolve to a definition in this index (ponytail: ≤ 30 lookups)."""
+        rng = self.definition_range(fqn)
+        if rng is None:
+            return []
+        file, start, end = rng
+        body = "\n".join(self._lines(file)[start:end])  # lines after the def line up to the body end
+        out = []
+        for ident in list(dict.fromkeys(_CALL.findall(body)))[:30]:
+            loc = self.find_symbol(ident)
+            if loc and loc != (file, start):
+                out.append((loc[0], loc[1], ident))
+        return sorted(set(out))
+
+    def path_to_entry(self, fqn: str, entries: list[str], max_depth: int = 6) -> list[str] | None:
+        return path_to_entry(self.callers, fqn, entries, max_depth)
+
+    def _body_end(self, file: str, line: int) -> int:
+        lines = self._lines(file)
+        for i in range(line + 1, min(len(lines), line + 40) + 1):
+            if _DEF.match(lines[i - 1]) and not lines[i - 1][0].isspace():
+                return i - 1
+        return min(len(lines), line + 40)
 
     def close(self) -> None:
         return None

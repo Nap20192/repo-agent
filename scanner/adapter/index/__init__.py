@@ -34,6 +34,9 @@ class FallbackIndex:
     def definition_range(self, fqn: str): return self._pick("definition_range", fqn)
     def references(self, fqn: str): return self._pick("references", fqn)
     def symbols(self, file: str): return self._pick("symbols", file)
+    def callers(self, fqn: str): return self._pick("callers", fqn)
+    def callees(self, fqn: str): return self._pick("callees", fqn)
+    def path_to_entry(self, fqn: str, entries: list[str], max_depth: int = 6): return self._pick("path_to_entry", fqn, entries, max_depth)
 
     def close(self) -> None:
         self.primary.close()
@@ -50,19 +53,22 @@ class MultiIndex:
         lang = static.LANG_EXT.get(Path(file).suffix, "")
         return self.indexes.get(lang, self.fallback)
 
-    def _first(self, method: str, fqn: str, empty):
+    def _first(self, method: str, *args, empty):
         # LSP-backed languages answer first: a grep index of another language must not shadow a real definition
         order = sorted(self.indexes.items(), key=lambda kv: (isinstance(kv[1], GrepIndex), kv[0]))
         for _, ix in order:
-            res = getattr(ix, method)(fqn)
+            res = getattr(ix, method)(*args)
             if res not in (None, [], False):
                 return res
         return empty
 
-    def find_symbol(self, fqn: str): return self._first("find_symbol", fqn, None)
+    def find_symbol(self, fqn: str): return self._first("find_symbol", fqn, empty=None)
     def has_symbol(self, fqn: str) -> bool: return self.find_symbol(fqn) is not None
-    def definition_range(self, fqn: str): return self._first("definition_range", fqn, None)
-    def references(self, fqn: str): return self._first("references", fqn, [])
+    def definition_range(self, fqn: str): return self._first("definition_range", fqn, empty=None)
+    def references(self, fqn: str): return self._first("references", fqn, empty=[])
+    def callers(self, fqn: str): return self._first("callers", fqn, empty=[])
+    def callees(self, fqn: str): return self._first("callees", fqn, empty=[])
+    def path_to_entry(self, fqn: str, entries: list[str], max_depth: int = 6): return self._first("path_to_entry", fqn, entries, max_depth, empty=None)
     def symbols(self, file: str) -> list[Symbol]: return self._for_file(file).symbols(file)
 
     def close(self) -> None:

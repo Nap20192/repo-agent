@@ -41,5 +41,14 @@ class Index(Protocol):
     def symbols(self, file: str) -> list[Symbol]:
         """Definitions declared in one file (relative path)."""
 
+    def callers(self, fqn: str) -> list[tuple[str, int, str]]:
+        """Call sites of fqn as (file, line, calling symbol name); [] when unknown."""
+
+    def callees(self, fqn: str) -> list[tuple[str, int, str]]:
+        """Symbols called inside fqn's body as (callee file, callee definition line, callee name); [] when unknown."""
+
+    def path_to_entry(self, fqn: str, entries: list[str], max_depth: int = 6) -> list[str] | None:
+        """Chain of symbol names [entry, ..., fqn] found by walking callers up to max_depth, else None."""
+
     def close(self) -> None:
         """Release servers/processes; idempotent."""

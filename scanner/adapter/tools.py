@@ -80,8 +80,9 @@ class _GrepIndex:
         pass
 
 
-def _lsp_tools(target: Path, index: Index) -> list[Callable]:
-    """lsp_symbols / lsp_definition / lsp_references over the Index port (LSP-backed, grep fallback)."""
+def _lsp_tools(target: Path, index: Index, entries_fn: Callable[[], list[str]] | None = None) -> list[Callable]:
+    """lsp_symbols / lsp_definition / lsp_references / lsp_callers / lsp_callees / lsp_path_to_entry over the Index port."""
+    entries_fn = entries_fn or (lambda: [c.symbol for c in static.entry_points(target) if c.symbol])
 
     def _inside(path: str) -> Path | None:
         p = (target / path).resolve()
@@ -124,7 +125,27 @@ def _lsp_tools(target: Path, index: Index) -> list[Callable]:
         refs = [r for r in index.references(symbol) if _inside(r[0]) is not None][:50]  # never leak files outside the target
         return {"symbol": symbol, "references": [{"file": f, "line": ln, "text": t} for f, ln, t in refs]}
 
-    return [lsp_symbols, lsp_definition, lsp_references]
+    def lsp_callers(symbol: str) -> dict:
+        """Call sites of a symbol (file, line, calling symbol) from the language server's call hierarchy — who
+        invokes it. Use it to walk from a sink back towards the trust boundary; capped at 50."""
+        refs = [r for r in index.callers(symbol) if _inside(r[0]) is not None][:50]
+        return {"symbol": symbol, "callers": [{"file": f, "line": ln, "symbol": s} for f, ln, s in refs]}
+
+    def lsp_callees(symbol: str) -> dict:
+        """Symbols a function calls (callee file, definition line, callee symbol) — walk from an entry point
+        down towards sinks without reading whole files; capped at 50."""
+        refs = [r for r in index.callees(symbol) if _inside(r[0]) is not None][:50]
+        return {"symbol": symbol, "callees": [{"file": f, "line": ln, "symbol": s} for f, ln, s in refs]}
+
+    def lsp_path_to_entry(symbol: str) -> dict:
+        """Shortest caller chain from an entry point (route handler / main) to the symbol, e.g.
+        ["main", "pingHandler", "runCmd"]; null when no entry reaches it within 6 hops. The Investigator
+        uses it for reachability claims; the Critic uses a null path as the "unreachable" disproof, after
+        confirming with lsp_callers that the chain is not merely cut by dynamic dispatch."""
+        entries = entries_fn()
+        return {"symbol": symbol, "entries": entries[:50], "path": index.path_to_entry(symbol, entries)}
+
+    return [lsp_symbols, lsp_definition, lsp_references, lsp_callers, lsp_callees, lsp_path_to_entry]
 
 
 def _common_tools(run) -> list[Callable]:
