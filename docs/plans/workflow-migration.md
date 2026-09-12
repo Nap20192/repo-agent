@@ -293,3 +293,24 @@ sibling using `Runner(node=node, ...)` (verbatim signature, `runners.py:222-228`
   A root node's `node_input` is the user `Content` of the turn, so `tests/fakes._run_node` drives non-root
   inputs through a driver node, the way the graph will.
 - **Extracted for both graphs**: `reconcile.build_queue`, `graph_nodes.report_direct`, `graph.pick_agent`.
+
+## Resolved (steps 5–7, 2026-09-12)
+
+- **`state_schema` dropped**: ADK's `State` rejects any key not declared in the schema (`StateSchemaError`), and the
+  budget callback writes per-branch keys (`budget_exhausted:<branch>`), tools write scratch keys, v2's contract
+  uses `queue`. `WorkflowState` stays in `scanner/core/workflow.py` as documentation of the shared keys only.
+- **Direct findings run first** (before the Architect), as in PipelineV2 and card 42's review: the modelling
+  stages see only the anchors the model may investigate. `build_skeleton` supplies target + entry points; `plan`
+  re-splits `store.anchors()` and derives the trimmed anchor view (`graph_nodes.anchor_view`).
+- **Round failure**: `route_and_verify` returns `failed: true` when the specialist raised (soft "no JSON" is not a
+  failure); `investigate` fails fast at round 0 / stops with "verify round N failed: …" only when every item of
+  the round raised — the v3 equivalent of a v2 chunk exception. A per-branch budget shows up as a soft error
+  ("no Dossier JSON and nothing reported"), not "budget", since the node cannot see the callback's branch key.
+- **Stage timeout**: `asyncio.wait_for(ctx.run_node(...), stage_timeout)` inside `plan`, not `timeout=` on the
+  agent — the failure must degrade to "no artifact", not fail the Workflow.
+- **Resume**: `plan` keeps the `store.artifact(stage)` short-circuit (a CLI re-run starts a fresh ADK session, so
+  replay dedup alone would not skip the stage).
+- **`ScanWorkflow(Workflow)`** carries `index` (a pydantic `Workflow` refuses ad-hoc attributes) so
+  `runner.prepare/scan_full` close the LSP servers the same way for both graphs.
+- **`adk web`** with `PIPELINE=v3`: `/list-apps` → `["fullscan"]`, `/dev/apps/fullscan/build_graph` → 200 with
+  nodes `build_skeleton`, `plan`, `investigate`, `finish` under root `scan_v3`.
