@@ -6,13 +6,14 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 from google.adk.agents import BaseAgent
 from google.adk.events import Event, EventActions
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
+from pydantic import ConfigDict
 
 from scanner import core
 from scanner.app.pipeline_v2 import PipelineV2
@@ -83,7 +84,7 @@ class FakeVerifier(BaseAgent):
     store: object = None
     budget: bool = False
     global_flag: bool = False
-    model_config: ClassVar[dict] = {"arbitrary_types_allowed": True}
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     async def _run_async_impl(self, ctx):
         h = json.loads(self.instruction.split("(JSON):\n", 1)[1])
@@ -107,7 +108,7 @@ class FakeVerifier(BaseAgent):
 class FakeCritic(BaseAgent):
     instruction: str = ""
     store: object = None
-    model_config: ClassVar[dict] = {"arbitrary_types_allowed": True}
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     async def _run_async_impl(self, ctx):
         f = json.loads(self.instruction.split("(JSON):\n", 1)[1])["finding"]
@@ -121,7 +122,7 @@ class FakeStage(BaseAgent):
     instruction: str = ""
     reply: dict | None = None
     store: object = None
-    model_config: ClassVar[dict] = {"arbitrary_types_allowed": True}
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     async def _run_async_impl(self, ctx):
         self.store.add_note("seen:" + self.instruction.split("(JSON):\n", 1)[1], self.name)  # clone-safe record

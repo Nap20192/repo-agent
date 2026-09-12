@@ -100,6 +100,11 @@ def _cache(cfg: KnowledgeConfig | None = None) -> _Cache:
     return _caches[path]
 
 
+def osv_query_package(name: str, cfg: KnowledgeConfig | None = None) -> dict:
+    """Advisories for a package name via OSV /v1/query, cache-first (public wrapper for the tools layer)."""
+    return _cached("osv-query", name, lambda: fetch("https://api.osv.dev/v1/query", data={"package": {"name": name}}), cfg=cfg)
+
+
 def _cached(source: str, key: str, loader, ttl: float = TTL, cfg: KnowledgeConfig | None = None):
     """Cache-first; a failed loader (network down, 404) yields {} and is not cached."""
     c = _cache(cfg)
@@ -144,7 +149,7 @@ def osv_batch(pkgs: list[tuple[str, str, str]], cfg: KnowledgeConfig | None = No
 def _ghsa_dir_index(root: str) -> dict[str, str]:
     """GHSA id → json path inside a github/advisory-database clone (walked once per process)."""
     idx = {}
-    for dirpath, dirs, files in os.walk(root):
+    for dirpath, _dirs, files in os.walk(root):
         for f in files:
             if f.startswith("GHSA-") and f.endswith(".json"):
                 idx[f[:-5]] = os.path.join(dirpath, f)

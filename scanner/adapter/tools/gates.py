@@ -52,7 +52,8 @@ def gate_finding(run, read: Callable[[str, int], str], draft: Finding) -> str | 
 
 
 def report_finding_tool(run, read: Callable[[str, int], str]) -> Callable:
-    def report_finding(
+    def report_finding(  # ten flat parameters on purpose: this signature IS the ADK tool schema the model sees
+
         anchor_id: str,
         title: str,
         status: str,

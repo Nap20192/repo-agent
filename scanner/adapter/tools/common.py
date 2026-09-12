@@ -116,7 +116,7 @@ def common_tools(run) -> list[Callable]:
             v = kn.osv_vuln(q)
             vulns = [v] if v.get("id") else []
         else:
-            data = kn._cached("osv-query", q, lambda: kn.fetch("https://api.osv.dev/v1/query", data={"package": {"name": q}}))
+            data = kn.osv_query_package(q)
             vulns = data.get("vulns") or []
         if not vulns:
             return err(f"no advisory for {q!r}")
