@@ -10,6 +10,9 @@ from pathlib import Path
 
 from scanner.adapter import knowledge as kn
 from scanner.adapter import static
+from scanner.adapter.fs import (
+    inside,  # noqa: F401 — re-export: the one path-confinement helper
+)
 from scanner.adapter.owasp import consult_owasp
 from scanner.core.ports import Index
 
@@ -25,12 +28,6 @@ _ADVISORY_ID = re.compile(r"^(GHSA|CVE|PYSEC|GO|RUSTSEC|OSV)-", re.IGNORECASE)
 
 def err(reason: str) -> dict:
     return {"status": "error", "reason": reason}
-
-
-def inside(target: Path, path: str) -> Path | None:
-    """Resolve `path` against the target; None when it escapes the target (symlink or '..')."""
-    p = (target / path).resolve()
-    return p if p.is_relative_to(target) else None
 
 
 def shell_quote(s: str) -> str:

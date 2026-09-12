@@ -42,10 +42,8 @@ from scanner.adapter.tools.rosters import (
     verifier_tools,
 )
 
-# Names kept for existing importers (tests, eval); the public spellings above are preferred.
-_lsp_tools, _code_tools, _common_tools, _err, _q, _quotes_in_target, _default_index, _default_reader = (
-    lsp_tools, code_tools, common_tools, err, shell_quote, quotes_in_target, default_index, default_reader,
-)
+# Kept for one existing importer (tests/test_lsp_callgraph.py); the public spelling `lsp_tools` is preferred.
+_lsp_tools = lsp_tools
 
 __all__ = [
     "AUTHZ_CRITIC_TOOLS",

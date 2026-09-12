@@ -127,8 +127,8 @@ def make_check_dominance(target: Path, index) -> Callable[[str, int, int], dict]
         "control_depth", "sink_depth", "guard"}. Call it before disprove_finding whenever your disproof is a
         control on the path; a control with dominates=false does NOT disprove the finding."""
         try:
-            p = (target / file).resolve()
-            if not p.is_relative_to(target) or not p.is_file():
+            p = fs.inside(target, file)
+            if p is None or not p.is_file():
                 return {"status": "error", "reason": f"{file}: not a file inside the target"}
             try:
                 syms = index.symbols(file) if index is not None else []

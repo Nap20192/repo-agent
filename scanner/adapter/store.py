@@ -163,6 +163,9 @@ class Run:
         with self.db:
             self.db.execute("UPDATE runs SET status=?, reason=?, finished=? WHERE id=?", (status, reason, time.time(), self.id))
 
+    def _intent(self) -> str:
+        return (self.artifact("threat_model") or {}).get("intent", "production")
+
     def _calibrate(self, f: Finding, intent: str) -> dict:
         exp, rules = exposure_for(f, self.artifact("architecture_model"))
         return calibrate(f, intent, exposure=exp, knowledge=enrichment_for(f.anchor_id, getattr(self, "knowledge", None)), extra_rules=rules)
@@ -170,7 +173,7 @@ class Run:
     def write_report(self, out_dir: Path) -> Path:
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        intent = (self.artifact("threat_model") or {}).get("intent", "production")
+        intent = self._intent()
         results = [{
             "ruleId": f.cwe or "unknown", "level": _LEVEL.get(f.severity, "warning"),
             "message": {"text": f.title + ("\n" + "\n".join(f.evidence) if f.evidence else "")},
@@ -199,7 +202,7 @@ class Run:
         out_dir.mkdir(parents=True, exist_ok=True)
         fs = self.findings()
         gate = self.db.execute("SELECT COUNT(*) FROM gate_log WHERE run=?", (self.id,)).fetchone()[0]
-        intent = (self.artifact("threat_model") or {}).get("intent", "production")
+        intent = self._intent()
         summary = {"run_id": self.id, "target": self.target,
                    **{s: sum(f.status == s for f in fs) for s in (CONFIRMED, REJECTED, UNCERTAIN)},
                    "findings": [{**f.model_dump(), "calibration": self._calibrate(f, intent)} for f in fs], "gate_refusals": gate,

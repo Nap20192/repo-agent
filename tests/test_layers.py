@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-IMPORT = re.compile(r"^\s*(?:from|import)\s+(scanner(?:\.\w+)*|tests(?:\.\w+)*)", re.M)
+IMPORT = re.compile(r"^\s*(?:from|import)\s+(scanner(?:\.\w+)*|tests(?:\.\w+)*)", re.MULTILINE)
 
 
 def _imports(path: Path) -> set[str]:

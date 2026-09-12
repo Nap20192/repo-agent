@@ -35,13 +35,7 @@ class GrepIndex:
         if loc is None:
             return None
         file, line = loc
-        lines = self._lines(file)
-        end = min(len(lines), line + 40)  # ponytail: heuristic body = until the next top-level def or 40 lines
-        for i in range(line + 1, min(len(lines), line + 40) + 1):
-            if _DEF.match(lines[i - 1]) and not lines[i - 1][0].isspace():
-                end = i - 1
-                break
-        return file, line, end
+        return file, line, self._body_end(file, line)
 
     def references(self, fqn: str) -> list[tuple[str, int, str]]:
         name = fqn.rsplit(".", 1)[-1].strip()
@@ -101,6 +95,7 @@ class GrepIndex:
         return path_to_entry(self.callers, fqn, entries, max_depth)
 
     def _body_end(self, file: str, line: int) -> int:
+        """Heuristic body end: the next top-level def after `line`, or a 40-line window."""
         lines = self._lines(file)
         for i in range(line + 1, min(len(lines), line + 40) + 1):
             if _DEF.match(lines[i - 1]) and not lines[i - 1][0].isspace():
@@ -111,10 +106,12 @@ class GrepIndex:
         return None
 
     def _lines(self, file: str) -> list[str]:
+        p = fs.inside(self.target, file)
+        if p is None:
+            return []  # symlink or '..' escaping the target
         try:
-            p = (self.target / file).resolve()
-            if not p.is_relative_to(self.target) or p.stat().st_size > 2 * 1024 * 1024:
-                return []  # symlink or '..' escaping the target, or too big to slurp
+            if p.stat().st_size > fs.FILE_CAP:
+                return []  # too big to slurp
             return p.read_text(errors="replace").splitlines()
         except OSError:
             return []

@@ -20,15 +20,12 @@ from pydantic import BaseModel, Field
 
 from scanner.adapter import knowledge
 from scanner.adapter.entrypoints import (  # noqa: F401 — re-export
-    DEF_KW,
     entry_points,
-    find_symbol,
     has_symbol,
 )
 from scanner.adapter.fs import (  # noqa: F401 — re-export: importers still say `static.files`, `static.LANG_EXT`, …
     FILE_CAP,
     LANG_EXT,
-    MAX_DETECT_LINE,
     SKIP_DIRS,
     detect_langs,
     files,
@@ -141,8 +138,10 @@ _SEMGREP_EXCLUDES = [".github", "docs", "artifacts", "*.md", "*.html", "*.yml", 
                      "**/test/**", "**/tests/**", "*_test.go", "*.test.js", "test_*.py", *sorted(SKIP_DIRS)]
 
 
-def _semgrep(target: Path) -> list[Anchor]:
-    if cfg := os.environ.get("SEMGREP_CONFIG"):
+def _semgrep(target: Path, cfg: str | None = None) -> list[Anchor]:
+    # cfg is read once in `scan` and passed down; a direct caller (tests) may omit it and fall back to the env.
+    cfg = cfg if cfg is not None else os.environ.get("SEMGREP_CONFIG")
+    if cfg:
         cfgs, metrics = [cfg], ([] if cfg == "auto" else ["--metrics=off"])  # semgrep refuses `auto` with metrics off
     else:
         cfgs = sorted({p for lang in detect_langs(target) for p in _SEMGREP_PACKS.get(lang, [])}) or ["p/default"]
@@ -221,11 +220,12 @@ def scan(target: Path, skip_deps: bool = False, knowledge_cfg: KnowledgeConfig |
     """Run every applicable scanner; a failed/missing scanner lands in `failed`, never raises."""
     target = Path(target)
     langs = detect_langs(target)
+    semgrep_cfg = os.environ.get("SEMGREP_CONFIG")
     jobs = []
     if "go" in langs or not langs:
         jobs.append(("gosec", _gosec))
-    if os.environ.get("SEMGREP_CONFIG") or (langs - {"go"}):
-        jobs.append(("semgrep", _semgrep))
+    if semgrep_cfg or (langs - {"go"}):
+        jobs.append(("semgrep", lambda t: _semgrep(t, semgrep_cfg)))
     if not skip_deps:
         jobs.append(("osv", _osv))
     jobs.append(("gitleaks", _gitleaks))
