@@ -53,6 +53,24 @@ def architect_tools(run, target: Path, index: Index | None = None) -> list[Calla
 
 
 TRIAGE_TOOLS = {"read_file", "grep", "lsp_symbols"}
+VIABILITY_TOOLS = {"disprove_finding", "check_dominance", "lsp_path_to_entry", "read_file", "grep"}
+CONFIRM_TOOLS = {"report_finding", "read_file", "grep", "lsp_symbols", "lsp_definition", "lsp_references", "lsp_callers",
+                 "lsp_callees", "lsp_path_to_entry"}
+
+
+def review_tools(run, target: Path, in_target: Callable[[list[str]], bool] | None = None, index: Index | None = None) -> list[Callable]:
+    """Review (card 45): the Critic's roster — disprove gate, dominance, reading, navigation, consultants, skills."""
+    return critic_tools(run, target, in_target, index)
+
+
+def viability_tools(run, target: Path, in_target: Callable[[list[str]], bool] | None = None, index: Index | None = None) -> list[Callable]:
+    """Viability (card 45): disprove gate + dominance + reachability + reading; no consultants, no shell."""
+    return subset(critic_tools(run, target, in_target, index), VIABILITY_TOOLS)
+
+
+def confirm_tools(run, target: Path, reader: Callable[[str, int], str] | None = None, index: Index | None = None) -> list[Callable]:
+    """Confirm (card 45): report gate (promotion) + reading + navigation; never disprove."""
+    return subset(verifier_tools(run, target, reader, index), CONFIRM_TOOLS)
 
 
 def triage_tools(run, target: Path, index: Index | None = None) -> list[Callable]:

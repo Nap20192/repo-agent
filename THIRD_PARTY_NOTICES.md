@@ -8,3 +8,8 @@ The hunting checklists in the taint / authz / config specialist sections and the
 (scanner/app/instructions.py, card 44) are written in our own words after the methodology of Shannon's
 vuln-injection / vuln-xss / vuln-ssrf / vuln-authz / vuln-auth / pre-recon-code prompts and the capella triage
 prompt (Keygraph, AGPL-3.0; https://github.com/KeygraphHQ/shannon); no prompt text is copied.
+
+The verdict-ladder instructions (REVIEW_INSTRUCTION, VIABILITY_INSTRUCTION, CONFIRM_INSTRUCTION) and the batch
+triage instruction (TRIAGE_BATCH_INSTRUCTION) in scanner/app/instructions.py (card 45) follow the stage structure
+of the capella review / critic / confirm / triage prompts (Mantis, Apache-2.0, via Shannon/Keygraph) and are
+written in our own words; the 13 review rules are the same rules already adapted for the Critic above.
