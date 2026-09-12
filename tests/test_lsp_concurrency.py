@@ -4,9 +4,7 @@ import threading
 
 from scanner.adapter.index.languages import GO
 from scanner.adapter.index.lsp import LspIndex
-from tests.test_lsp_index import (
-    FakeClient,  # canned documentSymbol / references replies
-)
+from tests.fakes import FakeClient
 
 
 def test_parallel_lookups_share_one_client(tmp_path):

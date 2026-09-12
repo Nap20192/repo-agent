@@ -1,59 +1,11 @@
 """LspIndex / GrepIndex / MultiIndex against the Index port, with a fake LSP client (no servers)."""
 
-from pathlib import Path
 
 from scanner.adapter.index import GrepIndex, MultiIndex, build_index
 from scanner.adapter.index.languages import LANGUAGES
 from scanner.adapter.index.lsp import LspIndex as _LspIndex
 from scanner.core.ports import Index, Symbol
-
-GO_SRC = """package main
-
-type Server struct{}
-
-func (s *Server) login() {
-	x := 1
-}
-
-func pingHandler() {
-	s := &Server{}
-	s.login()
-}
-"""
-
-
-def _sym(name, kind, line, end, sel_char=5, children=()):
-    return {"name": name, "kind": kind, "range": {"start": {"line": line, "character": 0}, "end": {"line": end, "character": 1}},
-            "selectionRange": {"start": {"line": line, "character": sel_char}, "end": {"line": line, "character": sel_char + len(name)}},
-            "children": list(children)}
-
-
-class FakeClient:
-    """Answers documentSymbol/references from canned data; records calls."""
-
-    def __init__(self, cmd, root, lang_id, timeout=30):
-        self.root, self.calls = Path(root), []
-
-    def start(self): self.calls.append("start")
-    def initialize(self): self.calls.append("initialize"); return {}
-    def did_open(self, path): self.calls.append(("open", Path(path).name))
-    def close(self): self.calls.append("close")
-
-    def document_symbols(self, path):
-        if Path(path).name != "main.go":
-            return []
-        return [_sym("Server", 23, 2, 2), _sym("(*Server).login", 6, 4, 6, sel_char=17), _sym("pingHandler", 12, 8, 11)]
-
-    def definition(self, path, line0, char0): return []
-
-    def references(self, path, line0, char0, include_declaration=False):
-        if line0 == 4:  # login → called from pingHandler
-            return [{"uri": (self.root / "main.go").as_uri(), "range": {"start": {"line": 10, "character": 3}, "end": {"line": 10, "character": 8}}}]
-        return []
-
-
-class BrokenClient(FakeClient):
-    def initialize(self): raise RuntimeError("server exploded")
+from tests.fakes import GO_SRC, BrokenClient, FakeClient, _sym  # noqa: F401
 
 
 def _target(tmp_path):

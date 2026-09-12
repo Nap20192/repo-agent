@@ -3,52 +3,13 @@ from pathlib import Path
 import pytest
 
 from scanner.adapter import tools
-from scanner.core import Anchor, Finding
+from scanner.core import Anchor
+from tests.fakes import IDOR, SQL
+from tests.fakes import FakeRun as _FakeRun
 
 
-class FakeRun:
-    def __init__(self, anchors):
-        self._anchors = {a.id: a for a in anchors}
-        self._findings: list[Finding] = []
-        self.gate: list[tuple[str, str]] = []
-        self._notes: list[dict] = []
-
-    def anchors(self):
-        return list(self._anchors.values())
-
-    def anchor(self, id):
-        return self._anchors.get(id)
-
-    def report(self, f):
-        for old in self._findings:
-            if old.anchor_id == f.anchor_id:
-                return old
-        f = f.model_copy(update={"id": f"f_{len(self._findings) + 1}"})
-        self._findings.append(f)
-        return f
-
-    def findings(self):
-        return list(self._findings)
-
-    def log_gate(self, anchor_id, reason):
-        self.gate.append((anchor_id, reason))
-
-    def add_note(self, text, ref=""):
-        self._notes.append({"time": "t", "text": text, "ref": ref})
-
-    def set_status(self, fid, status, evidence, note=""):
-        for i, f in enumerate(self._findings):
-            if f.id == fid:
-                self._findings[i] = f.model_copy(update={"status": status, "evidence": [*f.evidence, *evidence]})
-                return self._findings[i]
-        return None
-
-    def notes(self):
-        return self._notes
-
-
-SQL = Anchor(id="a_sql", tool="gosec", rule_id="G202", cwe="CWE-89", severity="high", file="main.go", line=3)
-IDOR = Anchor(id="a_idor", tool="semgrep", rule_id="idor", cwe="CWE-639", severity="medium", file="main.go", line=5)
+def FakeRun(anchors):
+    return _FakeRun(anchors, dedup=True)
 
 
 def setup(tmp_path: Path):

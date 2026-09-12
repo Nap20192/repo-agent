@@ -10,7 +10,6 @@ import os
 import re
 import time
 from collections.abc import AsyncGenerator, Callable
-from typing import Any
 
 from google.adk.agents import BaseAgent, LlmAgent, ParallelAgent
 from google.adk.agents.invocation_context import InvocationContext

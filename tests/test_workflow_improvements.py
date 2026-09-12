@@ -12,7 +12,15 @@ from scanner.adapter import static
 from scanner.adapter.store import Store
 from scanner.app.pipeline_v2 import PipelineV2
 from scanner.core import Anchor
-from tests.test_graph import A1, FakeRun, FakeStage, FakeVerifier, _run, _text_event
+from tests.fakes import (
+    A1,
+    FakeRun,
+    FakeStage,
+    FakeVerifier,
+    _run,
+    _text_event,
+    notes_of,
+)
 
 
 # --- 1. parallel pre-pass ---------------------------------------------------------------
@@ -42,7 +50,7 @@ class FlakyStage(BaseAgent):
     model_config: ClassVar[dict] = {"arbitrary_types_allowed": True}
 
     async def _run_async_impl(self, ctx):
-        first = not any(t == f"flaky:{self.name.removesuffix('_retry')}" for t, _ in self.store.notes())
+        first = not any(t == f"flaky:{self.name.removesuffix('_retry')}" for t, _ in notes_of(self.store))
         if first:
             self.store.add_note(f"flaky:{self.name}", "")
             yield _text_event(self.name, ctx, "Sure! Here is my analysis in prose, no braces at all.")
@@ -117,5 +125,5 @@ def test_slow_stage_is_cancelled_and_pipeline_goes_on(monkeypatch):
     state = _run(_v2(run, architect=SlowStage(name="architect"), max_rounds=1))
     assert time.monotonic() - t0 < 0.9
     assert run.artifact("architecture_model") is None
-    assert any("stage architecture_model failed" in t for t, _ in run.notes())
+    assert any("stage architecture_model failed" in t for t, _ in notes_of(run))
     assert state[core.STATE_STOP_REASON] == "round limit"  # the queue was still investigated

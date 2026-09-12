@@ -1,127 +1,25 @@
-"""PipelineV2 with fake (non-LLM) stage/verifier/critic agents and an in-memory Run."""
+"""PipelineV2 with fake (non-LLM) stage/verifier/critic agents and an in-memory Run (doubles in tests/fakes.py)."""
 
-import asyncio
 import json
 from typing import ClassVar
 
 import pytest
-from google.adk.agents import BaseAgent
-from google.adk.events import Event, EventActions
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-from google.genai import types
 
 from scanner import core
 from scanner.app.graph import dossier_from_store, parse_json
 from scanner.app.pipeline_v2 import PipelineV2
-from scanner.core import Anchor, Candidate, Finding, Hypothesis
-
-A1 = Anchor(id="a_1", tool="gosec", rule_id="G201", cwe="CWE-89", severity="high", file="main.go", line=22)
-A2 = Anchor(id="a_2", tool="gosec", rule_id="G204", cwe="CWE-78", severity="high", file="main.go", line=30)
-
-
-class FakeRun:
-    def __init__(self):
-        self.hyps, self.doss, self._findings, self.gate, self._notes = {}, {}, [], [], []
-        self._anchors, self._art = [A1, A2], {}
-
-    def add_note(self, text, ref=""): self._notes.append((text, ref))
-    def notes(self): return self._notes
-
-    def anchors(self): return list(self._anchors)
-    def save_anchors(self, xs): self._anchors = self._anchors + list(xs)
-    def put_artifact(self, stage, obj): self._art[stage] = obj
-    def artifact(self, stage): return self._art.get(stage)
-    def anchor(self, id): return next((a for a in self.anchors() if a.id == id), None)
-    def put_hypotheses(self, r, hs): self.hyps[r] = hs
-    def set_status(self, fid, status, evidence, note=""):
-        for i, f in enumerate(self._findings):
-            if f.id == fid:
-                self._findings[i] = f.model_copy(update={"status": status, "evidence": [*f.evidence, *evidence]})
-                return self._findings[i]
-    def put_dossiers(self, r, ds): self.doss[r] = ds
-    def findings(self): return list(self._findings)
-
-    def report(self, f):
-        f.id = f"f_{len(self._findings) + 1}"
-        self._findings.append(f)
-        return f
-
-
-def _text_event(name, ctx, text):
-    return Event(author=name, invocation_id=ctx.invocation_id, branch=ctx.branch,
-                 content=types.Content(role="model", parts=[types.Part(text=text)]))
-
-
-
-
-class FakeVerifier(BaseAgent):
-    instruction: str = ""
-    store: object = None
-    budget: bool = False
-    global_flag: bool = False
-    model_config: ClassVar[dict] = {"arbitrary_types_allowed": True}
-
-    async def _run_async_impl(self, ctx):
-        h = json.loads(self.instruction.split("(JSON):\n", 1)[1])
-        if self.global_flag:
-            yield Event(author=self.name, invocation_id=ctx.invocation_id, branch=ctx.branch,
-                        actions=EventActions(state_delta={core.STATE_BUDGET_EXHAUSTED: True}))
-            return
-        if self.budget:  # this verifier's own model-call budget tripped before any report_finding
-            yield Event(author=self.name, invocation_id=ctx.invocation_id, branch=ctx.branch,
-                        actions=EventActions(state_delta={f"{core.STATE_BUDGET_EXHAUSTED}:{ctx.branch}": True}))
-            return
-        status = core.CONFIRMED if h["cwe"] == "CWE-89" else core.REJECTED
-        self.store.report(Finding(anchor_id=h["anchor_id"], hypothesis_id=h["id"], cwe=h["cwe"], file="main.go",
-                                title="t", status=status, evidence=["db.Query(x)"]))
-        new = [{"kind": "sink", "cwe": "CWE-89", "claim": "dup of a_1", "anchor_id": "a_1"},
-               {"kind": "sink", "claim": "ungrounded", "symbol": "nope"}]
-        yield _text_event(self.name, ctx, json.dumps({"hypothesis_id": h["id"], "verdict": "confirmed",
-                                                      "notes": "n", "new_hypotheses": new}))
-
-
-class FakeCritic(BaseAgent):
-    instruction: str = ""
-    store: object = None
-    model_config: ClassVar[dict] = {"arbitrary_types_allowed": True}
-
-    async def _run_async_impl(self, ctx):
-        f = json.loads(self.instruction.split("(JSON):\n", 1)[1])["finding"]
-        assert f["status"] == core.CONFIRMED
-        self.store.set_status(f["id"], core.UNCERTAIN, ["critic: parameterized after all"])
-        yield _text_event(self.name, ctx, json.dumps({"finding_id": f["id"], "disproved": True}))
-
-
-class FakeStage(BaseAgent):
-    """Architect or ThreatModeler stand-in: echoes a canned JSON, records the payload it received."""
-    instruction: str = ""
-    reply: dict | None = None
-    store: object = None
-    model_config: ClassVar[dict] = {"arbitrary_types_allowed": True}
-
-    async def _run_async_impl(self, ctx):
-        self.store.add_note("seen:" + self.instruction.split("(JSON):\n", 1)[1], self.name)  # clone-safe record
-        yield _text_event(self.name, ctx, json.dumps(self.reply))
-
-
-def _scan(run, **kw):
-    return PipelineV2(
-        verifier=kw.pop("verifier", FakeVerifier(name="verify", store=run)), store=run, target="/t",
-        has_anchor=lambda i: run.anchor(i) is not None, has_symbol=lambda s: False, entry_points_fn=list, **kw,
-    )
-
-
-def _run(agent):
-    async def go():
-        svc = InMemorySessionService()
-        r = Runner(app_name="t", agent=agent, session_service=svc)
-        await svc.create_session(app_name="t", user_id="u", session_id="s")
-        async for _ in r.run_async(user_id="u", session_id="s",
-                                   new_message=types.Content(role="user", parts=[types.Part(text="go")])):
-            pass
-        return dict((await svc.get_session(app_name="t", user_id="u", session_id="s")).state)
-    return asyncio.run(go())
+from scanner.core import Candidate, Finding, Hypothesis
+from tests.fakes import (  # noqa: F401
+    A1,
+    A2,
+    FakeCritic,
+    FakeRun,
+    FakeStage,
+    FakeVerifier,
+    _run,
+    _scan,
+    notes_of,
+)
 
 
 def test_round_limit_stops_with_queue_left():
@@ -185,7 +83,7 @@ def test_v2_queue_drains_without_lead():
     # new_hypotheses: the a_1 duplicate is done, the ungrounded one is gated out → queue empty after round 1
     assert 1 in run.hyps and run.hyps[1] == [] and 1 not in run.doss
     assert state[core.STATE_STOP_REASON] == "" and state[core.STATE_ROUND] == 2
-    assert any("ungrounded" in t for t, _ in run.notes())
+    assert any("ungrounded" in t for t, _ in notes_of(run))
 
 
 def test_v2_stages_mint_anchor_for_grounded_threat():
@@ -202,7 +100,7 @@ def test_v2_stages_mint_anchor_for_grounded_threat():
     # plan-stage coverage: the entry point no threat/anchor examines becomes a low-priority baseline hypothesis
     baseline = [h for h in run.hyps[0] if h.kind == "entry"]
     assert len(baseline) == 1 and baseline[0].symbol == "listOrders"
-    seen = {ref: json.loads(t[5:]) for t, ref in run.notes() if t.startswith("seen:")}
+    seen = {ref: json.loads(t[5:]) for t, ref in notes_of(run) if t.startswith("seen:")}
     assert seen["architecture_model"]["anchors"][0]["id"] == "a_1" and seen["threat_model"]["architecture_model"]["entities"][0]["name"] == "orders"
     assert run.artifact("architecture_model")["vuln_classes"] == [{"cwe": "CWE-639"}] and run.artifact("threat_model")["intent"] == "production"
     minted = [a for a in run.anchors() if a.tool == "threatmodel"]
@@ -210,7 +108,7 @@ def test_v2_stages_mint_anchor_for_grounded_threat():
     ids = {h.anchor_id: h for h in run.hyps[0] if h.anchor_id}
     assert set(ids) == {"a_1", "a_2", minted[0].id} and ids[minted[0].id].consult == "domain"  # ghost threat gated out
     assert ids[minted[0].id].id == "h0-1"  # priority 80 beats the anchors (60)
-    assert any("ungrounded" in t for t, _ in run.notes()) and state[core.STATE_STOP_REASON] == ""
+    assert any("ungrounded" in t for t, _ in notes_of(run)) and state[core.STATE_STOP_REASON] == ""
 
 
 def test_helpers():

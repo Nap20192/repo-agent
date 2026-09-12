@@ -14,7 +14,7 @@ from scanner import core, main
 from scanner.adapter.store import Run, Store
 from scanner.app import runner
 from scanner.app.pipeline_v2 import PipelineV2
-from tests.test_graph import FakeStage, FakeVerifier
+from tests.fakes import FakeStage, FakeVerifier
 
 SAMPLE = Path(__file__).resolve().parent.parent / "samples" / "02-vulnshop"
 pytestmark = pytest.mark.skipif(shutil.which("gosec") is None, reason="gosec not installed")

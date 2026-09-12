@@ -7,7 +7,7 @@ from scanner.adapter.skills import SKILLS
 from scanner.app import specialists as sp
 from scanner.app.instructions import OPERATING_PRINCIPLES
 from scanner.core import Finding, Hypothesis
-from tests.test_tools import IDOR, SQL, FakeRun
+from tests.fakes import IDOR, SQL, FakeRun
 
 
 def test_registry_names_and_roles():
@@ -58,7 +58,7 @@ def test_max_calls_env_override(monkeypatch):
 
 def test_build_makes_one_agent_per_specialist(tmp_path):
     (tmp_path / "main.go").write_text("package main\n")
-    agents = sp.build("gemini-flash-lite-latest", FakeRun([SQL, IDOR]), tmp_path, None)
+    agents = sp.build("gemini-flash-lite-latest", FakeRun([SQL, IDOR], dedup=True), tmp_path, None)
     assert set(agents) == {s.name for s in sp.REGISTRY}
     for s in sp.REGISTRY:
         a = agents[s.name]

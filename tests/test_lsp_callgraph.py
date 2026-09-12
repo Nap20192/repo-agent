@@ -10,7 +10,7 @@ from scanner.adapter.index import GrepIndex, build_index
 from scanner.adapter.index.languages import LANGUAGES
 from scanner.adapter.index.lsp import LspIndex
 from scanner.adapter.index.rpc import LspError
-from tests.test_lsp_index import GO_SRC, FakeClient, _sym
+from tests.fakes import GO_SRC, FakeClient, _sym
 
 SAMPLE = Path(__file__).resolve().parent.parent / "samples" / "03-govulnlab"
 

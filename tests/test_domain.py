@@ -5,9 +5,7 @@ from pathlib import Path
 
 from scanner.adapter.domain import consult, extract
 from scanner.core.domain import DomainMap, Entity, Rule
-
-from tests.test_graph import FakeRun, FakeStage, FakeVerifier, _run
-from tests.test_stages import Node
+from tests.fakes import FakeRun, FakeStage, FakeVerifier, Node, _run, notes_of
 
 IDOR = Path(__file__).resolve().parent.parent / "samples" / "08-idor-go"
 
@@ -72,7 +70,7 @@ def test_domain_stage_between_architect_and_threat_modeler(tmp_path):
     node = Node(body=body, store=run, target=str(tmp_path), has_anchor=lambda i: run.anchor(i) is not None, has_symbol=lambda s: False,
                 entry_points_fn=list, verifier=FakeVerifier(name="verify", store=run), architect=arch, domain_modeler=dm, threat_modeler=tm)
     _run(node)
-    seen = {ref: json.loads(t[5:]) for t, ref in run.notes() if t.startswith("seen:")}
+    seen = {ref: json.loads(t[5:]) for t, ref in notes_of(run) if t.startswith("seen:")}
     assert seen["domain_map"]["architecture_model"]["entities"] == [{"name": "orders"}]
     assert seen["domain_map"]["skeleton"]["entities"][0]["owner_field"] == "UserID"
     assert run.artifact("domain_map")["rules"][0]["id"] == "r1"

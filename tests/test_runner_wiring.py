@@ -4,7 +4,7 @@ from pathlib import Path
 
 from scanner.app import runner
 from scanner.app.specialists import REGISTRY, route_name
-from tests.test_graph import FakeRun
+from tests.fakes import FakeRun
 
 
 def _target(tmp_path: Path) -> Path:

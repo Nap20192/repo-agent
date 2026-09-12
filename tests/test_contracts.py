@@ -16,7 +16,7 @@ from scanner.app.agents import (
     new_verifier,
 )
 from scanner.core import ArchitectureModel, Dossier, Threat, ThreatModel
-from tests.test_graph import FakeRun, FakeVerifier, _run, _scan
+from tests.fakes import FakeRun, FakeVerifier, _run, _scan
 
 MODEL = "gemini-flash-lite-latest"  # constructing an LlmAgent never touches the network
 TOOL_RX = re.compile(r"\b(load_skill|list_skills|report_finding|disprove_finding|consult_\w+|lsp_\w+|read_file|grep|shell|"

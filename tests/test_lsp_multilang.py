@@ -4,7 +4,7 @@ from pathlib import Path
 
 from scanner.adapter.index import GrepIndex, MultiIndex, build_index
 from scanner.adapter.index.languages import LANGUAGES
-from tests.test_lsp_index import FakeClient
+from tests.fakes import FakeClient
 
 
 def _tree(tmp_path: Path) -> Path:

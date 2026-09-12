@@ -9,7 +9,6 @@ import os
 import time
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
-from typing import Any
 
 from google.adk.agents import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext

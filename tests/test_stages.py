@@ -1,7 +1,7 @@
 """One focused test per PipelineV2 node, exercised in isolation through the node's own method."""
 
 import json
-from typing import Any, ClassVar
+from typing import ClassVar
 
 import pytest
 from google.adk.agents import BaseAgent
@@ -10,27 +10,19 @@ from scanner import core
 from scanner.adapter.store import Store
 from scanner.app.pipeline_v2 import PipelineV2
 from scanner.core import Anchor, Candidate, Finding, Hypothesis, Threat, ThreatModel
-from tests.test_graph import (
+from tests.fakes import (
     A1,
     A2,
     FakeCritic,
     FakeRun,
     FakeStage,
     FakeVerifier,
+    Node,
     _run,
     _scan,
     _text_event,
+    notes_of,
 )
-
-
-class Node(PipelineV2):
-    """Runs one node: `body(self, ctx)` is an async generator over that node's method."""
-
-    body: Any = None
-
-    async def _run_async_impl(self, ctx):
-        async for ev in self.body(self, ctx):
-            yield ev
 
 
 def _node(run, body, **kw):
@@ -72,7 +64,7 @@ def test_architect_invalid_json_is_noted_and_skipped():
 
     _run(_node(run, body))
     assert out["architecture_model"] is None and run.artifact("architecture_model") is None
-    assert any(t == "stage architecture_model: no valid JSON" for t, _ in run.notes())
+    assert any(t == "stage architecture_model: no valid JSON" for t, _ in notes_of(run))
 
 
 def test_architect_exception_is_noted_and_pipeline_continues():
@@ -84,7 +76,7 @@ def test_architect_exception_is_noted_and_pipeline_continues():
 
     _run(_node(run, body))
     assert out["architecture_model"] is None
-    assert any(t.startswith("stage architecture_model failed: boom") for t, _ in run.notes())
+    assert any(t.startswith("stage architecture_model failed: boom") for t, _ in notes_of(run))
 
 
 def test_architect_resume_skips_agent_when_artifact_exists():
@@ -98,7 +90,7 @@ def test_architect_resume_skips_agent_when_artifact_exists():
 
     _run(_node(run, body))
     assert out["architecture_model"]["entities"][0]["name"] == "cached"
-    assert not any(t.startswith("seen:") for t, _ in run.notes())  # the agent never ran
+    assert not any(t.startswith("seen:") for t, _ in notes_of(run))  # the agent never ran
 
 
 # --- 2. ThreatModeler ---------------------------------------------------------
@@ -127,7 +119,7 @@ def test_threat_modeler_runs_on_empty_model_without_architect():
             yield ev
 
     _run(_node(run, body, threat_modeler=tm))
-    seen = next(json.loads(t[5:]) for t, _ in run.notes() if t.startswith("seen:"))
+    seen = next(json.loads(t[5:]) for t, _ in notes_of(run) if t.startswith("seen:"))
     assert seen["architecture_model"]["entities"] == [] and seen["architecture_model"]["vuln_classes"] == []
 
 
@@ -137,7 +129,7 @@ def test_threat_without_symbol_is_gated_not_investigated():
         {"cwe": "CWE-79", "claim": "ghost", "symbol": "", "priority": 90}]})
     _run(_scan(run, threat_modeler=tm, max_parallel=1))
     assert all(h.anchor_id in {"a_1", "a_2"} for h in run.hyps[0])
-    assert any("ungrounded" in t for t, _ in run.notes())
+    assert any("ungrounded" in t for t, _ in notes_of(run))
 
 
 # --- 3. Reconciler inside the pipeline --------------------------------------------
@@ -185,7 +177,7 @@ def test_verify_chunks_and_takes_verdicts_from_store():
             yield ev
 
     _run(_node(run, body, max_parallel=2))
-    branches = {t[3:] for t, _ in run.notes() if t.startswith("ev:")}
+    branches = {t[3:] for t, _ in notes_of(run) if t.startswith("ev:")}
     assert {"verify_round_0_0.verify_r0_0", "verify_round_0_0.verify_r0_1", "verify_round_0_2.verify_r0_2"} <= branches  # chunks of ≤2
     assert [d.verdict for d in res["dossiers"]] == [core.CONFIRMED, core.REJECTED, core.REJECTED]
     assert res["failed"] == "" and res["budget"] is False and all(d.notes == "n" for d in res["dossiers"])
@@ -252,9 +244,9 @@ def test_critic_only_visits_confirmed_and_chunks():
             yield ev
 
     _run(_node(run, body, critic=CountingCritic(name="critic", store=run), max_parallel=2))
-    visited = sorted(t[7:] for t, _ in run.notes() if t.startswith("critic:"))
+    visited = sorted(t[7:] for t, _ in notes_of(run) if t.startswith("critic:"))
     assert visited == ["critic_0", "critic_1", "critic_2"]  # 3 confirmed, the rejected one skipped
-    assert {t[3:] for t, _ in run.notes() if t.startswith("ev:")} >= {"critic_0.critic_0", "critic_0.critic_1", "critic_2.critic_2"}
+    assert {t[3:] for t, _ in notes_of(run) if t.startswith("ev:")} >= {"critic_0.critic_0", "critic_0.critic_1", "critic_2.critic_2"}
     assert [f.status for f in run.findings()] == [core.UNCERTAIN, core.REJECTED, core.UNCERTAIN, core.UNCERTAIN]
 
 
@@ -268,7 +260,7 @@ def test_critic_chunk_failure_keeps_finding_confirmed():
 
     _run(_node(run, body, critic=Boom(name="critic")))
     assert run.findings()[0].status == core.CONFIRMED
-    assert any(t.startswith("critic chunk 0 failed: boom") for t, _ in run.notes())
+    assert any(t.startswith("critic chunk 0 failed: boom") for t, _ in notes_of(run))
 
 
 # --- 6. Reporter / store --------------------------------------------------------
@@ -351,7 +343,7 @@ def test_verify_routes_cwe89_to_specialist_and_others_to_fallback():
             yield ev
 
     _run(_node(run, body, specialists={"taint": Spy(name="taint", store=run)}, router=_router, max_parallel=1))
-    assert [t for t, _ in run.notes() if t.startswith("spy:")] == ["spy:verify_r0_0:taint:True"]  # name kept, payload + overlay
+    assert [t for t, _ in notes_of(run) if t.startswith("spy:")] == ["spy:verify_r0_0:taint:True"]  # name kept, payload + overlay
     assert [d.verdict for d in res["dossiers"]] == [core.CONFIRMED, core.REJECTED, core.REJECTED]  # fallback verifier did the rest
     if "specialist" in core.Dossier.model_fields:
         assert [d.specialist for d in res["dossiers"]] == ["taint", "", ""]
@@ -360,7 +352,7 @@ def test_verify_routes_cwe89_to_specialist_and_others_to_fallback():
 def test_verify_retry_reuses_the_routed_specialist():
     class FlakySpy(Spy):
         async def _run_async_impl(self, ctx):
-            first = not any(t == "flaky" for t, _ in self.store.notes())
+            first = not any(t == "flaky" for t, _ in notes_of(self.store))
             self.store.add_note("spyname:" + self.name)
             if first:
                 self.store.add_note("flaky")
@@ -376,7 +368,7 @@ def test_verify_retry_reuses_the_routed_specialist():
             yield ev
 
     _run(_node(run, body, specialists={"taint": FlakySpy(name="taint", store=run)}, router=_router))
-    assert [t[8:] for t, _ in run.notes() if t.startswith("spyname:")] == ["verify_r0_0", "verify_r0_0_retry"]
+    assert [t[8:] for t, _ in notes_of(run) if t.startswith("spyname:")] == ["verify_r0_0", "verify_r0_0_retry"]
     assert res["dossiers"][0].notes == "retried"
 
 
@@ -389,9 +381,9 @@ def test_critic_pass_routes_to_specialist_and_notes_it():
             yield ev
 
     _run(_node(run, body, critic=Boom(name="critic"), specialists={"taint_critic": SpyCritic(name="taint_critic", store=run)}, router=_router))
-    assert [t for t, _ in run.notes() if t.startswith("spyc:")] == ["spyc:critic_0"]
+    assert [t for t, _ in notes_of(run) if t.startswith("spyc:")] == ["spyc:critic_0"]
     assert run.findings()[0].status == core.UNCERTAIN
-    assert any(t == "critic:taint_critic reviewed f_1" for t, _ in run.notes())
+    assert any(t == "critic:taint_critic reviewed f_1" for t, _ in notes_of(run))
 
 
 def test_router_unknown_name_falls_back_and_no_router_is_unchanged():
@@ -435,4 +427,4 @@ def test_pipeline_grounds_artifacts_before_reconcile():
     assert [t["symbol"] for t in run.artifact("threat_model")["threats"]] == ["searchHandler"]
     claims = [h.claim for h in run.hyps[0]]
     assert "real" in claims and "ghost" not in claims  # the ungrounded threat never became a hypothesis
-    assert state["grounding_dropped"] >= 3 and any("nowhere" in t for t, _ in run.notes())
+    assert state["grounding_dropped"] >= 3 and any("nowhere" in t for t, _ in notes_of(run))
