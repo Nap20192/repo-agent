@@ -110,7 +110,8 @@ class Run:
         """Insert or return the duplicate (same anchor, or same cwe+file+line); higher confidence replaces verdict."""
         for i, old in enumerate(self.findings(), 1):
             same = (f.anchor_id and old.anchor_id == f.anchor_id) or \
-                   (f.cwe and (old.cwe, old.file, old.line) == (f.cwe, f.file, f.line))
+                   (f.cwe and "direct" not in (f.source, old.source)  # direct osv findings share manifest:1 per CWE
+                    and (old.cwe, old.file, old.line) == (f.cwe, f.file, f.line))
             if not same:
                 continue
             if f.confidence > old.confidence:

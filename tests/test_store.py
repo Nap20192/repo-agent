@@ -97,3 +97,14 @@ def test_direct_source_lands_in_sarif_and_summary(tmp_path):
     assert sarif["runs"][0]["results"][0]["properties"]["source"] == "direct"
     summary = json.loads(run.write_summary(tmp_path / "out").read_text())
     assert summary["findings"][0]["source"] == "direct"
+
+
+def test_direct_findings_dedup_by_anchor_only(tmp_path):
+    """Two vulnerable packages with the same CWE both sit at package-lock.json:1 — they are two findings."""
+    run = Store(str(tmp_path / "s.db")).start_run("t")
+    for a in ("a_osv1", "a_osv2"):
+        run.report(Finding(anchor_id=a, cwe="CWE-1321", file="package-lock.json", line=1, title=a, severity="high",
+                           status=CONFIRMED, evidence=["package-lock.json:1"], confidence=1.0, source="direct"))
+    assert len(run.findings()) == 2
+    assert run.report(Finding(anchor_id="a_osv1", cwe="CWE-1321", file="package-lock.json", line=1, title="again",
+                              status=CONFIRMED, confidence=1.0, source="direct")).id == "f_1"
