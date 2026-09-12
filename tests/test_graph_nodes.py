@@ -4,7 +4,7 @@ from scanner import core
 from scanner.app import graph_nodes
 from scanner.core import Anchor, Candidate, Dossier, Finding, Hypothesis
 from scanner.core.workflow import ScanSkeleton
-from tests.fakes import A1, A2, FakeRun, _run_node, notes_of
+from tests.fakes import A1, A2, FakeRun, _run_node
 
 OSV = Anchor(id="a_osv", tool="osv", rule_id="GHSA-x", rule_ids=["GHSA-x"], severity="high", file="package-lock.json",
              line=1, snippet="lodash 4.17.11", message="lodash@4.17.11: 1 advisories")
@@ -78,22 +78,29 @@ def test_route_and_verify_verdict_comes_from_the_store_not_the_model_text():
     assert d.verdict == core.CONFIRMED and d.finding_id == "f_1" and d.error == ""
 
 
-def test_route_and_critique_runs_specialist_critics_and_notes_them():
+def test_review_worker_routes_to_specialist_critics_and_annotates():
     run = FakeRun([A1])
     f = run.report(Finding(anchor_id="a_1", cwe="CWE-89", file="main.go", title="t", status=core.CONFIRMED, evidence=["e"]))
     from google.adk.workflow import FunctionNode
 
     async def critic(ctx, node_input: dict) -> dict:
         assert node_input["finding"]["status"] == core.CONFIRMED and node_input["anchor"]["id"] == "a_1"
-        run.set_status(node_input["finding"]["id"], core.UNCERTAIN, ["critic: parameterized"])
-        return {"finding_id": node_input["finding"]["id"], "disproved": True}
-    node = graph_nodes.route_and_critique_node(run, critic=FunctionNode(func=critic, name="c", rerun_on_resume=True),
-                                               specialists={"taint_critic": FunctionNode(func=critic, name="tc", rerun_on_resume=True)},
-                                               router=lambda item, lang, role: ("taint_critic", ""), max_parallel=1)
+        run.set_status(node_input["finding"]["id"], core.UNCERTAIN, ["critic: parameterized"])  # through the gate in real runs
+        return {"finding_id": node_input["finding"]["id"], "status": "FALSE_POSITIVE", "reasoning": "parameterized"}
+    node = graph_nodes.review_node(FunctionNode(func=critic, name="c", rerun_on_resume=True), run,
+                                   specialists={"taint_critic": FunctionNode(func=critic, name="tc", rerun_on_resume=True)},
+                                   router=lambda item, lang, role: ("taint_critic", ""), max_parallel=1)
     outs = _run_node(node, [f.model_dump()])
     assert outs[-1] == [{"finding_id": "f_1", "specialist": "taint_critic", "error": ""}]
-    assert run.findings()[0].status == core.UNCERTAIN
-    assert ("critic:taint_critic reviewed f_1", "f_1") in notes_of(run)
+    assert run.findings()[0].status == core.UNCERTAIN  # the agent disproved it → FALSE_POSITIVE stands
+    assert run.findings()[0].review["status"] == "FALSE_POSITIVE"
+
+
+def test_triage_sweep_without_an_agent_flags_every_file():
+    run = FakeRun()
+    outs = _run_node(graph_nodes.triage_sweep_node(None, run, 2), [{"files": ["a.js", "b.js"]}])
+    assert [c["file"] for c in outs[-1][0]["classifications"]] == ["a.js", "b.js"]
+    assert all(c["flagged"] for c in outs[-1][0]["classifications"])
 
 
 # --- shared helpers (scanner/app/graph.py) -------------------------------------------------------------------

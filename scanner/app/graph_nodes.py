@@ -14,6 +14,7 @@ from pathlib import Path
 
 from google.adk.workflow import FunctionNode, node
 
+from scanner import core
 from scanner.adapter.knowledge import enrichment_for, imported_by
 from scanner.adapter.skills import skill_for, skills_for
 from scanner.adapter.static import ScanResult
@@ -80,10 +81,17 @@ def report_direct(store: RunStore, target: str, direct: list[Anchor]) -> list[st
 
 
 def direct_findings_node(store: RunStore, target: str) -> FunctionNode:
-    """anchors (dicts) → {"remaining": anchors the model may investigate, "reported": finding ids}."""
-    def direct_findings(node_input: list[dict]) -> dict:
-        direct, rest = split_direct([Anchor.model_validate(a) for a in node_input])
-        return {"remaining": [a.model_dump() for a in rest], "reported": report_direct(store, target, direct)}
+    """On a static edge after build_skeleton: the store's anchors → DirectResult {remaining, reported} plus the
+    skeleton fields passed through (target, entry_points) so the Architect's payload needs no side channel.
+    Called dynamically with a list of anchor dicts (tests), it classifies that list instead."""
+    def direct_findings(node_input) -> dict:
+        given = node_input if isinstance(node_input, list) else None
+        anchors = [Anchor.model_validate(a) for a in given] if given is not None else store.anchors()
+        direct, rest = split_direct(anchors)
+        out = {"remaining": [a.model_dump() for a in rest], "reported": report_direct(store, target, direct)}
+        if isinstance(node_input, dict):
+            out.update({k: node_input[k] for k in ("target", "entry_points") if k in node_input})
+        return out
     return FunctionNode(func=direct_findings, name="direct_findings", rerun_on_resume=True)
 
 
@@ -131,49 +139,100 @@ def route_and_verify_node(store: RunStore, verifier, specialists: dict, router: 
                 rerun_on_resume=True, name="route_and_verify")
 
 
-def triage_node(triage, max_parallel: int):
-    """Triage fan-out (card 44): one baseline hypothesis in → {"id", "file", "flagged", "classes", "why", "failed"}.
-    A failed or JSON-less triage flags the item (fail open: the audit, not the sweep, decides)."""
-    async def triage_one(ctx, node_input: dict) -> dict:
-        h = Hypothesis.model_validate(node_input)
-        file = h.reads[0] if h.reads else ""
-        payload = {"id": h.id, "file": file, "symbol": h.symbol, "route": h.route, "classes": [h.cwe] if h.cwe else [],
-                   "claim": h.claim}
-        out, err = None, ""
+def triage_sweep_node(triage, store: RunStore, max_parallel: int):
+    """Triage fan-out over FILE BATCHES (Shannon research/triage): one {"files": [...]} in → TriageBatch dict out.
+    No agent → every file flagged (the audit decides); a failed/JSON-less batch → no classifications, so
+    fold_triage marks its files missing and keeps their baselines (fail open, coverage=reduced)."""
+    async def triage_sweep(ctx, node_input: dict) -> dict:
+        files = list((node_input or {}).get("files", []))
+        if triage is None:
+            return {"classifications": [{"file": f, "flagged": True, "classes": [], "why": "triage off"} for f in files]}
+        out = None
         try:
-            out = await ctx.run_node(triage, payload, run_id=f"triage_{h.id}")
-        except Exception as e:  # noqa: BLE001 — one failed classification must not cancel the batch
-            err = _why(e)
-            log.warning("triage %s: %s", h.id, err)
+            out = await ctx.run_node(triage, {"files": files}, run_id=f"triage_{abs(hash(tuple(files)))}")
+        except Exception as e:  # noqa: BLE001 — one failed batch must not cancel the sweep
+            log.warning("triage batch %s: %s", files[:1], _why(e))
+            store.add_note(f"triage batch failed: {_why(e)}")
         md = _model_json(out) or {}
-        flagged = bool(md.get("flagged", True)) if md else True
-        classes = [c for c in md.get("classes", []) if isinstance(c, str) and c.upper().startswith("CWE-")]
-        return {"id": h.id, "file": file, "flagged": flagged, "classes": [c.upper() for c in classes],
-                "why": str(md.get("why", ""))[:300], "failed": bool(err)}
-    return node(triage_one, parallel_worker=True, max_parallel_workers=max_parallel or None,
-                rerun_on_resume=True, name="triage")
+        cls = [c for c in md.get("classifications", []) if isinstance(c, dict)]
+        for c in cls:
+            c["classes"] = [x.upper() for x in c.get("classes", []) if isinstance(x, str) and x.upper().startswith("CWE-")]
+            c["why"] = str(c.get("why", ""))[:300]
+        return {"classifications": cls}
+    return node(triage_sweep, parallel_worker=True, max_parallel_workers=max_parallel or None,
+                rerun_on_resume=True, name="triage_sweep")
 
 
-def route_and_critique_node(store: RunStore, critic, specialists: dict, router: Router | None, max_parallel: int):
-    """Critic fan-out over confirmed findings: {finding, anchor, specialist, skills} → the (specialist) critic;
-    verdict changes land in the store through disprove_finding. Output per item: finding id, specialist, error."""
-    async def route_and_critique(ctx, node_input: dict) -> dict:
+def _annotating_worker(name: str, agent, store: RunStore, specialists: dict, router: Router | None, max_parallel: int,
+                       annotate: Callable[[dict, dict], None], role: str = "critique"):
+    """A parallel worker over the model's confirmed findings: {finding, anchor, specialist, skills} → the agent;
+    its JSON becomes an annotation through `annotate(finding_dict, json)`; verdict changes only through the gates
+    inside the agent. No agent → 0 calls, the finding passes through."""
+    async def worker(ctx, node_input: dict) -> dict:
         f = Finding.model_validate(node_input)
+        if agent is None:
+            return {"finding_id": f.id, "specialist": "", "error": ""}
         a = store.anchor(f.anchor_id)
-        agent, name, suffix = pick_agent(f, "critique", specialists, router, critic)
-        payload = {"finding": f.model_dump(), "anchor": a.model_dump() if a else None, "specialist": name,
+        picked, sname, suffix = pick_agent(f, role, specialists, router, agent)
+        payload = {"finding": f.model_dump(), "anchor": a.model_dump() if a else None, "specialist": sname,
                    "skills": skills_for(f.cwe, "", "critique")}
         if suffix:
             payload["instructions"] = suffix
-        if name:
-            store.add_note(f"critic:{name} reviewed {f.id}", f.id)
-        err = ""
+        err, out = "", None
         try:
-            await ctx.run_node(agent, payload, run_id=f"critic_{f.id}")
-        except Exception as e:  # noqa: BLE001 — critic failure never loses confirmed findings
+            out = await ctx.run_node(picked, payload, run_id=f"{name}_{f.id}")
+        except Exception as e:  # noqa: BLE001 — a failed pass never loses a confirmed finding
             err = _why(e)
-            log.warning("critic %s failed: %s", f.id, err)
-            store.add_note(f"critic {f.id} failed: {err}", f.id)
-        return {"finding_id": f.id, "specialist": name, "error": err}
-    return node(route_and_critique, parallel_worker=True, max_parallel_workers=max_parallel or None,
-                rerun_on_resume=True, name="route_and_critique")
+            log.warning("%s %s failed: %s", name, f.id, err)
+            store.add_note(f"{name} {f.id} failed: {err}", f.id)
+        md = _model_json(out)
+        if md is not None:
+            try:
+                annotate(node_input, md)
+            except (ValueError, KeyError) as e:
+                err = err or f"invalid {name} JSON: {e}"
+                store.add_note(f"{name} {f.id}: {err}", f.id)
+        return {"finding_id": f.id, "specialist": sname, "error": err}
+    return node(worker, parallel_worker=True, max_parallel_workers=max_parallel or None, rerun_on_resume=True, name=name)
+
+
+def review_node(review, store: RunStore, specialists: dict, router: Router | None, max_parallel: int):
+    """Independent validation (Shannon review): ReviewVerdict → annotation `review`. FALSE_POSITIVE without a
+    disprove_finding call (the finding is still confirmed) is recorded as NEEDS_RESEARCH."""
+    from scanner.core.workflow import ReviewVerdict
+
+    def annotate(fd: dict, md: dict) -> None:
+        v = ReviewVerdict.model_validate({**md, "finding_id": fd["id"]})
+        status = v.status
+        if status == "FALSE_POSITIVE" and any(f.id == fd["id"] and f.status == core.CONFIRMED for f in store.findings()):
+            status = "NEEDS_RESEARCH"  # the agent said FP but never disproved it through the gate
+            store.add_note(f"review {fd['id']}: FALSE_POSITIVE without a counter-quote — kept as NEEDS_RESEARCH", fd["id"])
+        store.annotate(fd["id"], review={"status": status, "reasoning": v.reasoning, "repro_hints": v.repro_hints,
+                                         "checklist": {k: r.model_dump() for k, r in v.checklist.items()}})
+    return _annotating_worker("review", review, store, specialists, router, max_parallel, annotate)
+
+
+def viability_node(critic, store: RunStore, specialists: dict, router: Router | None, max_parallel: int):
+    """Production viability (Shannon critic): Viability → annotation `viability`; NON_VIABLE without a gate call
+    is recorded as CONDITIONAL_VIABLE (fail-safe)."""
+    from scanner.core.workflow import Viability
+
+    def annotate(fd: dict, md: dict) -> None:
+        v = Viability.model_validate({**md, "finding_id": fd["id"]})
+        val = v.viability
+        if val == "NON_VIABLE" and any(f.id == fd["id"] and f.status == core.CONFIRMED for f in store.findings()):
+            val = "CONDITIONAL_VIABLE"
+            store.add_note(f"critic {fd['id']}: NON_VIABLE without a counter-quote — kept CONDITIONAL_VIABLE", fd["id"])
+        store.annotate(fd["id"], viability=val)
+    return _annotating_worker("critic", critic, store, specialists, router, max_parallel, annotate)
+
+
+def confirm_node(confirm, store: RunStore, max_parallel: int):
+    """Static confirmation of PROVISIONALLY_VALID findings: Confirmation → annotation `repro_status`; promotion
+    happens inside the agent through a second report_finding with a higher confidence."""
+    from scanner.core.workflow import Confirmation
+
+    def annotate(fd: dict, md: dict) -> None:
+        c = Confirmation.model_validate({**md, "finding_id": fd["id"]})
+        store.annotate(fd["id"], repro_status=c.repro_status)
+    return _annotating_worker("confirm", confirm, store, {}, None, max_parallel, annotate)
