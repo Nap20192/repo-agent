@@ -96,3 +96,27 @@ def test_top10_coverage_maps_every_category_to_existing_specialists():
     assert config.max_calls == 12 and {"CWE-614", "CWE-532", "CWE-1357"} <= config.cwes
     secrets = next(x for x in sp.REGISTRY if x.name == "secrets")
     assert secrets.cwes == frozenset({"CWE-798", "CWE-312", "CWE-321"})
+
+
+def test_route_translates_lang_ext_names_to_overlays():
+    from scanner.app import specialists as sp
+    from scanner.core import Hypothesis
+    h = Hypothesis(kind="sink", cwe="CWE-89", claim="x", reads=["a.ts"])
+    _, ts = sp.route(h, "typescript")
+    _, js = sp.route(h, "javascript")
+    _, node = sp.route(h, "node")
+    assert ts == js == node and node and "Node" in node
+
+
+def test_knowledge_budget_is_per_invocation():
+    from google.adk.models.llm_request import LlmRequest
+
+    from scanner.app.callbacks import budget_callback
+
+    class Ctx:
+        def __init__(self, inv): self.invocation_id, self.branch, self.state = inv, None, {}
+
+    cb = budget_callback(2, per_invocation=True)
+    a, b = Ctx("inv-a"), Ctx("inv-b")
+    assert cb(a, LlmRequest()) is None and cb(a, LlmRequest()) is None and cb(a, LlmRequest()) is not None  # a exhausted
+    assert cb(b, LlmRequest()) is None  # b starts fresh

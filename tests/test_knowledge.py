@@ -133,3 +133,38 @@ def test_knowledge_agent_builds_and_exposes_tools(offline):
     assert names >= {"osv_query", "ghsa", "nvd_cve", "epss", "kev", "deps_dev"} and "web_search" not in names
     tool = make_consult_knowledge("gemini-flash-lite-latest")
     assert tool.name == "knowledge" and tool.agent is not None
+
+
+def test_fetch_rejects_oversized_responses(monkeypatch):
+    from scanner.adapter import knowledge as kn
+
+    class Big:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self, n=-1): return b"x" * n
+
+    monkeypatch.setattr(kn.urllib.request, "urlopen", lambda req, timeout=10: Big())
+    import pytest
+    with pytest.raises(ValueError):
+        kn.fetch("https://api.osv.dev/v1/vulns/x")
+
+
+def test_cache_put_is_thread_safe(tmp_path):
+    import threading
+
+    from scanner.adapter import knowledge as kn
+    c = kn._Cache(str(tmp_path / "k.db"))
+    errors = []
+
+    def w(i):
+        try:
+            for j in range(50):
+                c.put("s", f"k{i}-{j}", {"i": i})
+                c.get("s", f"k{i}-{j}", 10)
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    ts = [threading.Thread(target=w, args=(i,)) for i in range(8)]
+    for t in ts: t.start()
+    for t in ts: t.join()
+    assert not errors

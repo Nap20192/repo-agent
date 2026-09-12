@@ -17,10 +17,12 @@ from pathlib import Path
 
 from scanner import core
 from scanner.adapter import static
+from scanner.adapter.domain import consult as domain_consult
 from scanner.adapter.dominance import make_check_dominance
 from scanner.adapter.owasp import consult_owasp
 from scanner.adapter.skills import list_skills, load_skill
 from scanner.core import Finding
+from scanner.core.domain import DomainMap
 from scanner.core.ports import Index
 
 OUT_CAP = 20_000
@@ -231,7 +233,7 @@ def _quotes_in_target(target: Path, quotes: list[str]) -> bool:
     return False
 
 
-def _code_tools(target: Path) -> list[Callable]:
+def _code_tools(target: Path, run=None) -> list[Callable]:
     """read_file / grep / shell / consult_domain, all confined to the target directory."""
 
     def _inside(path: str) -> Path | None:
@@ -286,7 +288,15 @@ def _code_tools(target: Path) -> list[Callable]:
         """Ask the domain consultant whether access to an entity is a hole or a business rule: returns
         its declaration and the ownership/role checks found near it. Cite the returned ref
         ('domain:<entity>') in evidence — required by the gate for authz/IDOR findings."""
-        # ponytail: grep heuristic instead of a Domain Map; add an AST builder when Go targets need roles/routes.
+        dm = run.artifact("domain_map") if run is not None and hasattr(run, "artifact") else None
+        if dm:
+            try:
+                answer = domain_consult(DomainMap.model_validate(dm), entity)
+            except ValueError:
+                answer = {"status": "error"}
+            if answer.get("status") != "error":
+                return {**answer, "source": "domain_map"}
+        # ponytail: grep heuristic when the DomainModeler stage produced no map (or does not know the entity).
         name = entity.split(".")[-1]
         decl = shell(f"rg -n -e {_q(rf'(type|struct|class|def|func(tion)?)\s+{re.escape(name)}\b')} . || true")["output"]
         files = sorted({ln.split(":", 1)[0] for ln in decl.splitlines() if ":" in ln})
@@ -366,7 +376,7 @@ def verifier_tools(run, target: Path, reader: Callable[[str, int], str] | None =
             return r
         return run.report(f)
 
-    return [report_finding, *_code_tools(target), *_lsp_tools(target, index or _default_index(target)), *_common_tools(run), list_skills, load_skill]
+    return [report_finding, *_code_tools(target, run), *_lsp_tools(target, index or _default_index(target)), *_common_tools(run), list_skills, load_skill]
 
 
 def critic_tools(run, target: Path, in_target: Callable[[list[str]], bool] | None = None, index: Index | None = None) -> list[Callable]:
@@ -392,14 +402,14 @@ def critic_tools(run, target: Path, in_target: Callable[[list[str]], bool] | Non
         return upd.model_dump() if upd else _err("update failed")
 
     idx = index or _default_index(target)
-    return [disprove_finding, make_check_dominance(target, idx), *_code_tools(target), *_lsp_tools(target, idx),
+    return [disprove_finding, make_check_dominance(target, idx), *_code_tools(target, run), *_lsp_tools(target, idx),
             *_common_tools(run), list_skills, load_skill]
 
 
 def architect_tools(run, target: Path, index: Index | None = None) -> list[Callable]:
     """Read-only tools for the Architect: entry points, anchors, read_file, grep, consult_owasp. No shell."""
     target = Path(target).resolve()
-    read_file, grep, _shell, _domain = _code_tools(target)
+    read_file, grep, _shell, _domain = _code_tools(target, run)
 
     def list_entry_points() -> dict:
         """List the deterministic entry points (trust boundaries) found by the text detectors:

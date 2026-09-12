@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import sqlite3
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -33,12 +34,18 @@ _DEPS_SYSTEM = {"Go": "go", "npm": "npm", "PyPI": "pypi", "crates.io": "cargo", 
 _NOT_A_SYMBOL = {"js", "ts", "go", "py", "php", "rb", "rs", "java", "c", "h", "json", "yaml", "yml", "md", "txt", "html"}
 
 
+RESPONSE_CAP = 4 * 1024 * 1024  # advisory feeds are small; KEV is ~2 MB; anything bigger is not an answer
+
+
 def fetch(url: str, data: dict | None = None, headers: dict | None = None, timeout: int = 10):
     """The one network seam (tests monkeypatch it). JSON in, JSON out; raises on HTTP/URL errors."""
     body = json.dumps(data).encode() if data is not None else None
     req = urllib.request.Request(url, data=body, headers={**UA, **(headers or {}), **({"Content-Type": "application/json"} if body else {})})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.load(r)
+        raw = r.read(RESPONSE_CAP + 1)
+    if len(raw) > RESPONSE_CAP:
+        raise ValueError(f"response larger than {RESPONSE_CAP} bytes: {url}")
+    return json.loads(raw)
 
 
 # --- cache -------------------------------------------------------------------------------------------------
@@ -46,14 +53,17 @@ class _Cache:
     def __init__(self, path: str):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, check_same_thread=False)
+        self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("CREATE TABLE IF NOT EXISTS knowledge(source TEXT, key TEXT, json TEXT, fetched_at REAL, PRIMARY KEY(source, key))")
+        self._lock = threading.Lock()  # enrich() writes from 8 threads through this one connection
 
     def get(self, source: str, key: str, ttl: float):
-        r = self.db.execute("SELECT json, fetched_at FROM knowledge WHERE source=? AND key=?", (source, key)).fetchone()
+        with self._lock:
+            r = self.db.execute("SELECT json, fetched_at FROM knowledge WHERE source=? AND key=?", (source, key)).fetchone()
         return json.loads(r[0]) if r and time.time() - r[1] < ttl else None
 
     def put(self, source: str, key: str, obj) -> None:
-        with self.db:
+        with self._lock, self.db:
             self.db.execute("INSERT OR REPLACE INTO knowledge VALUES(?,?,?,?)", (source, key, json.dumps(obj), time.time()))
 
 
@@ -120,7 +130,7 @@ def _ghsa_dir_index(root: str) -> dict[str, str]:
 def _osv_normalize(v: dict) -> dict:
     vector = next((s.get("score", "") for s in v.get("severity", []) if str(s.get("type", "")).startswith("CVSS")), "")
     fixed = [ev["fixed"] for a in v.get("affected", []) for r in a.get("ranges", []) for ev in r.get("events", []) if ev.get("fixed")]
-    return {"id": v.get("id", ""), "aliases": list(v.get("aliases", [])), "summary": v.get("summary", ""),
+    return {"id": v.get("id", ""), "aliases": list(v.get("aliases", [])), "summary": (v.get("summary") or "")[:300],
             "details": (v.get("details") or "")[:2000], "fixed": fixed, "vector": vector,
             "cwes": list((v.get("database_specific") or {}).get("cwe_ids", []))}
 
@@ -208,7 +218,8 @@ def kev() -> set[str]:
 
 def deps_dev(system: str, pkg: str, ver: str) -> dict:
     """deps.dev cross-check for one package version: advisory ids and licenses."""
-    url = f"https://api.deps.dev/v3/systems/{system}/packages/{urllib.parse.quote(pkg, safe='')}/versions/{urllib.parse.quote(ver, safe='')}"
+    url = (f"https://api.deps.dev/v3/systems/{urllib.parse.quote(system, safe='')}/packages/{urllib.parse.quote(pkg, safe='')}"
+           f"/versions/{urllib.parse.quote(ver, safe='')}")
     def load():
         d = fetch(url)
         return {"advisories": [a.get("id") for a in d.get("advisoryKeys", [])], "licenses": d.get("licenses", [])}

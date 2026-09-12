@@ -31,8 +31,12 @@ from scanner.app.agents import (
     new_threat_modeler,
     new_verifier,
 )
+from scanner.app.domain import new_domain_modeler
+from scanner.app.knowledge_agent import make_consult_knowledge
 from scanner.app.observe import compaction_config, setup_tracing
 from scanner.app.pipeline_v2 import PipelineV2
+from scanner.app.specialists import ROUTER, architect_overlay
+from scanner.app.specialists import build as build_specialists
 from scanner.core import Candidate
 from scanner.core.ports import Index
 
@@ -100,9 +104,19 @@ def build_agent(run, target: Path, entries: list[Candidate], model, index: Index
     index = index or build_index(target)  # LSP per language (gopls/pyright/tsserver), grep fallback
     has_symbol = index.has_symbol
     tm = os.environ.get("THREAT_MODEL") != "0"
+    langs = static.detect_langs(target)
+    specialists = {} if os.environ.get("SPECIALISTS") == "0" else build_specialists(model, run, target, index)
+    for name in ("dependency", "dependency_critic"):  # the Knowledge consultant answers open questions as an AgentTool
+        if name in specialists:  # one instance each: the AgentTool's budget counter must not be shared
+            specialists[name].tools.append(make_consult_knowledge(model, _env_int("KNOWLEDGE_MAX_MODEL_CALLS", 10)))
     return PipelineV2(
-        architect=new_architect(model, architect_tools(run, target, index=index), _env_int("ARCHITECT_MAX_MODEL_CALLS", 40)) if tm else None,
+        architect=new_architect(model, architect_tools(run, target, index=index), _env_int("ARCHITECT_MAX_MODEL_CALLS", 40),
+                                overlay=architect_overlay(langs)) if tm else None,
+        domain_modeler=new_domain_modeler(model, architect_tools(run, target, index=index), _env_int("DOMAIN_MODELER_MAX_MODEL_CALLS", 12))
+        if tm and os.environ.get("DOMAIN_MODEL") != "0" else None,
         threat_modeler=new_threat_modeler(model, [consult_owasp], _env_int("THREAT_MODELER_MAX_MODEL_CALLS", 6)) if tm else None,
+        specialists=specialists,
+        router=ROUTER,
         verifier=new_verifier(model, verifier_tools(run, target, index=index), _env_int("VERIFIER_MAX_MODEL_CALLS", 30)),
         critic=None if os.environ.get("CRITIC") == "0" else
         new_critic(model, critic_tools(run, target, index=index), _env_int("CRITIC_MAX_MODEL_CALLS", 20)),

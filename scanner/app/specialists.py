@@ -108,6 +108,7 @@ def lang_of(files: list[str]) -> str:
 
 
 def route(item: Hypothesis | Finding, lang: str = "", role: str = "investigate", kind: str = "") -> tuple[Specialist, str]:
+    lang = _OVERLAY_OF.get(lang, lang)  # the graph passes static.LANG_EXT names (javascript/typescript → node)
     """Most specific first: CWE → kind → generic fallback. Returns (specialist, language overlay suffix)."""
     kind = kind or getattr(item, "kind", "")
     cwe = (item.cwe or "").upper()
