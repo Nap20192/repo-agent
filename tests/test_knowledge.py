@@ -168,3 +168,13 @@ def test_cache_put_is_thread_safe(tmp_path):
     for t in ts: t.start()
     for t in ts: t.join()
     assert not errors
+
+
+def test_explicit_enabled_config_cannot_reach_the_network_under_pytest():
+    """The conftest guard closes the fetch seam even when a caller bypasses KNOWLEDGE_ENRICH with its own config."""
+    from scanner.adapter import knowledge as kn
+    from scanner.core import Anchor
+    cfg = kn.KnowledgeConfig(cache_path=":memory:", ghsa_dir="", github_token="", nvd_api_key="", enabled=True)
+    a = Anchor(id="a", tool="osv", rule_id="GHSA-zzzz-zzzz-zzzz", severity="high", file="go.mod", line=1, rule_ids=["GHSA-zzzz-zzzz-zzzz"])
+    out = kn.enrich([a], cfg)  # loaders swallow failures → anchor unchanged, no network
+    assert out[0].message == a.message
