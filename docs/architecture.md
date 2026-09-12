@@ -64,8 +64,8 @@ validate» [King] — порты принимают уже проверенны�
   | Узел | Тип | LLM | Что делает |
   |---|---|---|---|
   | `build_skeleton` | `FunctionNode` | 0 | якоря пре-пасса (уже в State) + entry points → `ScanSkeleton` |
-  | `plan` | `@node(rerun_on_resume=True)` | 0–3 стадии | direct findings (без модели) → Architect → DomainModeler → ThreatModeler → grounding → очередь (`QueueState`) |
-  | `investigate` | `@node(rerun_on_resume=True)` | ≤ rounds·hyps | раунды: гейт гипотез → `route_and_verify` (parallel worker) → досье из фактов стора → reconcile новых гипотез |
+  | `plan` | `@node(rerun_on_resume=True)` | 0–3 стадии | direct findings (без модели) → Architect → DomainModeler → ThreatModeler → grounding → планировщик (`reconcile.build_queue`: threats + якоря + baseline'ы точек входа и файлов с классами `hunt_classes`, adversarial-доля) → очередь (`QueueState`) |
+  | `investigate` | `@node(rerun_on_resume=True)` | ≤ rounds·hyps | раунды: гейт гипотез → `triage` (parallel worker, только baseline'ы; непомеченные → rejected-досье) → `route_and_verify` (parallel worker) → досье из фактов стора → reconcile новых гипотез |
   | `finish` | `@node(rerun_on_resume=True)` | ≤ confirmed | `route_and_critique` над llm-подтверждёнными (direct — факты), артефакт `timings`, `stop_reason` |
 
 - Узлы живут в `scanner/app/graph_nodes.py`, строятся фабриками на прогон (замыкание на `RunStore` и агентов).

@@ -47,6 +47,18 @@ semgrep уровня ERROR — не идут в очередь и к Critic: `sp
 из knowledge-кэша и подсчётом «пакет импортируется в N файлах» (`knowledge.imported_by`); секреты
 редактируются. Модель занимается только кодом.
 
+**Planner и Triage (Shannon-стиль поиска, карта 44).** Планировщик детерминирован (`reconcile.coverage`):
+каждая непокрытая точка входа получает baseline-гипотезу с классами для охоты по словам маршрута, файла и
+обработчика (`hunt_classes`: login → CWE-287/307/522, profile → 79/639, `:id` → 639/862, admin → 862/285,
+search → 89/943, file → 22, redirect → 601, eval/template → 95/1336, regex → 1333), поэтому роутер отдаёт её
+нужному специалисту с нужным скиллом; 25 % baseline'ов (детерминированно) несут adversarial-формулировку;
+каждый production-файл, который никто не читает (`fs.source_files`, без тестов/фикстур), получает
+file-baseline (приоритет 8, не больше 60). У каждого baseline свой якорь `entrypoint`, а гейт разрешает с
+такого якоря подтвердить sink в другом месте (чеканится якорь `investigator`). Перед аудитом специалистом
+батч baseline'ов проходит дешёвый **Triage** (`read_file`/`grep`/`lsp_symbols`, 4 вызова): непомеченные
+становятся rejected-досье с причиной (покрытие доказуемо), помеченные несут класс и причину триажа в аудит;
+сбой триажа помечает элемент (fail open). `TRIAGE=0` выключает.
+
 ## Сессии и трассировка
 
 Каждый прогон сохраняет ADK-сессию в SQLite `SESSIONS_PATH` (app `fullscan`, user `user`,
@@ -132,6 +144,8 @@ uv run pytest -q
 | `THREAT_MODEL` | включить Architect/ThreatModeler | on |
 | `DOMAIN_MODEL` | включить DomainModeler и `consult_domain` | on |
 | `CRITIC` | включить адверсариальный проход Critic | on |
+| `TRIAGE` | дешёвый triage-проход по baseline'ам перед аудитом | on |
+| `TRIAGE_MAX_CALLS` | бюджет вызовов Triage на элемент | 4 |
 | `VERIFIER_MAX_MODEL_CALLS` | бюджет вызовов Investigator'а | 30 |
 | `CRITIC_MAX_MODEL_CALLS` | бюджет вызовов Critic'а | 20 |
 | `ARCHITECT_MAX_MODEL_CALLS` | бюджет вызовов Architect | 40 |
