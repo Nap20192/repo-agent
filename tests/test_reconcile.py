@@ -201,3 +201,13 @@ def test_direct_finding_redacts_secrets():
 def test_direct_finding_semgrep_error_level():
     f = direct_finding(SEM_HI)
     assert (f.title, f.cwe, f.evidence, f.severity) == ("eval on user input", "CWE-95", ["a.js:3: eval(x)"], "high")
+
+
+def test_split_direct_caps_each_tool_by_severity():
+    from scanner.app.reconcile import split_direct
+    ls = [Anchor(id=f"g{i}", tool="gitleaks", rule_id="k", cwe="CWE-798", severity="high", file="a", line=i)
+          for i in range(5)]
+    sg = [Anchor(id=f"s{i}", tool="semgrep", rule_id="r", cwe="CWE-89", severity="critical" if i == 4 else "high",
+                 file="b", line=i) for i in range(5)]
+    direct, rest = split_direct([*ls, *sg, Anchor(id="m", tool="semgrep", rule_id="r", cwe="CWE-79", severity="medium", file="c", line=1)], max_per_tool=2)
+    assert [a.id for a in direct] == ["g0", "g1", "s0", "s4"] and [a.id for a in rest] == ["m"]  # input order kept

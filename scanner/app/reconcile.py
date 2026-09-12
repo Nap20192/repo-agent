@@ -47,9 +47,21 @@ def is_direct(a: Anchor) -> bool:
     return a.tool in DIRECT_TOOLS or (a.tool == "semgrep" and a.severity in ("critical", "high"))
 
 
-def split_direct(anchors: list[Anchor]) -> tuple[list[Anchor], list[Anchor]]:
-    """(direct, investigate): only the second list may become hypotheses."""
-    return [a for a in anchors if is_direct(a)], [a for a in anchors if not is_direct(a)]
+DIRECT_MAX = 200  # per tool; osv is already capped by static.OSV_MAX — a target with thousands of hits must not stall the start
+
+
+def split_direct(anchors: list[Anchor], max_per_tool: int = DIRECT_MAX) -> tuple[list[Anchor], list[Anchor]]:
+    """(direct, investigate): only the second list may become hypotheses. Direct anchors are capped per tool,
+    highest severity first (security review M2: every direct anchor costs a synchronous store.report)."""
+    direct = [a for a in anchors if is_direct(a)]
+    kept: list[Anchor] = []
+    for tool in sorted({a.tool for a in direct}):
+        mine = sorted((a for a in direct if a.tool == tool), key=lambda a: -core.SEVERITY_RANK.get(a.severity, 0))
+        if len(mine) > max_per_tool:
+            log.warning("direct: %d %s anchors, keeping the %d most severe (DIRECT_MAX)", len(mine), tool, max_per_tool)
+        kept.extend(mine[:max_per_tool])
+    kept_ids = {a.id for a in kept}
+    return [a for a in direct if a.id in kept_ids], [a for a in anchors if not is_direct(a)]
 
 
 def _cvss_severity(e: dict, default: str) -> str:
