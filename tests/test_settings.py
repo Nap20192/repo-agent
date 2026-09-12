@@ -47,3 +47,14 @@ def test_triage_knobs():
     assert Settings.from_env({}).triage is True and Settings.from_env({}).triage_max_calls == 4
     s = Settings.from_env({"TRIAGE": "0", "TRIAGE_MAX_CALLS": "7"})
     assert s.triage is False and s.triage_max_calls == 7
+
+
+def test_card45_knobs():
+    s = Settings.from_env({})
+    assert (s.triage_batch, s.triage_parallel, s.review_max_calls, s.viability_max_calls, s.confirm_max_calls) == (10, 4, 8, 6, 8)
+    assert s.calibrate_llm is False and s.recon is True and s.llm_model_small == ""
+    e = {"TRIAGE_BATCH": "15", "TRIAGE_PARALLEL": "2", "REVIEW_MAX_CALLS": "3", "VIABILITY_MAX_CALLS": "2",
+         "CONFIRM_MAX_CALLS": "5", "CALIBRATE_LLM": "1", "RECON": "0", "LLM_MODEL_SMALL": "qwen3:1.7b"}
+    s = Settings.from_env(e)
+    assert (s.triage_batch, s.triage_parallel, s.review_max_calls, s.viability_max_calls, s.confirm_max_calls) == (15, 2, 3, 2, 5)
+    assert s.calibrate_llm is True and s.recon is False and s.llm_model_small == "qwen3:1.7b"

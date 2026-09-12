@@ -55,6 +55,15 @@ class Settings:
     threat_modeler_max_calls: int = 6
     knowledge_max_calls: int = 10
     triage_max_calls: int = 4
+    # card 45: Shannon-graph nodes
+    triage_batch: int = 10  # files per triage classification call
+    triage_parallel: int = 4  # concurrent triage workers
+    review_max_calls: int = 8
+    viability_max_calls: int = 6
+    confirm_max_calls: int = 8
+    calibrate_llm: bool = False  # optional LLM calibration checklist (default: deterministic core.calibrate)
+    recon: bool = True  # deterministic sinks/auth inventory before the modelling stages
+    llm_model_small: str = ""  # cheaper model for triage/calibrate-LLM; "" → the main model
     # state
     state_path: str = ".state/state.db"
     sessions_path: str = ".state/sessions.db"
@@ -100,6 +109,14 @@ class Settings:
             threat_modeler_max_calls=_int(e, "THREAT_MODELER_MAX_MODEL_CALLS", 6),
             knowledge_max_calls=_int(e, "KNOWLEDGE_MAX_MODEL_CALLS", 10),
             triage_max_calls=_int(e, "TRIAGE_MAX_CALLS", 4),
+            triage_batch=_int(e, "TRIAGE_BATCH", 10),
+            triage_parallel=_int(e, "TRIAGE_PARALLEL", 4),
+            review_max_calls=_int(e, "REVIEW_MAX_CALLS", 8),
+            viability_max_calls=_int(e, "VIABILITY_MAX_CALLS", 6),
+            confirm_max_calls=_int(e, "CONFIRM_MAX_CALLS", 8),
+            calibrate_llm=e.get("CALIBRATE_LLM") == "1",
+            recon=_on(e, "RECON"),
+            llm_model_small=e.get("LLM_MODEL_SMALL", ""),
             state_path=e.get("STATE_PATH") or ".state/state.db",
             sessions_path=e.get("SESSIONS_PATH") or ".state/sessions.db",
             skip_deps=e.get("SKIP_DEPS") == "1",
