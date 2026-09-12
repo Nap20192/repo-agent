@@ -90,10 +90,9 @@ def build_agent(run, target: Path, entries: list[Candidate], model, index: Index
     index = index or build_index(target, max_files=s.index_max_files, max_bytes=s.index_max_bytes)  # LSP per language, grep fallback
     has_symbol = index.has_symbol
     langs = fs.detect_langs(target)
-    specialists = build_specialists(model, run, target, index) if s.specialists else {}
-    for name in ("dependency", "dependency_critic"):  # the Knowledge consultant answers open questions as an AgentTool
-        if name in specialists:  # one instance each: the AgentTool's budget counter must not be shared
-            specialists[name].tools.append(make_consult_knowledge(model, s.knowledge_max_calls))
+    specialists = build_specialists(  # the Knowledge consultant is injected at construction (one AgentTool per user)
+        model, run, target, index, knowledge_factory=lambda: make_consult_knowledge(model, s.knowledge_max_calls),
+    ) if s.specialists else {}
     return PipelineV2(
         architect=new_architect(model, architect_tools(run, target, index=index), s.architect_max_calls,
                                 overlay=architect_overlay(langs)) if s.threat_model else None,
