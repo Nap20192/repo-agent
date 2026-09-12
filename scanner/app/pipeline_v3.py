@@ -1,8 +1,8 @@
-"""v3 graph on the ADK 2.9 Workflow API (card 43, docs/adr/0007): START → build_skeleton → plan → investigate → finish.
+"""The scan graph on the ADK 2.9 Workflow API (docs/adr/0007): START → build_skeleton → plan → investigate → finish.
 
-Same stages, gates and contract as PipelineV2 (Architect → DomainModeler → ThreatModeler → grounding → direct
-findings → queue → Investigator rounds → Critic → report); the bodies are dynamic nodes with their own
-try/except because ADK fails the whole Workflow on any node error and a scan must degrade, not abort."""
+Stages: Architect → DomainModeler → ThreatModeler → grounding → direct findings → queue → Investigator rounds →
+Critic → report. The bodies are dynamic nodes with their own try/except because ADK fails the whole Workflow on
+any node error and a scan must degrade, not abort."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ STAGES = ("architecture_model", "domain_map", "threat_model")
 
 
 class ScanWorkflow(Workflow):
-    """The Workflow plus the code Index it was wired with (closed by the runner, as PipelineV2.index)."""
+    """The Workflow plus the code Index it was wired with (closed by the runner)."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
     index: Closeable | None = None
@@ -52,8 +52,7 @@ def build_workflow(
     max_rounds: int = 4, max_hyps: int = 8, max_parallel: int = 3, stage_timeout: float = 600.0,
     index: Closeable | None = None,
 ) -> ScanWorkflow:
-    """Wire the four-node graph for one run; same knobs as PipelineV2 (json_retry is gone: the model's JSON only
-    adds notes, verdicts come from the store)."""
+    """Wire the four-node graph for one run. The model's JSON only adds notes; verdicts come from the store."""
     specialists = specialists or {}
     threats = list(threats or [])
     timings: dict[str, float] = {}  # per run; `finish` persists it as the `timings` artifact

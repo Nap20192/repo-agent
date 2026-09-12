@@ -34,7 +34,6 @@ from scanner.app.agents import (
 from scanner.app.domain import new_domain_modeler
 from scanner.app.knowledge_agent import make_consult_knowledge
 from scanner.app.observe import compaction_config, setup_tracing
-from scanner.app.pipeline_v2 import PipelineV2
 from scanner.app.pipeline_v3 import build_workflow
 from scanner.app.settings import Settings, apply_dotenv
 from scanner.app.specialists import architect_overlay, route_name
@@ -84,9 +83,10 @@ async def run_session(agent, target: str, run_id: int, settings: Settings | None
     return dict(s.state) if s else {}
 
 
-def build_agent(run, target: Path, entries: list[Candidate], model, index: Index | None = None,
-                settings: Settings | None = None):
-    """Wire the staged graph for one run: Architect → ThreatModeler → Reconciler → Investigator ⇄ queue → Critic."""
+def wiring(run, target: Path, entries: list[Candidate], model, index: Index | None = None,
+           settings: Settings | None = None) -> dict:
+    """Everything the graph needs for one run, by keyword: agents (Architect → DomainModeler → ThreatModeler,
+    Investigator + specialists, Critic), the store, the index-backed callables and the budgets."""
     s = settings or Settings.from_env()
     index = index or build_index(target, max_files=s.index_max_files, max_bytes=s.index_max_bytes)  # LSP per language, grep fallback
     has_symbol = index.has_symbol
@@ -94,7 +94,8 @@ def build_agent(run, target: Path, entries: list[Candidate], model, index: Index
     specialists = build_specialists(  # the Knowledge consultant is injected at construction (one AgentTool per user)
         model, run, target, index, knowledge_factory=lambda: make_consult_knowledge(model, s.knowledge_max_calls),
     ) if s.specialists else {}
-    kw = {
+    return {
+        "index": index,
         "architect": new_architect(model, architect_tools(run, target, index=index), s.architect_max_calls,
                                 overlay=architect_overlay(langs)) if s.threat_model else None,
         "domain_modeler": new_domain_modeler(model, architect_tools(run, target, index=index), s.domain_modeler_max_calls)
@@ -115,9 +116,12 @@ def build_agent(run, target: Path, entries: list[Candidate], model, index: Index
         "max_parallel": s.max_parallel,
         "stage_timeout": s.stage_timeout,
     }
-    if s.pipeline == "v3":  # the ADK Workflow graph (card 43); same wiring, the JSON-nudge retry has no v3 equivalent
-        return build_workflow(index=index, **kw)
-    return PipelineV2(json_retry=s.json_retry, **kw)
+
+
+def build_agent(run, target: Path, entries: list[Candidate], model, index: Index | None = None,
+                settings: Settings | None = None):
+    """The ADK Workflow for one run: build_skeleton → plan → investigate → finish (docs/adr/0007)."""
+    return build_workflow(**wiring(run, target, entries, model, index, settings))
 
 
 def prepare(target: Path, deps: bool = False, settings: Settings | None = None):

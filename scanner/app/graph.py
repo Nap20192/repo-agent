@@ -1,32 +1,21 @@
-"""Shared graph machinery: JSON parsing, verdict-from-store, fan-out activations, the hypothesis gate,
-a verify round and the Critic pass (`_Graph` base of PipelineV2)."""
+"""Shared graph helpers: JSON parsing, the specialist pick, the hypothesis gate and the verdict-from-store
+rule. The graph itself is the ADK Workflow in pipeline_v3 (nodes in graph_nodes)."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
-import time
-from collections.abc import AsyncGenerator, Callable
-from dataclasses import dataclass
+from collections.abc import Callable
 
-from google.adk.agents import BaseAgent, LlmAgent, ParallelAgent
-from google.adk.agents.invocation_context import InvocationContext
-from google.adk.events import Event, EventActions
-from google.genai import types
-from pydantic import ConfigDict, Field
+from google.adk.events import Event
 
 from scanner import core
 from scanner.adapter import fs
-from scanner.adapter.skills import skill_for, skills_for
 from scanner.core import Dossier, Finding, Hypothesis
 from scanner.core.ports import Router, RunStore
 
 log = logging.getLogger("scanner.graph")
-
-
-
 
 
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
@@ -44,48 +33,6 @@ def parse_json(text: str) -> dict | None:
     except json.JSONDecodeError:
         return None
     return v if isinstance(v, dict) else None
-
-JSON_NUDGE = "Your previous reply was not valid JSON. Reply with the JSON object only."
-STATE_JSON_RETRIES = "json_retries"
-
-
-@dataclass(frozen=True)
-class _ActivationSpec:
-    """The (name, label, payload) triple `_retry_json` needs to replay an activation with the JSON nudge."""
-
-    name: str
-    label: str
-    payload: dict
-
-
-def activation(agent: BaseAgent, name: str, label: str, payload: dict, suffix: str = "") -> BaseAgent:
-    """Fresh copy of `agent` for one run: payload goes into the instruction when the agent has one.
-    `suffix` is an extra instruction line (e.g. the JSON nudge) placed before the payload."""
-    if not isinstance(getattr(agent, "instruction", None), str):
-        return agent.clone(update={"name": name})  # workflow agents / provider instructions: nothing to append to
-    extra = f"\n\n{suffix}" if suffix else ""
-    text = f"{agent.instruction}{extra}\n\n{label} (JSON):\n{json.dumps(payload, ensure_ascii=False)}"
-    # LlmAgent: an InstructionProvider bypasses {state} templating, so JSON braces are safe.
-    # Test doubles are plain BaseAgents with a str `instruction` and get the text as-is (ADR-0005).
-    instr = (lambda _ctx: text) if isinstance(agent, LlmAgent) else text
-    return agent.clone(update={"name": name, "instruction": instr})
-
-async def with_deadline(agen: AsyncGenerator[Event, None], seconds: float) -> AsyncGenerator[Event, None]:
-    """Re-yield `agen` but give up (asyncio.TimeoutError) once `seconds` have elapsed overall."""
-    deadline = time.monotonic() + seconds
-    try:
-        while True:
-            left = deadline - time.monotonic()
-            if left <= 0:
-                raise TimeoutError(f"stage exceeded {seconds:.0f}s")
-            try:
-                ev = await asyncio.wait_for(agen.__anext__(), left)
-            except StopAsyncIteration:
-                return
-            yield ev
-    finally:
-        await agen.aclose()
-
 
 def text_of(ev: Event) -> str:
     if not ev.content or not ev.content.parts or ev.get_function_calls():
@@ -112,8 +59,8 @@ def pick_agent(item, role: str, specialists: dict, router: Router | None, fallba
 
 def gate_hypotheses(hs: list[Hypothesis], rnd: int, store: RunStore, has_anchor: Callable[[str], bool],
                     has_symbol: Callable[[str], bool], max_hyps: int) -> list[Hypothesis]:
-    """Belt over the dispatch tool: drop ungrounded, cap at max_hyps, assign ids h<round>-<n>. Shared by
-    PipelineV2 and the Workflow `investigate` node (card 43)."""
+    """Belt over the dispatch tool: drop ungrounded, cap at max_hyps, assign ids h<round>-<n>. Used by the Workflow
+    `investigate` node."""
     out = []
     for n, h in enumerate(hs, 1):
         h.id = h.id or f"h{rnd}-{n}"
@@ -140,186 +87,3 @@ def dossier_from_store(findings: list[Finding], h: Hypothesis) -> Dossier:
     if best:
         d.verdict, d.finding_id, d.evidence = best.status, best.id, list(best.evidence)
     return d
-
-class Graph(BaseAgent):
-    """Shared machinery of both graphs: fan-out activations, hypothesis gate, verify round, critic pass."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    verifier: BaseAgent
-    critic: BaseAgent | None = None  # adversarial pass over confirmed findings
-    # specialists by name + a pure router (item, lang, role) -> (name, instruction suffix); no router = one generic agent
-    specialists: dict[str, BaseAgent] = Field(default_factory=dict, exclude=True)  # exclude: the dev-UI builder dumps fields as JSON
-    router: Router | None = None
-    json_retry: bool = True  # one JSON-nudge retry when an activation ends without JSON
-    store: RunStore
-    target: str = ""
-    has_anchor: Callable[[str], bool]
-    has_symbol: Callable[[str], bool]
-    max_rounds: int = 4
-    max_hyps: int = 8
-    max_parallel: int = 3
-
-    def __init__(self, name: str, **kw):
-        super().__init__(name=name, sub_agents=[], **kw)
-
-    def _state_event(self, ctx: InvocationContext, delta: dict) -> Event:
-        return Event(
-            author=self.name, invocation_id=ctx.invocation_id, branch=ctx.branch,
-            actions=EventActions(state_delta=delta),
-        )
-
-    async def _run_activations(
-        self, ctx: InvocationContext, name: str, agents: list[BaseAgent], out: dict[str, str]
-    ) -> AsyncGenerator[Event, None]:
-        """Run `agents` in parallel on isolated sub-branches; final text per agent name → out."""
-        # ParallelAgent stays by decision — see docs/adr/0001-parallel-fanout.md (Workflow cannot run inside a BaseAgent).
-        par = ParallelAgent(name=name, sub_agents=agents)
-        async for ev in par.run_async(ctx):
-            if ev.author in {a.name for a in agents} and (t := text_of(ev)):
-                out[ev.author] = t
-            yield ev
-
-    async def _retry_json(
-        self, ctx: InvocationContext, agent: BaseAgent, act: _ActivationSpec, texts: dict[str, str], suffix: str = "",
-    ) -> AsyncGenerator[Event, None]:
-        """One more activation with the JSON nudge when `texts[act.name]` has no valid JSON; result lands in
-        texts[act.name]. Counted in session state `json_retries`; `json_retry=False` disables."""
-        if not self.json_retry or parse_json(texts.get(act.name, "")) is not None:
-            return
-        retry = activation(agent, f"{act.name}_retry", act.label, act.payload,
-                             suffix=f"{suffix}\n\n{JSON_NUDGE}" if suffix else JSON_NUDGE)
-        async for ev in self._run_activations(ctx, f"{act.name}_retry_run", [retry], texts):
-            yield ev
-        if (t := texts.pop(retry.name, "")):
-            texts[act.name] = t
-        n = int(ctx.session.state.get(STATE_JSON_RETRIES) or 0) + 1
-        log.info("json retry #%d for %s", n, act.name)
-        yield self._state_event(ctx, {STATE_JSON_RETRIES: n})
-
-    def _pick(self, item, role: str) -> tuple[BaseAgent | None, str, str]:
-        """(agent, specialist name or "", instruction suffix): the router's choice, else the generic fallback."""
-        fallback = self.verifier if role == "investigate" else self.critic
-        return pick_agent(item, role, self.specialists, self.router, fallback)
-
-    def _budget_hit(self, ctx: InvocationContext) -> bool:
-        return bool(ctx.session.state.get(core.STATE_BUDGET_EXHAUSTED))
-
-    def _gate(self, hs: list[Hypothesis], rnd: int) -> list[Hypothesis]:
-        return gate_hypotheses(hs, rnd, self.store, self.has_anchor, self.has_symbol, self.max_hyps)
-
-    @staticmethod
-    def _verify_payloads(accepted: list[Hypothesis], routed: list[tuple[BaseAgent, str, str]]) -> list[dict]:
-        """Hypothesis + its skill hints + the routed specialist name, one dict per accepted hypothesis."""
-        return [{**h.model_dump(), "skill": skill_for(h.cwe, h.kind), "skills": skills_for(h.cwe, h.kind), "specialist": name}
-                for h, (_, name, _) in zip(accepted, routed, strict=True)]
-
-    @staticmethod
-    def _verify_activations(
-        rnd: int, accepted: list[Hypothesis], routed: list[tuple[BaseAgent, str, str]], payloads: list[dict]
-    ) -> list[tuple[Hypothesis, BaseAgent]]:
-        """One activation per hypothesis, named verify_r<round>_<n>, with the routed agent's overlay suffix."""
-        return [(h, activation(agent, f"verify_r{rnd}_{i}", "Hypothesis", payloads[i], suffix=suffix))
-                for i, (h, (agent, _, suffix)) in enumerate(zip(accepted, routed, strict=True))]
-
-    def _assemble_dossiers(
-        self, ctx: InvocationContext, acts: list[tuple[Hypothesis, BaseAgent]], routed: list[tuple[BaseAgent, str, str]],
-        texts: dict[str, str], failed: str, budget: bool,
-    ) -> list[Dossier]:
-        """Verdict from STORE facts for each hypothesis; the model's JSON (if any) only adds notes/new_hypotheses."""
-        findings = self.store.findings()
-        dossiers = []
-        exhausted = {k.rsplit(".", 1)[-1] for k, v in ctx.session.state.items() if v and k.startswith(f"{core.STATE_BUDGET_EXHAUSTED}:")}
-        for i, (h, a) in enumerate(acts):
-            d = dossier_from_store(findings, h)
-            if "specialist" in Dossier.model_fields:
-                d = d.model_copy(update={"specialist": routed[i][1]})
-            own_budget = a.name in exhausted  # this verifier ran out of calls; the run goes on
-            md = parse_json(texts.get(a.name, ""))
-            if md is not None:
-                try:
-                    m = Dossier.model_validate(md)
-                    d.notes, d.new_hypotheses = m.notes, m.new_hypotheses
-                except ValueError as e:
-                    d.error = f"invalid Dossier JSON: {e}"
-            elif not d.finding_id:  # nothing in the store and no JSON: the verifier never got there
-                d.error = failed or ("budget" if budget or own_budget else "no Dossier JSON and nothing reported")
-            if d.error:
-                log.warning("verify %s: %s", h.id, d.error)
-            dossiers.append(d)
-        return dossiers
-
-    async def _verify(
-        self, ctx: InvocationContext, rnd: int, accepted: list[Hypothesis], out: dict
-    ) -> AsyncGenerator[Event, None]:
-        """One Verifier per hypothesis, ≤ max_parallel at a time. Verdict from STORE facts; the model's
-        JSON only adds notes/new_hypotheses. out = {"dossiers", "failed", "budget"}."""
-        texts: dict[str, str] = {}
-        failed = ""
-        routed = [self._pick(h, "investigate") for h in accepted]  # (agent, specialist name, suffix) per hypothesis
-        payloads = self._verify_payloads(accepted, routed)
-        acts = self._verify_activations(rnd, accepted, routed, payloads)
-        step = self.max_parallel if self.max_parallel > 0 else len(acts)
-        for ci in range(0, len(acts), step):
-            chunk = [a for _, a in acts[ci : ci + step]]
-            try:
-                async for ev in self._run_activations(ctx, f"verify_round_{rnd}_{ci}", chunk, texts):
-                    yield ev
-            except Exception as e:  # noqa: BLE001 — a failed chunk ends the round; round 0 is fatal in the caller
-                failed = str(e)
-                break
-        if not failed:  # a verifier that answered in prose gets one nudge to hand over its Dossier JSON
-            for i, (_, a) in enumerate(acts):
-                if parse_json(texts.get(a.name, "")) is None and not self._budget_hit(ctx):
-                    agent, _, suffix = routed[i]  # the retry goes to the same specialist with the same overlay
-                    act = _ActivationSpec(a.name, "Hypothesis", payloads[i])
-                    async for ev in self._retry_json(ctx, agent, act, texts, suffix=suffix):
-                        yield ev
-        budget = self._budget_hit(ctx)
-        dossiers = self._assemble_dossiers(ctx, acts, routed, texts, failed, budget)
-        out.update(dossiers=dossiers, failed=failed, budget=budget)
-
-    async def _critic_pass(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
-        confirmed = [f for f in self.store.findings() if f.status == core.CONFIRMED and f.source != "direct"]
-        if not confirmed:
-            return
-        acts = []
-        for i, f in enumerate(confirmed):
-            a = self.store.anchor(f.anchor_id)
-            agent, name, suffix = self._pick(f, "critique")
-            payload = {"finding": f.model_dump(), "anchor": a.model_dump() if a else None, "specialist": name,
-                       "skills": skills_for(f.cwe, "", "critique")}
-            acts.append(activation(agent, f"critic_{i}", "Finding", payload, suffix=suffix))
-            if name:
-                self.store.add_note(f"critic:{name} reviewed {f.id}", f.id)
-        step = self.max_parallel if self.max_parallel > 0 else len(acts)
-        texts: dict[str, str] = {}
-        for ci in range(0, len(acts), step):
-            try:
-                async for ev in self._run_activations(ctx, f"critic_{ci}", acts[ci : ci + step], texts):
-                    yield ev
-            except Exception as e:  # noqa: BLE001 — critic failure never loses confirmed findings
-                log.warning("critic chunk %d failed: %s", ci, e)
-                self.store.add_note(f"critic chunk {ci} failed: {e}")
-        still = sum(1 for f in self.store.findings() if f.status == core.CONFIRMED and f.source != "direct")
-        log.info("critic: %d confirmed → %d survived", len(confirmed), still)
-
-    async def _finish(self, ctx: InvocationContext, stop: str, rnd: int, timings: dict | None = None) -> AsyncGenerator[Event, None]:
-        """Terminal: critic pass (if any), then the report event carrying stop_reason."""
-        if self.critic is not None:
-            t0 = time.monotonic()
-            async for ev in self._critic_pass(ctx):
-                yield ev
-            if timings is not None:
-                timings["critic"] = round(time.monotonic() - t0, 3)
-        if stop:
-            log.warning("%s: finish (%s)", self.name, stop)
-        yield Event(
-            author=self.name, invocation_id=ctx.invocation_id, branch=ctx.branch,
-            content=types.Content(role="model", parts=[types.Part(text=f"rounds: {rnd}")]),
-            actions=EventActions(state_delta={core.STATE_STOP_REASON: stop}),
-        )
-
-
-# Deprecated private aliases — kept one release for callers that import the old names.
-_activation, _with_deadline, _text_of, _Graph = activation, with_deadline, text_of, Graph

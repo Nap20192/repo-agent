@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 
 from scanner.adapter.domain import consult, extract
+from scanner.app.pipeline_v3 import build_workflow
 from scanner.core.domain import DomainMap, Entity, Rule
-from tests.fakes import FakeRun, FakeStage, FakeVerifier, Node, _run, notes_of
+from tests.fakes import FakeRun, _run, fake_stage_node, fake_verifier_node, notes_of
 
 IDOR = Path(__file__).resolve().parent.parent / "samples" / "08-idor-go"
 
@@ -57,19 +58,15 @@ def test_consult_over_map():
 
 def test_domain_stage_between_architect_and_threat_modeler(tmp_path):
     (tmp_path / "m.go").write_text('package m\ntype Order struct {\n\tUserID string `db:"user_id"`\n}\n')
-    run, out = FakeRun(), []
-    arch = FakeStage(name="architect", store=run, reply={"entities": [{"name": "orders"}]})
-    dm = FakeStage(name="domain_modeler", store=run, reply={"entities": [{"name": "Order", "owner_field": "UserID"}],
-                                                            "rules": [{"id": "r1", "statement": "s", "entity": "Order", "symbol": "getMyOrder"}]})
-    tm = FakeStage(name="threat_modeler", store=run, reply={"intent": "production", "threats": []})
-
-    async def body(self, ctx):
-        async for ev in self._model_threats(ctx, run.anchors(), out):
-            yield ev
-
-    node = Node(body=body, store=run, target=str(tmp_path), has_anchor=lambda i: run.anchor(i) is not None, has_symbol=lambda s: False,
-                entry_points_fn=list, verifier=FakeVerifier(name="verify", store=run), architect=arch, domain_modeler=dm, threat_modeler=tm)
-    _run(node)
+    run = FakeRun()
+    arch = fake_stage_node(run, "architect", {"entities": [{"name": "orders"}]})
+    dm = fake_stage_node(run, "domain_map", {"entities": [{"name": "Order", "owner_field": "UserID"}],
+                                                "rules": [{"id": "r1", "statement": "s", "entity": "Order", "symbol": "getMyOrder"}]})
+    tm = fake_stage_node(run, "threat_model", {"intent": "production", "threats": []})  # notes keyed by artifact name
+    wf = build_workflow(store=run, target=str(tmp_path), verifier=fake_verifier_node(run), has_anchor=lambda i: run.anchor(i) is not None,
+                        has_symbol=lambda s: s == "getMyOrder", entry_points_fn=list,  # grounding keeps the rule
+                        architect=arch, domain_modeler=dm, threat_modeler=tm, max_rounds=1, max_parallel=1)
+    _run(wf)
     seen = {ref: json.loads(t[5:]) for t, ref in notes_of(run) if t.startswith("seen:")}
     assert seen["domain_map"]["architecture_model"]["entities"] == [{"name": "orders"}]
     assert seen["domain_map"]["skeleton"]["entities"][0]["owner_field"] == "UserID"

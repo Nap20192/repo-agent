@@ -1,9 +1,10 @@
 """Static contracts between instructions, tools, skills and the graph: what a prompt names must exist."""
 
 import inspect
-import json
 import re
 import typing
+
+from google.adk.workflow import FunctionNode
 
 from scanner import core
 from scanner.adapter.skills import SKILLS, skill_for
@@ -16,7 +17,7 @@ from scanner.app.agents import (
     new_verifier,
 )
 from scanner.core import ArchitectureModel, Dossier, Threat, ThreatModel
-from tests.fakes import FakeRun, FakeVerifier, _run, _scan
+from tests.fakes import FakeRun, _run, _workflow
 
 MODEL = "gemini-flash-lite-latest"  # constructing an LlmAgent never touches the network
 TOOL_RX = re.compile(r"\b(load_skill|list_skills|report_finding|disprove_finding|consult_\w+|lsp_\w+|read_file|grep|shell|"
@@ -75,15 +76,11 @@ def test_skill_for_covers_every_gated_cwe_class():
 def test_verifier_payload_carries_the_skill_hint():
     seen = []
 
-    class Spy(FakeVerifier):
-        async def _run_async_impl(self, ctx):
-            h = json.loads(self.instruction.split("(JSON):\n", 1)[1])
-            seen.append((h["cwe"], h.get("skill")))
-            async for ev in FakeVerifier._run_async_impl(self, ctx):
-                yield ev
+    async def spy(ctx, node_input: dict):
+        seen.append((node_input["cwe"], node_input.get("skill")))
 
     run = FakeRun()
-    _run(_scan(run, verifier=Spy(name="verify", store=run), max_parallel=1))
+    _run(_workflow(run, verifier=FunctionNode(func=spy, name="verify", rerun_on_resume=True), max_parallel=1))
     assert seen and all(skill == skill_for(cwe, "sink") and skill in SKILLS for cwe, skill in seen)
 
 

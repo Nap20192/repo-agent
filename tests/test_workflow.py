@@ -13,8 +13,8 @@ from google.adk.sessions.sqlite_session_service import SqliteSessionService
 from scanner import core, main
 from scanner.adapter.store import Run, Store
 from scanner.app import runner
-from scanner.app.pipeline_v2 import PipelineV2
-from tests.fakes import FakeStage, FakeVerifier
+from scanner.app.pipeline_v3 import build_workflow
+from tests.fakes import fake_stage_node, fake_verifier_node
 
 SAMPLE = Path(__file__).resolve().parent.parent / "samples" / "02-vulnshop"
 pytestmark = pytest.mark.skipif(shutil.which("gosec") is None, reason="gosec not installed")
@@ -22,18 +22,18 @@ pytestmark = pytest.mark.skipif(shutil.which("gosec") is None, reason="gosec not
 
 def _fake_v1(run, target, entries, model, index=None, settings=None):
     """Stages off: the queue is the real pre-pass anchors; the fake verifier confirms CWE-89 and rejects the rest."""
-    return PipelineV2(verifier=FakeVerifier(name="verify", store=run), store=run, target=str(target),
-                      has_anchor=lambda i: run.anchor(i) is not None, has_symbol=lambda s: False, entry_points_fn=list,
-                      max_parallel=1, max_hyps=8, max_rounds=1)
+    return build_workflow(verifier=fake_verifier_node(run), store=run, target=str(target),
+                          has_anchor=lambda i: run.anchor(i) is not None, has_symbol=lambda s: False, entry_points_fn=list,
+                          max_parallel=1, max_hyps=8, max_rounds=1)
 
 
 def _fake_v2(run, target, entries, model, index=None, settings=None):
-    arch = FakeStage(name="architect", store=run, reply={"entities": [{"name": "shop"}], "vuln_classes": [{"cwe": "CWE-89"}]})
-    tm = FakeStage(name="threat_modeler", store=run, reply={"intent": "production", "threats": [
+    arch = fake_stage_node(run, "architect", {"entities": [{"name": "shop"}], "vuln_classes": [{"cwe": "CWE-89"}]})
+    tm = fake_stage_node(run, "threat_modeler", {"intent": "production", "threats": [
         {"cwe": "CWE-639", "claim": "ghost", "symbol": "nowhere", "priority": 80}]})
-    return PipelineV2(architect=arch, threat_modeler=tm, verifier=FakeVerifier(name="verify", store=run), store=run, target=str(target),
-                      has_anchor=lambda i: run.anchor(i) is not None, has_symbol=lambda s: False, entry_points_fn=list,
-                      max_parallel=1, max_hyps=2, max_rounds=1)
+    return build_workflow(architect=arch, threat_modeler=tm, verifier=fake_verifier_node(run), store=run, target=str(target),
+                          has_anchor=lambda i: run.anchor(i) is not None, has_symbol=lambda s: False, entry_points_fn=list,
+                          max_parallel=1, max_hyps=2, max_rounds=1)
 
 
 @pytest.fixture
@@ -76,7 +76,7 @@ def test_cli_exit_code(env, monkeypatch):
     assert (env / ".runs").is_dir()
 
 
-def test_full_v2_persists_artifacts(env, monkeypatch):
+def test_full_run_persists_artifacts(env, monkeypatch):
     monkeypatch.setattr(runner, "build_agent", _fake_v2)
     s = runner.scan_full(SAMPLE, runs_dir=env / "runs")
     assert s["intent"] == "production" and s["confirmed"] == 1 and s["stop_reason"] == "round limit"

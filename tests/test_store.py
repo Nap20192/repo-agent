@@ -117,3 +117,23 @@ def test_llm_findings_dedup_within_near_lines(tmp_path):
     b = run.report(Finding(anchor_id="a2", cwe="CWE-95", file="c.js", line=34, title="eval again", status="confirmed", confidence=0.5))
     far = run.report(Finding(anchor_id="a3", cwe="CWE-95", file="c.js", line=90, title="other eval", status="confirmed", confidence=0.5))
     assert b.id == a.id and far.id != a.id and len(run.findings()) == 2
+
+
+def test_reporter_summary_and_sarif(tmp_path):
+    from scanner.adapter.store import Store
+    from tests.fakes import A1, A2
+    store = Store(str(tmp_path / "s.db"))
+    run = store.start_run("/t")
+    run.save_anchors([A1, A2])
+    run.put_artifact("threat_model", {"intent": "sample", "threats": []})
+    run.report(Finding(anchor_id="a_1", cwe="CWE-89", file="main.go", line=22, title="sqli", status=CONFIRMED, evidence=["q"]))
+    run.report(Finding(anchor_id="a_2", cwe="CWE-78", file="main.go", line=30, title="cmd", status=REJECTED))
+    summary = json.loads(run.write_summary(tmp_path).read_text())
+    assert summary["intent"] == "sample" and summary["confirmed"] == 1 and summary["rejected"] == 1
+    assert all("score" in f["calibration"] for f in summary["findings"])
+    sarif = json.loads(run.write_report(tmp_path).read_text())
+    results = sarif["runs"][0]["results"]
+    assert [r["ruleId"] for r in results] == ["CWE-89"] and "score" in results[0]["properties"]["calibration"]
+    run.set_status("f_1", "uncertain", ["critic: safe"])  # disprove → reflected in the summary
+    assert json.loads(run.write_summary(tmp_path).read_text())["uncertain"] == 1
+    store.close()

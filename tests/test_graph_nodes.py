@@ -95,3 +95,32 @@ def test_route_and_critique_runs_specialist_critics_and_notes_them():
     assert outs[-1] == [{"finding_id": "f_1", "specialist": "taint_critic", "error": ""}]
     assert run.findings()[0].status == core.UNCERTAIN
     assert ("critic:taint_critic reviewed f_1", "f_1") in notes_of(run)
+
+
+# --- shared helpers (scanner/app/graph.py) -------------------------------------------------------------------
+
+def test_parse_json_and_dossier_from_store():
+    from scanner.app.graph import dossier_from_store, parse_json
+    assert parse_json("junk {\"a\": {\"b\": 1}} tail") == {"a": {"b": 1}}
+    assert parse_json("nope") is None
+    h = Hypothesis(id="h0-1", anchor_id="a_1")
+    fs = [Finding(id="f1", anchor_id="a_1", status=core.REJECTED), Finding(id="f2", anchor_id="a_1", hypothesis_id="h0-1", status=core.CONFIRMED),
+          Finding(id="f3", anchor_id="a_1", hypothesis_id="other", status=core.CONFIRMED)]
+    assert dossier_from_store(fs, h).finding_id == "f2"
+    assert dossier_from_store([], h).verdict == core.UNCERTAIN
+
+
+def test_pick_agent_unknown_name_falls_back_and_no_router_is_generic():
+    from scanner.app.graph import pick_agent
+    h = Hypothesis(id="h0-1", anchor_id="a_1", cwe="CWE-89", reads=["main.go"])
+    assert pick_agent(h, "investigate", {}, lambda item, lang, role: ("nope", "x"), "generic") == ("generic", "", "")
+    assert pick_agent(h, "investigate", {"taint": "t"}, None, "generic") == ("generic", "", "")
+    assert pick_agent(h, "investigate", {"taint": "t"}, lambda item, lang, role: ("taint", f"OVERLAY:{lang}"), "generic") == ("t", "taint", "OVERLAY:go")
+
+
+def test_skill_lists_for_investigators_and_critics():
+    """Investigators get the WSTG/class/analysis skill list; critics get the control skill first."""
+    from scanner.adapter.skills import skills_for
+    inv = skills_for("CWE-89", "sink")
+    crit = skills_for("CWE-89", "", "critique")
+    assert inv and inv[0].startswith("wstg-") and crit and crit[0].startswith("control-")

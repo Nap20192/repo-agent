@@ -38,11 +38,9 @@ class Settings:
     llm_base_url: str = ""
     llm_model: str = ""
     # graph
-    pipeline: str = "v2"  # "v2" (BaseAgent graph) | "v3" (ADK Workflow graph, card 43)
     max_rounds: int = 4
     max_hyps: int = 8
     max_parallel: int = 3
-    json_retry: bool = True
     stage_timeout: float = 600.0
     specialists: bool = True
     threat_model: bool = True
@@ -84,11 +82,9 @@ class Settings:
             llm_api_key=e.get("LLM_API_KEY", ""),
             llm_base_url=e.get("LLM_BASE_URL", ""),
             llm_model=e.get("LLM_MODEL", ""),
-            pipeline=e.get("PIPELINE") or "v2",
             max_rounds=_int(e, "BUGFINDER_MAX_ROUNDS", 4),
             max_hyps=_int(e, "BUGFINDER_MAX_HYPS", 8),
             max_parallel=_int(e, "BUGFINDER_MAX_PARALLEL", 3),
-            json_retry=_on(e, "JSON_RETRY"),
             stage_timeout=_float(e, "STAGE_TIMEOUT", 600.0),
             specialists=_on(e, "SPECIALISTS"),
             threat_model=_on(e, "THREAT_MODEL"),

@@ -319,7 +319,7 @@ def build_queue(
     entry_points_fn: Callable[[], list[Candidate]] | None = None,
 ) -> tuple[list[Hypothesis], set[str]]:
     """One prioritized queue from the grounded threat model (store artifacts), the scanner anchors and
-    entry-point coverage; synthetic anchors minted on the way are saved to the store. Shared by PipelineV2
+    entry-point coverage; synthetic anchors minted on the way are saved to the store. Shared by the tests
     and the Workflow `plan` node (card 43)."""
     am = store.artifact("architecture_model") or {}
     tm = store.artifact("threat_model")

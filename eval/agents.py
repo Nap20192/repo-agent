@@ -23,6 +23,7 @@ from pathlib import Path
 
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
+from google.adk.workflow import FunctionNode
 from google.genai import types
 
 from scanner import core
@@ -38,7 +39,7 @@ from scanner.app.agents import (
     new_verifier,
 )
 from scanner.app.domain import make_consult_domain
-from scanner.app.graph import activation, parse_json, text_of
+from scanner.app.graph import parse_json, text_of
 from scanner.app.reconcile import KNOWN_WSTG
 from scanner.core import (
     Anchor,
@@ -103,16 +104,22 @@ class Probe:
 
 
 async def _activate(agent, label: str, payload: dict, probe: Probe, suffix: str = "") -> tuple[str, list[str]]:
-    """Run one activation like the graph does; returns (final text, tool call names)."""
+    """Run one activation like the graph does (the payload is the user turn of a dynamic `ctx.run_node`; `label`
+    is kept for the callers, the JSON carries its own shape); returns (final text, tool call names)."""
     cbs = agent.before_model_callback
     agent.before_model_callback = [*(cbs if isinstance(cbs, list) else [cbs] if cbs else []), probe]
-    act = activation(agent, f"eval_{agent.name}", label, payload, suffix=suffix)
-    svc = Runner(app_name="eval", agent=act, session_service=InMemorySessionService())
+    if suffix:
+        payload = {**payload, "instructions": suffix}
+
+    async def driver(ctx, node_input):
+        return await ctx.run_node(agent, payload, run_id=f"eval_{agent.name}")
+    svc = Runner(app_name="eval", node=FunctionNode(func=driver, name="driver", rerun_on_resume=True),
+                 session_service=InMemorySessionService())
     await svc.session_service.create_session(app_name="eval", user_id="u", session_id="s")
     text, tools = "", []
     async for ev in svc.run_async(user_id="u", session_id="s", new_message=types.Content(role="user", parts=[types.Part(text="go")])):
         tools += [fc.name for fc in ev.get_function_calls()]
-        text = text_of(ev) or text
+        text = (ev.output if isinstance(ev.output, str) else "") or text_of(ev) or text
     return text, tools
 
 
