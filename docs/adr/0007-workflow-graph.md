@@ -97,6 +97,8 @@ replaces the agent root itself.
 
 ## Status
 
+Extended by ADR-0008 (2026-09-12): the four dynamic nodes became the static 24-node Shannon graph.
+
 Accepted 2026-09-12. Card 43 merged: steps 1–9 of `docs/plans/workflow-migration.md` landed, `PipelineV2`,
 `Graph`, `activation` and the `ParallelAgent` fan-out are deleted, the suite is green on the `Workflow` root,
 `adk web` renders the four-node graph, a live smoke on ollama runs end to end.

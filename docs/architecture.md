@@ -57,16 +57,23 @@ validate» [King] — порты принимают уже проверенны�
 
 ## Отображение на Google ADK [ADK]
 
-- Граф — `Workflow` ADK 2.9 (`scanner/app/pipeline.py`, ADR-0007): статический скелет из четырёх узлов,
-  тела которых — динамические узлы с собственным `try/except`, потому что ADK валит весь Workflow при ошибке
-  любого узла, а скан обязан деградировать, а не падать.
+- Граф — статический `Workflow` ADK 2.9 (`scanner/app/pipeline.py`, ADR-0008): стадии Capella (Shannon) как
+  рёбра графа, 24 узла + 2 служебных (`batches`, `provisional`). Конструкции выбраны по сути узла и проверены
+  спайком (`tests/test_adk_spike.py`, план §6):
 
-  | Узел | Тип | LLM | Что делает |
-  |---|---|---|---|
-  | `build_skeleton` | `FunctionNode` | 0 | якоря пре-пасса (уже в State) + entry points → `ScanSkeleton` |
-  | `plan` | `@node(rerun_on_resume=True)` | 0–3 стадии | direct findings (без модели) → Architect → DomainModeler → ThreatModeler → grounding → планировщик (`reconcile.build_queue`: threats + якоря + baseline'ы точек входа и файлов с классами `hunt_classes`, adversarial-доля) → очередь (`QueueState`) |
-  | `investigate` | `@node(rerun_on_resume=True)` | ≤ rounds·hyps | раунды: гейт гипотез → `triage` (parallel worker, только baseline'ы; непомеченные → rejected-досье) → `route_and_verify` (parallel worker) → досье из фактов стора → reconcile новых гипотез |
-  | `finish` | `@node(rerun_on_resume=True)` | ≤ confirmed | `route_and_critique` над llm-подтверждёнными (direct — факты), артефакт `timings`, `stop_reason` |
+  | Конструкция | Узлы | Почему |
+  |---|---|---|
+  | `FunctionNode` | `scan`, `build_skeleton`, `direct_findings`, `recon`, `ground`, `batches`, `fold_triage`, `dedupe`, `mark_sample`, `provisional`, `calibrate`, `export`, четыре `route_*` | детерминированная работа; route-узлы отдают `Event(route=…)`, карта рёбер выбирает ветку |
+  | `JoinNode` | `join_model` | единственный настоящий fan-in: Architect ∥ recon |
+  | `@node(rerun_on_resume=True)` с `LlmAgent`-ребёнком | `architect`, `domain_modeler`, `threat_modeler`, `plan` | голый агент на статическом ребре не умеет деградировать (исключение валит Workflow); обёртка даёт таймаут, заметку и resume по артефакту |
+  | `@node(parallel_worker=True)` над `LlmAgent` | `triage_sweep`, `review`, `critic` (viability), `confirm` | список → список, ADK раскладывает элементы; ошибка элемента ловится внутри |
+  | динамический цикл | `audit` | единственный узел, форма которого зависит от данных: раунды до пустой очереди, лимита или бюджета; в раунде fan-out через `route_and_verify` |
+  | обычный узел с несколькими входами | `export`, `calibrate` | `JoinNode` ждал бы ветку, которую маршрут пропустил (спайк Q2) |
+
+  Лестница вердиктов Shannon → наши статусы: review VALID = confirmed; FALSE_POSITIVE только через
+  `disprove_finding` с контр-цитатой; PROVISIONALLY_VALID / NEEDS_RESEARCH и viability — аннотации через
+  `RunStore.annotate` (отказывает для status/evidence/confidence); promotion в `confirm` — повторный
+  `report_finding` с большей confidence. Гейт SARIF остаётся `status == confirmed`, аннотации в `properties`.
 
 - Узлы живут в `scanner/app/graph_nodes.py`, строятся фабриками на прогон (замыкание на `RunStore` и агентов).
   Параллельность — `@node(parallel_worker=True, max_parallel_workers=k)`: ADK раскладывает список элементов по
@@ -78,9 +85,9 @@ validate» [King] — порты принимают уже проверенны�
 - `before_model_callback`: бюджет вызовов (per-branch, per-invocation для `AgentTool`, глобальный стоп только у
   корневых стадий) и окно результатов тулов; `before_tool_callback`: лог. Колбэки висят на агентах и работают
   под `run_node` без изменений.
-- Таймаут стадии — `asyncio.wait_for` вокруг `run_node` внутри `plan` (деградация до «нет артефакта»), не
-  `timeout=` узла (это уронило бы Workflow).
-- Resume: `plan` пропускает стадию, если её артефакт уже в State (CLI-перезапуск — новая ADK-сессия, replay
+- Таймаут стадии — `asyncio.wait_for` вокруг `run_node` внутри обёртки стадии (деградация до «нет артефакта»),
+  не `timeout=` узла (это уронило бы Workflow).
+- Resume: обёртка стадии пропускает её, если артефакт уже в State (CLI-перезапуск — новая ADK-сессия, replay
   ADK этого не покрывает). Консультанты как `AgentTool` (Knowledge) — отдельная инвокация со своим бюджетом.
 - Состояние: `session.state` для счётчиков и `stop_reason` (ключи в `scanner/core/workflow.py`), SQLite State
   (`.state/state.db`) как источник правды, ADK-сессии в `.state/sessions.db` для `adk web`; спаны OTLP через
