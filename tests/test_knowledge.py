@@ -178,3 +178,14 @@ def test_explicit_enabled_config_cannot_reach_the_network_under_pytest():
     a = Anchor(id="a", tool="osv", rule_id="GHSA-zzzz-zzzz-zzzz", severity="high", file="go.mod", line=1, rule_ids=["GHSA-zzzz-zzzz-zzzz"])
     out = kn.enrich([a], cfg)  # loaders swallow failures → anchor unchanged, no network
     assert out[0].message == a.message
+
+
+def test_imported_by_counts_source_files(tmp_path):
+    (tmp_path / "a.js").write_text("const _ = require('lodash');\n")
+    (tmp_path / "b.ts").write_text("import x from 'lodash/fp'\n")
+    (tmp_path / "c.py").write_text("import lodash\n")
+    (tmp_path / "d.go").write_text('import "golang.org/x/text/width"\n')
+    (tmp_path / "e.js").write_text("// lodash mentioned only in a comment, and lodashx is another package\n")
+    assert kn.imported_by(tmp_path, "lodash") == 3
+    assert kn.imported_by(tmp_path, "golang.org/x/text") == 1
+    assert kn.imported_by(tmp_path, "nothing") == 0

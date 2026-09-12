@@ -179,7 +179,7 @@ class Run:
             "message": {"text": f.title + ("\n" + "\n".join(f.evidence) if f.evidence else "")},
             "locations": [{"physicalLocation": {"artifactLocation": {"uri": f.file}, "region": {"startLine": f.line}}}],
             "properties": {"finding_id": f.id, "anchor_id": f.anchor_id, "confidence": f.confidence,
-                           "calibration": self._calibrate(f, intent)},
+                           "source": f.source, "calibration": self._calibrate(f, intent)},
             "taxa": _taxa(f),
             **({"fixes": [{"description": {"text": f.remediation}, "properties": {"url": f.remediation_url}}]}
                if f.remediation else {}),

@@ -40,6 +40,12 @@ ArchitectureModel; ThreatModeler выдаёт заземлённые threats и 
 (resume пропускает готовые стадии). Lead (петля v1) вырезан: единственный граф — `PipelineV2`. `THREAT_MODEL=0` — без Architect/ThreatModeler.
 Инструкции стадий адаптированы из Mantis/Shannon (Apache-2.0), см. THIRD_PARTY_NOTICES.md.
 
+**Прямые находки (direct lane).** Якоря, которые точно случились — osv-зависимости, gitleaks-секреты,
+semgrep уровня ERROR — не идут в очередь и к Critic: `split_direct` отделяет их до стадий, `direct_finding`
+делает из каждого confirmed-находку (`source=direct`) через дедуп стора, с advisory/CVSS/EPSS/KEV/fixed
+из knowledge-кэша и подсчётом «пакет импортируется в N файлах» (`knowledge.imported_by`); секреты
+редактируются. Модель занимается только кодом.
+
 ## Сессии и трассировка
 
 Каждый прогон сохраняет ADK-сессию в SQLite `SESSIONS_PATH` (app `fullscan`, user `user`,

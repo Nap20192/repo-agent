@@ -8,7 +8,7 @@ import pytest
 from scanner import core
 from scanner.app.graph import dossier_from_store, parse_json
 from scanner.app.pipeline_v2 import PipelineV2
-from scanner.core import Candidate, Finding, Hypothesis
+from scanner.core import Anchor, Candidate, Finding, Hypothesis
 from tests.fakes import (  # noqa: F401
     A1,
     A2,
@@ -127,3 +127,15 @@ def test_verify_payload_carries_skill_lists():
     inv = skills_for("CWE-89", "sink")
     crit = skills_for("CWE-89", "", "critique")
     assert inv and inv[0].startswith("wstg-") and crit and crit[0].startswith("control-")
+
+
+def test_direct_anchors_are_findings_before_round_0_and_skip_the_critic():
+    """osv/gitleaks/semgrep-error anchors never reach the Investigator or the Critic: reported as-is (card 42)."""
+    osv = Anchor(id="a_osv", tool="osv", rule_id="GHSA-x", severity="high", file="package-lock.json", line=1, snippet="lodash 4.13.1")
+    run = FakeRun([A1, osv])
+    _run(_scan(run, critic=FakeCritic(name="critic", store=run)))
+    direct = [f for f in run.findings() if f.source == "direct"]
+    assert [f.anchor_id for f in direct] == ["a_osv"] and direct[0].status == core.CONFIRMED  # the Critic never saw it
+    assert run.artifact("direct_findings") == {"ids": [direct[0].id]}
+    assert all(h.anchor_id != "a_osv" for hs in run.hyps.values() for h in hs)
+    assert {f.anchor_id: f.status for f in run.findings() if f.source == "llm"} == {"a_1": core.UNCERTAIN}

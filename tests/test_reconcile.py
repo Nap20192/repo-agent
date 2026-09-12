@@ -2,10 +2,12 @@ from scanner import core
 from scanner.app.reconcile import (
     adversarial_sweep,
     coverage,
+    direct_finding,
     from_anchors,
     from_threats,
     key,
     reconcile,
+    split_direct,
 )
 from scanner.core import Anchor, Candidate, Hypothesis, Threat
 
@@ -155,3 +157,47 @@ def test_threat_without_claim_still_becomes_a_hypothesis():
     """A weak model may emit {cwe, symbol} only; the gate requires a claim, so the Reconciler supplies one."""
     (h,), _ = from_threats([Threat(cwe="CWE-78", symbol="pingHandler")], [], locate=lambda s: ("main.go", 9))
     assert h.claim and "CWE-78" in h.claim and "pingHandler" in h.claim
+
+
+# --- direct findings lane (card 42) -----------------------------------------------------------------------
+GL = Anchor(id="a_gl", tool="gitleaks", rule_id="generic-api-key", cwe="CWE-798", severity="high", file="config.js",
+            line=6, snippet='zapApiKey: "AKIAIOSFODNN7EXAMPLE1234567890"')
+SEM_HI = Anchor(id="a_sem", tool="semgrep", rule_id="js.eval", cwe="CWE-95", severity="high", file="a.js", line=3,
+                message="eval on user input", snippet="eval(x)")
+
+
+def test_split_direct_keeps_code_anchors_for_the_llm():
+    direct, inv = split_direct([SQL, OSV, IDOR, GL, SEM_HI])
+    assert [a.id for a in direct] == ["a_osv", "a_gl", "a_sem"]
+    assert [a.id for a in inv] == ["a_sql", "a_idor"]  # semgrep medium (warning) still gets investigated
+
+
+def test_direct_finding_osv_uses_enrichment_and_reachability():
+    e = {"package": "lodash", "version": "4.13.1", "ids": ["GHSA-x"], "aliases": ["CVE-2020-1"], "cvss": 9.8,
+         "epss": 0.5, "kev": True, "fixed": ["4.17.21"], "cwes": ["CWE-1321"]}
+    f = direct_finding(OSV, e, imported_by=3)
+    assert (f.status, f.confidence, f.source, f.anchor_id, f.severity, f.cwe) == \
+        (core.CONFIRMED, 1.0, "direct", "a_osv", "critical", "CWE-1321")
+    assert f.file == "go.mod" and f.line == 1 and f.evidence[0] == "go.mod:1"
+    assert "knowledge:GHSA-x" in f.evidence and "knowledge:CVE-2020-1" in f.evidence
+    joined = " | ".join(f.evidence)
+    assert "CVSS 9.8" in joined and "EPSS 0.50" in joined and "KEV" in joined and "fixed: 4.17.21" in joined
+    assert "imported by 3 files" in joined
+
+
+def test_direct_finding_without_enrichment_keeps_anchor_severity():
+    f = direct_finding(OSV)
+    assert f.severity == "high" and f.evidence == ["go.mod:1", "knowledge:GHSA-x"] and f.cwe == ""
+    assert "imported by" not in " ".join(direct_finding(OSV, imported_by=None).evidence)
+    assert "not imported by any source file" in " ".join(direct_finding(OSV, imported_by=0).evidence)
+
+
+def test_direct_finding_redacts_secrets():
+    f = direct_finding(GL)
+    assert f.cwe == "CWE-798" and f.source == "direct" and f.evidence[0].startswith("config.js:6: ")
+    assert "AKIAIOSFODNN7EXAMPLE1234567890" not in " ".join([f.title, *f.evidence])
+
+
+def test_direct_finding_semgrep_error_level():
+    f = direct_finding(SEM_HI)
+    assert (f.title, f.cwe, f.evidence, f.severity) == ("eval on user input", "CWE-95", ["a.js:3: eval(x)"], "high")

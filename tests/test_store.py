@@ -87,3 +87,13 @@ def test_summary_exposure_comes_from_the_architecture_model(tmp_path):
     run.put_artifact("architecture_model", {"entities": [], "trust_boundaries": ["Srv: pingHandler - untrusted input"]})
     s = json.loads(run.write_summary(tmp_path).read_text())
     assert s["findings"][0]["calibration"]["multiplier"] > 0.7  # exposed: ×1.0 instead of internal ×0.8
+
+
+def test_direct_source_lands_in_sarif_and_summary(tmp_path):
+    run = Store(str(tmp_path / "s.db")).start_run("t")
+    run.report(Finding(anchor_id="a_1", cwe="CWE-798", file="c.js", line=6, title="secret", severity="high",
+                       status=CONFIRMED, evidence=["c.js:6: k"], confidence=1.0, source="direct"))
+    sarif = json.loads(run.write_report(tmp_path / "out").read_text())
+    assert sarif["runs"][0]["results"][0]["properties"]["source"] == "direct"
+    summary = json.loads(run.write_summary(tmp_path / "out").read_text())
+    assert summary["findings"][0]["source"] == "direct"

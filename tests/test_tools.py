@@ -159,3 +159,10 @@ def test_subset_filters_by_name_and_rejects_typos(tmp_path):
     assert [f.__name__ for f in chosen] == ["report_finding", "grep"]
     with pytest.raises(KeyError):
         tools.subset(all_, {"report_finding", "grpe"})
+
+
+def test_report_finding_normalises_percent_confidence(tmp_path):
+    _, t = setup(tmp_path)
+    ok = t["report_finding"]("a_sql", "SQLi", "confirmed", ['db.Query("SELECT " + name)'], confidence=95)
+    assert ok["confidence"] == 0.95
+    assert t["report_finding"]("a_idor", "t", "uncertain", [], confidence=100.0)["confidence"] == 1.0

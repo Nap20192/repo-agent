@@ -122,6 +122,7 @@ class Finding(_Model):
     wstg_id: str = ""
     asvs_id: str = ""  # ASVS 5.0 requirement id (from the hypothesis / CWE map)
     top10: str = ""  # OWASP Top 10 2025 category
+    source: Literal["llm", "direct"] = "llm"  # direct: a scanner result reported without an LLM verdict (card 42)
 
 class Threat(_Model):
     """One modeled threat (ThreatModeler output). Grounding: an anchor match by (file, cwe) or a symbol."""

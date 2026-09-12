@@ -70,6 +70,8 @@ def report_finding_tool(run, read: Callable[[str, int], str]) -> Callable:
         at the anchor. Dependency (osv/CVE/GHSA) and authz/IDOR anchors also require a consult
         reference in evidence: 'knowledge:<advisory id>' or 'domain:<entity>'. Findings without a
         real anchor, evidence or required consult are refused."""
+        if 1 < confidence <= 100:
+            confidence /= 100  # models answer "95" or "100.0" for a [0,1] scale; the gate reads it, not refuses it
         draft = Finding(anchor_id=anchor_id, hypothesis_id=hypothesis_id, cwe=cwe, file=file, line=line, title=title,
                         severity=severity, status=status, evidence=list(evidence or []), confidence=confidence)
         result = gate_finding(run, read, draft)

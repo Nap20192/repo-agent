@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 from scanner import core
 from scanner.adapter import owasp
-from scanner.core import Anchor, Candidate, Hypothesis, Threat, new_anchor_id
+from scanner.core import Anchor, Candidate, Finding, Hypothesis, Threat, new_anchor_id
 
 _KIND_CONSULT = {"dependency": "knowledge", "authz": "domain"}
 
@@ -32,6 +32,59 @@ def key(h: Hypothesis) -> str:
 def _owasp_ids(cwe: str) -> dict:
     g = owasp.consult(cwe) if cwe else {}
     return {"wstg_id": g.get("wstg_id", ""), "asvs_id": g.get("asvs_id", "")}
+
+
+DIRECT_TOOLS = ("osv", "gitleaks")
+
+
+def is_direct(a: Anchor) -> bool:
+    """A scanner result that certainly happened (dependency advisory, committed secret, semgrep at error level):
+    it becomes a finding directly — dedup and a richer description, no LLM verdict (card 42)."""
+    return a.tool in DIRECT_TOOLS or (a.tool == "semgrep" and a.severity in ("critical", "high"))
+
+
+def split_direct(anchors: list[Anchor]) -> tuple[list[Anchor], list[Anchor]]:
+    """(direct, investigate): only the second list may become hypotheses."""
+    return [a for a in anchors if is_direct(a)], [a for a in anchors if not is_direct(a)]
+
+
+def _cvss_severity(e: dict, default: str) -> str:
+    if e.get("kev"):
+        return "critical"
+    s = e.get("cvss")
+    if s is None:
+        return default
+    return "critical" if s >= 9 else "high" if s >= 7 else "medium" if s >= 4 else "low"
+
+
+def direct_finding(a: Anchor, enrichment: dict | None = None, imported_by: int | None = None) -> Finding:
+    """Confirmed finding straight from a direct anchor. `enrichment` is the knowledge record of an osv anchor
+    (ids, aliases, cvss, epss, kev, fixed, cwes); `imported_by` = source files importing the package (None =
+    not computed). Secrets are redacted in title and evidence."""
+    e = enrichment or {}
+    at = f"{a.file}:{a.line}"
+    evidence = [f"{at}: {core.redact_secrets(a.snippet)}" if a.snippet else at]
+    title, severity, cwe = a.message or a.rule_id, a.severity, a.cwe
+    if a.tool == "osv":
+        ids = [i for i in dict.fromkeys([*(a.rule_ids or [a.rule_id]), *e.get("aliases", [])]) if i]
+        evidence += [f"knowledge:{i}" for i in ids]
+        facts = (f"CVSS {e['cvss']}" if e.get("cvss") is not None else "",
+                 f"EPSS {e['epss']:.2f}" if e.get("epss") is not None else "",
+                 "KEV: known exploited" if e.get("kev") else "",
+                 f"fixed: {', '.join(e['fixed'][:3])}" if e.get("fixed") else "")
+        evidence += [x for x in facts if x]
+        if imported_by is not None:
+            evidence.append(f"imported by {imported_by} files" if imported_by
+                            else "not imported by any source file (transitive or unused; reachability unknown)")
+        pkg = f"{e['package']}@{e['version']}" if e.get("package") else "@".join(a.snippet.split()[:2]) or a.rule_id
+        title = f"Vulnerable dependency {pkg}: {', '.join(ids[:3])}"
+        severity = _cvss_severity(e, a.severity)
+        cwe = a.cwe or (e.get("cwes") or [""])[0]
+    elif a.tool == "gitleaks":
+        title = f"Hardcoded secret ({a.rule_id}) in {a.file}"
+        cwe = a.cwe or "CWE-798"
+    return Finding(anchor_id=a.id, cwe=cwe, file=a.file, line=a.line, title=core.redact_secrets(title),
+                   severity=severity, status=core.CONFIRMED, evidence=evidence, confidence=1.0, source="direct")
 
 
 def from_anchors(anchors: list[Anchor]) -> list[Hypothesis]:

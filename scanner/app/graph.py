@@ -268,7 +268,7 @@ class Graph(BaseAgent):
         out.update(dossiers=dossiers, failed=failed, budget=budget)
 
     async def _critic_pass(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
-        confirmed = [f for f in self.store.findings() if f.status == core.CONFIRMED]
+        confirmed = [f for f in self.store.findings() if f.status == core.CONFIRMED and f.source != "direct"]
         if not confirmed:
             return
         acts = []
