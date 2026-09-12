@@ -15,7 +15,7 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
-from scanner.adapter import static
+from scanner.adapter import fs
 
 _BRACE_LANGS = {"go", "javascript", "typescript", "php", "java", "c", "cpp", "rust"}
 _EXT = {".go": "go", ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".ts": "typescript",
@@ -134,8 +134,8 @@ def make_check_dominance(target: Path, index) -> Callable[[str, int, int], dict]
                 syms = index.symbols(file) if index is not None else []
             except Exception:  # noqa: BLE001 — the index is optional here
                 syms = []
-            if p.stat().st_size > static.FILE_CAP:
-                return {"status": "error", "reason": f"{file}: file larger than {static.FILE_CAP} bytes"}
+            if p.stat().st_size > fs.FILE_CAP:
+                return {"status": "error", "reason": f"{file}: file larger than {fs.FILE_CAP} bytes"}
             return check(p.read_text(errors="replace").splitlines(), _EXT.get(p.suffix, "javascript"),
                          int(sink_line), int(control_line), syms)
         except Exception as e:  # noqa: BLE001 — a tool never raises into the model

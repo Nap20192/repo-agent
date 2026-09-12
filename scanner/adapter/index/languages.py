@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from scanner.adapter import static
+from scanner.adapter import fs
 
 
 @dataclass(frozen=True)
@@ -43,7 +43,7 @@ PYTHON = Language("python", "python", ("pyright-langserver", "--stdio"), (".py",
 def ts_plugins_declared(target: Path) -> str | None:
     """tsserver `require()`s every module in tsconfig/jsconfig `compilerOptions.plugins` when a project loads —
     arbitrary JS from an untrusted target. Refuse the server (grep fallback) when any such config declares plugins."""
-    for cfg in static.files(target):
+    for cfg in fs.files(target):
         if cfg.name.startswith(("tsconfig", "jsconfig")) and cfg.suffix == ".json":
             try:
                 if '"plugins"' in cfg.read_text(errors="replace"):

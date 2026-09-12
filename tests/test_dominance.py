@@ -164,9 +164,9 @@ def test_unknown_language_falls_back_to_braces(tmp_path):
 
 
 def test_check_dominance_refuses_huge_files(tmp_path, monkeypatch):
-    from scanner.adapter import static
+    from scanner.adapter import fs
     from scanner.adapter.dominance import make_check_dominance
     (tmp_path / "big.go").write_text("package main\n" + "x" * 100)
-    monkeypatch.setattr(static, "FILE_CAP", 50)
+    monkeypatch.setattr(fs, "FILE_CAP", 50)
     out = make_check_dominance(tmp_path, None)("big.go", 2, 1)
     assert out["status"] == "error" and "larger" in out["reason"]

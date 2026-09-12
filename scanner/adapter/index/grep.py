@@ -5,11 +5,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from scanner.adapter import static
+from scanner.adapter import entrypoints, fs
 from scanner.adapter.index.callgraph import enclosing, path_to_entry
 from scanner.core.ports import Symbol
 
-_DEF = re.compile(rf"^(?P<indent>\s*)(?:export\s+|async\s+)*(?P<kw>{static._DEF_KW})\s+(?P<name>\w+)")
+_DEF = re.compile(rf"^(?P<indent>\s*)(?:export\s+|async\s+)*(?P<kw>{entrypoints.DEF_KW})\s+(?P<name>\w+)")
 _CALL = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
 _KIND = {"func": "function", "def": "function", "function": "function", "class": "class", "type": "struct",
          "const": "constant", "var": "variable", "let": "variable"}
@@ -22,10 +22,10 @@ class GrepIndex:
         self.failed = False  # Degradable contract (core.ports): grep never gives up, so a fallback never engages
 
     def _owns(self, p: Path) -> bool:
-        return p.suffix in static.LANG_EXT and (not self.extensions or p.suffix in self.extensions)
+        return p.suffix in fs.LANG_EXT and (not self.extensions or p.suffix in self.extensions)
 
     def find_symbol(self, fqn: str) -> tuple[str, int] | None:
-        return static.find_symbol(self.target, fqn, self.extensions)
+        return entrypoints.find_symbol(self.target, fqn, self.extensions)
 
     def has_symbol(self, fqn: str) -> bool:
         return self.find_symbol(fqn) is not None
@@ -49,7 +49,7 @@ class GrepIndex:
             return []
         rx, defn = re.compile(rf"\b{re.escape(name)}\b"), self.find_symbol(fqn)
         out = []
-        for p in static.files(self.target):
+        for p in fs.files(self.target):
             if not self._owns(p):
                 continue
             rel = str(p.relative_to(self.target))

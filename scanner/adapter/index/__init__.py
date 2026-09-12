@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from scanner.adapter import static
+from scanner.adapter import fs
 from scanner.adapter.index.grep import GrepIndex
 from scanner.adapter.index.languages import LANGUAGES, Language
 from scanner.adapter.index.lsp import LspIndex
@@ -50,7 +50,7 @@ class MultiIndex:
         self.target, self.indexes, self.fallback = Path(target).resolve(), dict(sorted(indexes.items())), fallback
 
     def _for_file(self, file: str) -> Index:
-        lang = static.LANG_EXT.get(Path(file).suffix, "")
+        lang = fs.LANG_EXT.get(Path(file).suffix, "")
         return self.indexes.get(lang, self.fallback)
 
     def _first(self, method: str, *args, empty):
@@ -83,10 +83,10 @@ def build_index(target: Path, languages: dict[str, Language] = LANGUAGES, client
     """One index per detected language: LSP adapter with grep fallback; unknown languages → grep only."""
     target = Path(target).resolve()
     exts_of = {}
-    for ext, lang in static.LANG_EXT.items():
+    for ext, lang in fs.LANG_EXT.items():
         exts_of.setdefault(lang, []).append(ext)
     indexes: dict[str, Index] = {}
-    for lang in sorted(static.detect_langs(target)):
+    for lang in sorted(fs.detect_langs(target)):
         scoped = GrepIndex(target, tuple(exts_of.get(lang, ())))  # grep sees only this language's files
         if lang in languages:
             indexes[lang] = FallbackIndex(LspIndex(target, languages[lang], client_factory), scoped)

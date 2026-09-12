@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from scanner.adapter import static
+from scanner.adapter import fs
 from scanner.core.domain import DomainMap, Entity, Guard, RuleCandidate, Skeleton
 
 OWNER = re.compile(r"^(?:user_?id|owner(?:_?id)?|tenant_?id|account_?id|created_?by)$", re.IGNORECASE)
@@ -137,8 +137,8 @@ def extract(target: Path, index=None) -> Skeleton:
     cands: list[RuleCandidate] = []
     queries: dict[str, list[str]] = {}
     per_file: list[tuple[str, list[str]]] = []
-    for p in static.files(target):
-        if p.suffix not in {*static.LANG_EXT, ".sql", ".prisma", *_DOC_EXT} or p.stat().st_size > static.FILE_CAP:
+    for p in fs.files(target):
+        if p.suffix not in {*fs.LANG_EXT, ".sql", ".prisma", *_DOC_EXT} or p.stat().st_size > fs.FILE_CAP:
             continue
         rel = str(p.relative_to(target))
         try:
