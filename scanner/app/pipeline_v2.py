@@ -5,7 +5,6 @@ Stage artifacts (architecture_model, domain_map, threat_model) are grounded in c
 from __future__ import annotations
 
 import logging
-import os
 import time
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
@@ -43,6 +42,7 @@ class PipelineV2(Graph):
     locate: Callable[[str], tuple[str, int] | None] | None = None  # symbol → (file, line) for synthetic anchors
     entry_points_fn: Callable[[], list[Candidate]] | None = None
     index: Closeable | None = None  # the code Index (closed by the runner), not used by the graph itself
+    stage_timeout: float = 600.0  # seconds per LLM stage; a slow stage is cancelled and noted, the scan goes on
 
     def __init__(self, name: str = "scan_v2", **kw):
         super().__init__(name=name, **kw)
@@ -50,14 +50,14 @@ class PipelineV2(Graph):
     async def _stage(
         self, ctx: InvocationContext, agent: BaseAgent, stage: str, payload: dict, out: dict, timings: dict | None = None
     ) -> AsyncGenerator[Event, None]:
-        """One LLM stage: run the agent on payload (bounded by STAGE_TIMEOUT seconds, one JSON-nudge retry),
+        """One LLM stage: run the agent on payload (bounded by `stage_timeout` seconds, one JSON-nudge retry),
         parse its JSON into out[stage] (None when invalid), persist."""
         if (cached := self.store.artifact(stage)) is not None:  # resume: the stage already ran for this run
             out[stage] = cached
             return
         texts: dict[str, str] = {}
         t0 = time.monotonic()
-        limit = float(os.environ.get("STAGE_TIMEOUT", "600") or 600)
+        limit = self.stage_timeout
         try:
             run = self._run_activations(ctx, f"stage_{stage}", [activation(agent, stage, stage, payload)], texts)
             async for ev in with_deadline(run, limit):

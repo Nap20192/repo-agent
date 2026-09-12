@@ -6,7 +6,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
 import time
 from collections.abc import AsyncGenerator, Callable
@@ -108,6 +107,7 @@ class Graph(BaseAgent):
     # specialists by name + a pure router (item, lang, role) -> (name, instruction suffix); no router = one generic agent
     specialists: dict[str, BaseAgent] = Field(default_factory=dict)
     router: Router | None = None
+    json_retry: bool = True  # one JSON-nudge retry when an activation ends without JSON
     store: RunStore
     target: str = ""
     has_anchor: Callable[[str], bool]
@@ -141,8 +141,8 @@ class Graph(BaseAgent):
         suffix: str = "",
     ) -> AsyncGenerator[Event, None]:
         """One more activation with the JSON nudge when `texts[name]` has no valid JSON; result lands in texts[name].
-        Counted in session state `json_retries`. JSON_RETRY=0 disables."""
-        if os.environ.get("JSON_RETRY", "1") == "0" or parse_json(texts.get(name, "")) is not None:
+        Counted in session state `json_retries`; `json_retry=False` disables."""
+        if not self.json_retry or parse_json(texts.get(name, "")) is not None:
             return
         retry = _activation(agent, f"{name}_retry", label, payload, suffix=f"{suffix}\n\n{JSON_NUDGE}" if suffix else JSON_NUDGE)
         async for ev in self._run_activations(ctx, f"{name}_retry_run", [retry], texts):

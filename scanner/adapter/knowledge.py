@@ -18,10 +18,12 @@ import time
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
 from scanner.core import Anchor
+from scanner.core.settings import Settings
 
 log = logging.getLogger("scanner.knowledge")
 
@@ -70,16 +72,37 @@ class _Cache:
 _caches: dict[str, _Cache] = {}
 
 
-def _cache() -> _Cache:
-    path = os.environ.get("KNOWLEDGE_CACHE") or ".state/knowledge.db"
+@dataclass(frozen=True)
+class KnowledgeConfig:
+    """What the clients need from the outside: cache file, offline advisory clone, API tokens, on/off switch."""
+
+    cache_path: str = ".state/knowledge.db"
+    ghsa_dir: str = ""
+    github_token: str = ""
+    nvd_api_key: str = ""
+    enabled: bool = True
+
+    @classmethod
+    def from_settings(cls, s: Settings) -> KnowledgeConfig:
+        return cls(cache_path=s.knowledge_cache, ghsa_dir=s.ghsa_dir, github_token=s.github_token,
+                   nvd_api_key=s.nvd_api_key, enabled=s.knowledge_enrich)
+
+
+def default_config() -> KnowledgeConfig:
+    """Config from the process environment, resolved at call time (callers may pass an explicit one instead)."""
+    return KnowledgeConfig.from_settings(Settings.from_env())
+
+
+def _cache(cfg: KnowledgeConfig | None = None) -> _Cache:
+    path = (cfg or default_config()).cache_path
     if path not in _caches:
         _caches[path] = _Cache(path)
     return _caches[path]
 
 
-def _cached(source: str, key: str, loader, ttl: float = TTL):
+def _cached(source: str, key: str, loader, ttl: float = TTL, cfg: KnowledgeConfig | None = None):
     """Cache-first; a failed loader (network down, 404) yields {} and is not cached."""
-    c = _cache()
+    c = _cache(cfg)
     v = c.get(source, key, ttl)
     if v is not None:
         return v
@@ -93,12 +116,13 @@ def _cached(source: str, key: str, loader, ttl: float = TTL):
 
 
 # --- clients -----------------------------------------------------------------------------------------------
-def osv_batch(pkgs: list[tuple[str, str, str]]) -> dict[str, list[str]]:
+def osv_batch(pkgs: list[tuple[str, str, str]], cfg: KnowledgeConfig | None = None) -> dict[str, list[str]]:
     """{'name@version': [advisory ids]} for (ecosystem, name, version) triples — one POST for the uncached ones."""
     out, todo = {}, []
+    cache = _cache(cfg)
     for eco, name, ver in pkgs:
         key = f"{name}@{ver}"
-        hit = _cache().get("osv_batch", f"{eco}:{key}", TTL)
+        hit = cache.get("osv_batch", f"{eco}:{key}", TTL)
         if hit is not None:
             out[key] = hit
         else:
@@ -109,7 +133,7 @@ def osv_batch(pkgs: list[tuple[str, str, str]]) -> dict[str, list[str]]:
                          {"queries": [{"package": {"name": n, "ecosystem": e}, "version": v} for e, n, v in todo]})
             for (eco, name, ver), res in zip(todo, data.get("results", []), strict=False):
                 ids = [v["id"] for v in res.get("vulns", []) if v.get("id")]
-                _cache().put("osv_batch", f"{eco}:{name}@{ver}", ids)
+                cache.put("osv_batch", f"{eco}:{name}@{ver}", ids)
                 out[f"{name}@{ver}"] = ids
         except Exception as e:  # noqa: BLE001
             log.debug("osv batch: %s", e)
@@ -135,9 +159,11 @@ def _osv_normalize(v: dict) -> dict:
             "cwes": list((v.get("database_specific") or {}).get("cwe_ids", []))}
 
 
-def osv_vuln(vid: str) -> dict:
-    """One advisory, normalized: aliases, summary, details, fixed versions, CVSS vector, CWEs. GHSA_DIR first."""
-    ghsa_dir = os.environ.get("GHSA_DIR")
+def osv_vuln(vid: str, cfg: KnowledgeConfig | None = None) -> dict:
+    """One advisory, normalized: aliases, summary, details, fixed versions, CVSS vector, CWEs. The local
+    advisory-database clone (`cfg.ghsa_dir`) is consulted first."""
+    cfg = cfg or default_config()
+    ghsa_dir = cfg.ghsa_dir
     if ghsa_dir and vid.startswith("GHSA-"):
         p = _ghsa_dir_index(ghsa_dir).get(vid)
         if p:
@@ -145,11 +171,11 @@ def osv_vuln(vid: str) -> dict:
                 return _osv_normalize(json.loads(Path(p).read_text()))
             except (OSError, ValueError) as e:
                 log.debug("GHSA_DIR %s: %s", vid, e)
-    return _cached("osv", vid, lambda: _osv_normalize(fetch(f"https://api.osv.dev/v1/vulns/{urllib.parse.quote(vid, safe='')}")))
+    return _cached("osv", vid, lambda: _osv_normalize(fetch(f"https://api.osv.dev/v1/vulns/{urllib.parse.quote(vid, safe='')}")), cfg=cfg)
 
 
-def _ghsa_headers() -> dict:
-    tok = os.environ.get("GITHUB_TOKEN")
+def _ghsa_headers(cfg: KnowledgeConfig) -> dict:
+    tok = cfg.github_token
     return {"Accept": "application/vnd.github+json", **({"Authorization": f"Bearer {tok}"} if tok else {})}
 
 
@@ -162,22 +188,25 @@ def _ghsa_normalize(g: dict) -> dict:
             "fixed": [v["patched_versions"] for v in vulns if v.get("patched_versions")]}
 
 
-def ghsa(id_or_pkg: str) -> dict:
+def ghsa(id_or_pkg: str, cfg: KnowledgeConfig | None = None) -> dict:
     """GitHub Advisory DB: a GHSA id → normalized advisory (cvss, cwes, vulnerable functions, patched versions);
     'name@version' → {'ids': [...]} of advisories affecting it."""
+    cfg = cfg or default_config()
     base = "https://api.github.com/advisories"
     if id_or_pkg.startswith("GHSA-"):
         def load():
-            lst = fetch(f"{base}?ghsa_id={urllib.parse.quote(id_or_pkg, safe='')}", headers=_ghsa_headers())
+            lst = fetch(f"{base}?ghsa_id={urllib.parse.quote(id_or_pkg, safe='')}", headers=_ghsa_headers(cfg))
             return _ghsa_normalize(lst[0]) if lst else {}
-        return _cached("ghsa", id_or_pkg, load)
-    return _cached("ghsa_affects", id_or_pkg, lambda: {"ids": [g.get("ghsa_id") for g in fetch(f"{base}?affects={urllib.parse.quote(id_or_pkg, safe='')}", headers=_ghsa_headers())]})
+        return _cached("ghsa", id_or_pkg, load, cfg=cfg)
+    return _cached("ghsa_affects", id_or_pkg, lambda: {"ids": [g.get("ghsa_id") for g in fetch(f"{base}?affects={urllib.parse.quote(id_or_pkg, safe='')}", headers=_ghsa_headers(cfg))]}, cfg=cfg)
 
 
-def nvd_cve(cve: str) -> dict:
-    """NVD 2.0: CVSS v3.1 score + vector and CWE ids for one CVE (NVD_API_KEY raises the rate limit)."""
+def nvd_cve(cve: str, cfg: KnowledgeConfig | None = None) -> dict:
+    """NVD 2.0: CVSS v3.1 score + vector and CWE ids for one CVE (`cfg.nvd_api_key` raises the rate limit)."""
+    cfg = cfg or default_config()
+
     def load():
-        hdr = {"apiKey": os.environ["NVD_API_KEY"]} if os.environ.get("NVD_API_KEY") else {}
+        hdr = {"apiKey": cfg.nvd_api_key} if cfg.nvd_api_key else {}
         data = fetch(f"https://services.nvd.nist.gov/rest/json/cves/2.0?cveId={urllib.parse.quote(cve, safe='')}", headers=hdr)
         items = data.get("vulnerabilities", [])
         if not items:
@@ -186,14 +215,15 @@ def nvd_cve(cve: str) -> dict:
         m = ((c.get("metrics") or {}).get("cvssMetricV31") or [{}])[0].get("cvssData", {})
         cwes = [d.get("value") for w in c.get("weaknesses", []) for d in w.get("description", []) if str(d.get("value", "")).startswith("CWE-")]
         return {"id": c.get("id", cve), "cvss": m.get("baseScore"), "vector": m.get("vectorString", ""), "cwes": cwes}
-    return _cached("nvd", cve, load)
+    return _cached("nvd", cve, load, cfg=cfg)
 
 
-def epss(cves: list[str]) -> dict[str, float]:
+def epss(cves: list[str], cfg: KnowledgeConfig | None = None) -> dict[str, float]:
     """FIRST EPSS exploit probability per CVE (0..1), fetched in one call for the uncached ones."""
     out, todo = {}, []
+    cache = _cache(cfg)
     for c in cves:
-        hit = _cache().get("epss", c, TTL)
+        hit = cache.get("epss", c, TTL)
         if hit is not None:
             out[c] = hit
         else:
@@ -204,26 +234,26 @@ def epss(cves: list[str]) -> dict[str, float]:
             data = fetch(f"https://api.first.org/data/v1/epss?cve={','.join(chunk)}")
             for row in data.get("data", []):
                 out[row["cve"]] = float(row.get("epss", 0))
-                _cache().put("epss", row["cve"], out[row["cve"]])
+                cache.put("epss", row["cve"], out[row["cve"]])
         except Exception as e:  # noqa: BLE001
             log.debug("epss: %s", e)
     return out
 
 
-def kev() -> set[str]:
+def kev(cfg: KnowledgeConfig | None = None) -> set[str]:
     """CISA Known Exploited Vulnerabilities: the set of CVE ids (cached one day)."""
-    data = _cached("kev", "catalog", lambda: {"ids": [v.get("cveID") for v in fetch("https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json").get("vulnerabilities", [])]}, TTL_KEV)
+    data = _cached("kev", "catalog", lambda: {"ids": [v.get("cveID") for v in fetch("https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json").get("vulnerabilities", [])]}, TTL_KEV, cfg=cfg)
     return set(data.get("ids", []))
 
 
-def deps_dev(system: str, pkg: str, ver: str) -> dict:
+def deps_dev(system: str, pkg: str, ver: str, cfg: KnowledgeConfig | None = None) -> dict:
     """deps.dev cross-check for one package version: advisory ids and licenses."""
     url = (f"https://api.deps.dev/v3/systems/{urllib.parse.quote(system, safe='')}/packages/{urllib.parse.quote(pkg, safe='')}"
            f"/versions/{urllib.parse.quote(ver, safe='')}")
     def load():
         d = fetch(url)
         return {"advisories": [a.get("id") for a in d.get("advisoryKeys", [])], "licenses": d.get("licenses", [])}
-    return _cached("deps_dev", f"{system}:{pkg}@{ver}", load)
+    return _cached("deps_dev", f"{system}:{pkg}@{ver}", load, cfg=cfg)
 
 
 # --- enrichment rounds -------------------------------------------------------------------------------------
@@ -234,13 +264,13 @@ def _functions_from_text(text: str) -> list[str]:
     return list(dict.fromkeys(found))
 
 
-def _enrich_one(a: Anchor) -> Anchor:
+def _enrich_one(a: Anchor, cfg: KnowledgeConfig) -> Anchor:
     name, ver = (a.snippet.split(" ", 1) + [""])[:2]
     eco = _ECOSYSTEM.get(Path(a.file).name, "")
-    ids = list(dict.fromkeys(a.rule_ids or ([a.rule_id] if a.rule_id else []))) or osv_batch([(eco, name, ver)]).get(f"{name}@{ver}", [])
+    ids = list(dict.fromkeys(a.rule_ids or ([a.rule_id] if a.rule_id else []))) or osv_batch([(eco, name, ver)], cfg).get(f"{name}@{ver}", [])
     aliases, fixed, functions, cwes, vectors, scores = [], [], [], [], [], []
     for vid in ids[:10]:  # ponytail: ten advisories per package is plenty for a verdict
-        v = osv_vuln(vid)
+        v = osv_vuln(vid, cfg)
         aliases += [x for x in v.get("aliases", []) if x not in aliases]
         fixed += [f for f in v.get("fixed", []) if f not in fixed]
         cwes += [c for c in v.get("cwes", []) if c not in cwes]
@@ -248,7 +278,7 @@ def _enrich_one(a: Anchor) -> Anchor:
         if v.get("vector"):
             vectors.append(v["vector"])
         if vid.startswith("GHSA-"):
-            g = ghsa(vid)
+            g = ghsa(vid, cfg)
             functions = list(dict.fromkeys(g.get("functions", []) + functions))
             fixed += [f for f in g.get("fixed", []) if f not in fixed]
             if g.get("cvss") is not None:
@@ -257,16 +287,16 @@ def _enrich_one(a: Anchor) -> Anchor:
                 aliases.append(g["cve"])
     cves = [x for x in ids + aliases if x.startswith("CVE-")]
     for cve in cves[:5]:
-        n = nvd_cve(cve)
+        n = nvd_cve(cve, cfg)
         if n.get("cvss") is not None:
             scores.append(float(n["cvss"]))
         cwes += [c for c in n.get("cwes", []) if c not in cwes]
-    ep = epss(cves)
+    ep = epss(cves, cfg)
     e = {"package": name, "version": ver, "ecosystem": eco, "ids": ids, "aliases": aliases,
          "cvss": max(scores) if scores else None, "vector": vectors[0] if vectors else "",
-         "epss": max(ep.values()) if ep else None, "kev": any(c in kev() for c in cves),
+         "epss": max(ep.values()) if ep else None, "kev": any(c in kev(cfg) for c in cves),
          "fixed": fixed, "functions": functions, "cwes": cwes}
-    _cache().put("anchor", a.id, e)
+    _cache(cfg).put("anchor", a.id, e)
     tag = " ".join(x for x in (f"CVSS {e['cvss']}" if e["cvss"] is not None else "",
                                f"EPSS {e['epss']:.2f}" if e["epss"] is not None else "", "KEV" if e["kev"] else "") if x)
     msg = a.message
@@ -277,30 +307,33 @@ def _enrich_one(a: Anchor) -> Anchor:
     return a.model_copy(update={"message": msg, "rule_ids": list(dict.fromkeys(list(a.rule_ids) + ids + aliases))})
 
 
-def enrich(anchors: list[Anchor]) -> list[Anchor]:
+def enrich(anchors: list[Anchor], cfg: KnowledgeConfig | None = None) -> list[Anchor]:
     """Round 1 ids per package (osv-scanner already gives them), round 2 per advisory across sources — anchors in
     parallel (8 threads); non-osv anchors pass through untouched. Enrichment is kept under ('anchor', id)."""
+    cfg = cfg or default_config()
     osv = [a for a in anchors if a.tool == "osv"]
     if not osv:
         return anchors
     with ThreadPoolExecutor(max_workers=8) as ex:
-        done = dict(zip([a.id for a in osv], ex.map(_enrich_one, osv), strict=True))
+        done = dict(zip([a.id for a in osv], ex.map(lambda a: _enrich_one(a, cfg), osv), strict=True))
     return [done.get(a.id, a) if a.tool == "osv" else a for a in anchors]
 
 
-def enrich_if_enabled(anchors: list[Anchor]) -> list[Anchor]:
-    """`scan()` hook: KNOWLEDGE_ENRICH=0 disables; never runs under pytest (tests must not touch the network)."""
-    if os.environ.get("KNOWLEDGE_ENRICH") == "0" or "PYTEST_CURRENT_TEST" in os.environ:
+def enrich_if_enabled(anchors: list[Anchor], cfg: KnowledgeConfig | None = None) -> list[Anchor]:
+    """`scan()` hook: a no-op when `cfg.enabled` is False (KNOWLEDGE_ENRICH=0). Tests keep it off (conftest)
+    or monkeypatch `fetch`; with no `cfg` the process environment decides (compat for static.scan)."""
+    cfg = cfg or default_config()
+    if not cfg.enabled:
         return anchors
     try:
-        return enrich(anchors)
+        return enrich(anchors, cfg)
     except Exception as e:  # noqa: BLE001
         log.warning("knowledge enrichment failed: %s", e)
         return anchors
 
 
-def enrichment_for(anchor_id: str) -> dict:
-    return _cache().get("anchor", anchor_id, float("inf")) or {}
+def enrichment_for(anchor_id: str, cfg: KnowledgeConfig | None = None) -> dict:
+    return _cache(cfg).get("anchor", anchor_id, float("inf")) or {}
 
 
 def reachable_symbols(enrichment: dict, index, entries: list[str]) -> list[tuple[str, list[str] | None]]:

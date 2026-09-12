@@ -20,14 +20,14 @@ SAMPLE = Path(__file__).resolve().parent.parent / "samples" / "02-vulnshop"
 pytestmark = pytest.mark.skipif(shutil.which("gosec") is None, reason="gosec not installed")
 
 
-def _fake_v1(run, target, entries, model, index=None):
+def _fake_v1(run, target, entries, model, index=None, settings=None):
     """Stages off: the queue is the real pre-pass anchors; the fake verifier confirms CWE-89 and rejects the rest."""
     return PipelineV2(verifier=FakeVerifier(name="verify", store=run), store=run, target=str(target),
                       has_anchor=lambda i: run.anchor(i) is not None, has_symbol=lambda s: False, entry_points_fn=list,
                       max_parallel=1, max_hyps=8, max_rounds=1)
 
 
-def _fake_v2(run, target, entries, model, index=None):
+def _fake_v2(run, target, entries, model, index=None, settings=None):
     arch = FakeStage(name="architect", store=run, reply={"entities": [{"name": "shop"}], "vuln_classes": [{"cwe": "CWE-89"}]})
     tm = FakeStage(name="threat_modeler", store=run, reply={"intent": "production", "threats": [
         {"cwe": "CWE-639", "claim": "ghost", "symbol": "nowhere", "priority": 80}]})

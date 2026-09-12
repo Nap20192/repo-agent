@@ -118,11 +118,10 @@ def test_timings_artifact_and_summary(tmp_path):
 
 
 # --- 5. stage timeout ----------------------------------------------------------------------
-def test_slow_stage_is_cancelled_and_pipeline_goes_on(monkeypatch):
-    monkeypatch.setenv("STAGE_TIMEOUT", "0.2")
+def test_slow_stage_is_cancelled_and_pipeline_goes_on():
     run = FakeRun()
     t0 = time.monotonic()
-    state = _run(_v2(run, architect=SlowStage(name="architect"), max_rounds=1))
+    state = _run(_v2(run, architect=SlowStage(name="architect"), max_rounds=1, stage_timeout=0.2))
     assert time.monotonic() - t0 < 0.9
     assert run.artifact("architecture_model") is None
     assert any("stage architecture_model failed" in t for t, _ in notes_of(run))

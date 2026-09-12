@@ -21,6 +21,7 @@ from scanner.adapter.index.callgraph import enclosing, path_to_entry
 from scanner.adapter.index.languages import Language
 from scanner.adapter.index.rpc import LspClient, LspError
 from scanner.core.ports import Symbol
+from scanner.core.settings import Settings
 
 log = logging.getLogger("scanner.lsp")
 
@@ -30,8 +31,6 @@ _CONTAINERS = {"class", "struct", "interface", "module", "enum", "method", "func
 _IDENT = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
 
 
-MAX_FILES = int(os.environ.get("INDEX_MAX_FILES", "3000"))
-MAX_BYTES = int(os.environ.get("INDEX_MAX_BYTES", str(30 * 1024 * 1024)))
 
 
 def _locked(fn):
@@ -44,7 +43,11 @@ def _locked(fn):
 
 
 class LspIndex:
-    def __init__(self, target: Path, language: Language, client_factory=LspClient, timeout: float = 60):
+    def __init__(self, target: Path, language: Language, client_factory=LspClient, timeout: float = 60,
+                 max_files: int | None = None, max_bytes: int | None = None):
+        limits = Settings.from_env()  # index budget: constructor args win, else the configured defaults
+        self.max_files = max_files if max_files is not None else limits.index_max_files
+        self.max_bytes = max_bytes if max_bytes is not None else limits.index_max_bytes
         self.target, self.language, self.timeout = Path(target).resolve(), language, timeout
         self._factory = client_factory
         self._client = None
@@ -198,7 +201,7 @@ class LspIndex:
             deadline = time.monotonic() + self.timeout * 4
             for f in self._files():
                 n, total = n + 1, total + f.stat().st_size
-                if n > MAX_FILES or total > MAX_BYTES or time.monotonic() > deadline:
+                if n > self.max_files or total > self.max_bytes or time.monotonic() > deadline:
                     raise RuntimeError(f"index budget exceeded ({n} files, {total} bytes) — grep fallback")
                 self._client.did_open(f)
                 rel = str(f.relative_to(self.target))
