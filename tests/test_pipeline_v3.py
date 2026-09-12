@@ -67,7 +67,8 @@ def test_threat_modeler_threats_are_grounded_minted_and_intent_normalised():
     assert ThreatModel.model_validate(run.artifact("threat_model")).intent == "sample"
     seen = next(json.loads(t[5:]) for t, _ in notes_of(run) if t.startswith("seen:"))
     assert seen["architecture_model"]["entities"] == []  # runs on the empty model without an Architect
-    assert [h.claim for h in run.hyps[0]][0] == "idor" and "ghost" not in [h.claim for h in run.hyps[0]]
+    claims = [h.claim for h in run.hyps[0]]
+    assert claims[0] == "idor" and "ghost" not in claims
 
 
 # --- plan: queue ----------------------------------------------------------------------------------------------

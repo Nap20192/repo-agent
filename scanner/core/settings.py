@@ -38,6 +38,7 @@ class Settings:
     llm_base_url: str = ""
     llm_model: str = ""
     # graph
+    pipeline: str = "v2"  # "v2" (BaseAgent graph) | "v3" (ADK Workflow graph, card 43)
     max_rounds: int = 4
     max_hyps: int = 8
     max_parallel: int = 3
@@ -83,6 +84,7 @@ class Settings:
             llm_api_key=e.get("LLM_API_KEY", ""),
             llm_base_url=e.get("LLM_BASE_URL", ""),
             llm_model=e.get("LLM_MODEL", ""),
+            pipeline=e.get("PIPELINE") or "v2",
             max_rounds=_int(e, "BUGFINDER_MAX_ROUNDS", 4),
             max_hyps=_int(e, "BUGFINDER_MAX_HYPS", 8),
             max_parallel=_int(e, "BUGFINDER_MAX_PARALLEL", 3),

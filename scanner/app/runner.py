@@ -35,6 +35,7 @@ from scanner.app.domain import new_domain_modeler
 from scanner.app.knowledge_agent import make_consult_knowledge
 from scanner.app.observe import compaction_config, setup_tracing
 from scanner.app.pipeline_v2 import PipelineV2
+from scanner.app.pipeline_v3 import build_workflow
 from scanner.app.settings import Settings, apply_dotenv
 from scanner.app.specialists import architect_overlay, route_name
 from scanner.app.specialists import build as build_specialists
@@ -93,28 +94,30 @@ def build_agent(run, target: Path, entries: list[Candidate], model, index: Index
     specialists = build_specialists(  # the Knowledge consultant is injected at construction (one AgentTool per user)
         model, run, target, index, knowledge_factory=lambda: make_consult_knowledge(model, s.knowledge_max_calls),
     ) if s.specialists else {}
-    return PipelineV2(
-        architect=new_architect(model, architect_tools(run, target, index=index), s.architect_max_calls,
+    kw = {
+        "architect": new_architect(model, architect_tools(run, target, index=index), s.architect_max_calls,
                                 overlay=architect_overlay(langs)) if s.threat_model else None,
-        domain_modeler=new_domain_modeler(model, architect_tools(run, target, index=index), s.domain_modeler_max_calls)
+        "domain_modeler": new_domain_modeler(model, architect_tools(run, target, index=index), s.domain_modeler_max_calls)
         if s.threat_model and s.domain_model else None,
-        threat_modeler=new_threat_modeler(model, [consult_owasp], s.threat_modeler_max_calls) if s.threat_model else None,
-        specialists=specialists,
-        router=route_name,
-        verifier=new_verifier(model, verifier_tools(run, target, index=index), s.verifier_max_calls),
-        critic=new_critic(model, critic_tools(run, target, index=index), s.critic_max_calls) if s.critic else None,
-        store=run,
-        target=str(target),
-        has_anchor=lambda i: run.anchor(i) is not None,
-        has_symbol=has_symbol,
-        locate=index.find_symbol,
-        entry_points_fn=lambda: entries,
-        max_rounds=s.max_rounds,
-        max_hyps=s.max_hyps,
-        max_parallel=s.max_parallel,
-        json_retry=s.json_retry,
-        stage_timeout=s.stage_timeout,
-    )
+        "threat_modeler": new_threat_modeler(model, [consult_owasp], s.threat_modeler_max_calls) if s.threat_model else None,
+        "specialists": specialists,
+        "router": route_name,
+        "verifier": new_verifier(model, verifier_tools(run, target, index=index), s.verifier_max_calls),
+        "critic": new_critic(model, critic_tools(run, target, index=index), s.critic_max_calls) if s.critic else None,
+        "store": run,
+        "target": str(target),
+        "has_anchor": lambda i: run.anchor(i) is not None,
+        "has_symbol": has_symbol,
+        "locate": index.find_symbol,
+        "entry_points_fn": lambda: entries,
+        "max_rounds": s.max_rounds,
+        "max_hyps": s.max_hyps,
+        "max_parallel": s.max_parallel,
+        "stage_timeout": s.stage_timeout,
+    }
+    if s.pipeline == "v3":  # the ADK Workflow graph (card 43); same wiring, the JSON-nudge retry has no v3 equivalent
+        return build_workflow(index=index, **kw)
+    return PipelineV2(json_retry=s.json_retry, **kw)
 
 
 def prepare(target: Path, deps: bool = False, settings: Settings | None = None):

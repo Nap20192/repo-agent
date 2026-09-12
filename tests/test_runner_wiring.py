@@ -31,3 +31,21 @@ def test_specialists_can_be_disabled(tmp_path, monkeypatch):
     monkeypatch.setenv("SPECIALISTS", "0")
     agent = runner.build_agent(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
     assert agent.specialists == {} and agent.router is route_name  # router with no registry → generic fallback
+
+
+def test_pipeline_switch_selects_v2_or_v3(tmp_path, monkeypatch):
+    """PIPELINE=v3 wires the Workflow graph with the same knobs; the default stays the v2 BaseAgent (card 43 step 6)."""
+    from scanner.app.pipeline_v2 import PipelineV2
+    from scanner.app.pipeline_v3 import ScanWorkflow
+    from scanner.core.settings import Settings
+
+    assert Settings.from_env({}).pipeline == "v2" and Settings.from_env({"PIPELINE": "v3"}).pipeline == "v3"
+    monkeypatch.setenv("SPECIALISTS", "0")
+    v2 = runner.build_agent(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
+    assert isinstance(v2, PipelineV2)
+    monkeypatch.setenv("PIPELINE", "v3")
+    v3 = runner.build_agent(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
+    try:
+        assert isinstance(v3, ScanWorkflow) and v3.name == "scan_v3" and v3.index is not None
+    finally:
+        v3.index.close()
