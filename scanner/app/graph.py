@@ -116,7 +116,7 @@ class Graph(BaseAgent):
     verifier: BaseAgent
     critic: BaseAgent | None = None  # adversarial pass over confirmed findings
     # specialists by name + a pure router (item, lang, role) -> (name, instruction suffix); no router = one generic agent
-    specialists: dict[str, BaseAgent] = Field(default_factory=dict)
+    specialists: dict[str, BaseAgent] = Field(default_factory=dict, exclude=True)  # exclude: the dev-UI builder dumps fields as JSON
     router: Router | None = None
     json_retry: bool = True  # one JSON-nudge retry when an activation ends without JSON
     store: RunStore
