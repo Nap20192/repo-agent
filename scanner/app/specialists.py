@@ -14,11 +14,7 @@ from typing import Any
 from google.adk.agents import LlmAgent
 
 from scanner.adapter import static, tools
-from scanner.app.callbacks import (
-    budget_callback,
-    log_tools_callback,
-    tool_window_callback,
-)
+from scanner.app.agents import new_agent
 from scanner.app.instructions import (
     ARCHITECT_OVERLAYS,
     CRITIC_CORE,
@@ -138,15 +134,18 @@ def architect_overlay(langs: set[str]) -> str:
     return "\n".join(ARCHITECT_OVERLAYS[k] for k in keys)
 
 
-def build(model, run, target: Path, index: Index | None) -> dict[str, LlmAgent]:
-    """One LlmAgent per REGISTRY entry, built once per run (clones per activation happen in the graph)."""
+# Specialists that may ask the Knowledge consultant (an AgentTool) open questions about advisories.
+KNOWLEDGE_USERS = frozenset({"dependency", "dependency_critic"})
+
+
+def build(model, run, target: Path, index: Index | None, knowledge_factory: Callable[[], Any] | None = None) -> dict[str, LlmAgent]:
+    """One LlmAgent per REGISTRY entry, built once per run (clones per activation happen in the graph).
+    `knowledge_factory()` returns a fresh Knowledge AgentTool for each KNOWLEDGE_USERS specialist (own budget each)."""
     target = Path(target).resolve()
     out: dict[str, Any] = {}
     for spec in REGISTRY:
-        out[spec.name] = LlmAgent(
-            name=spec.name, description=spec.description, model=model, instruction=spec.instruction,
-            tools=spec.tools_fn(run, target, index), include_contents="none",
-            before_model_callback=[budget_callback(max_calls(spec), per_branch=True), tool_window_callback()],
-            before_tool_callback=log_tools_callback,
-        )
+        spec_tools = spec.tools_fn(run, target, index)
+        if knowledge_factory is not None and spec.name in KNOWLEDGE_USERS:
+            spec_tools.append(knowledge_factory())
+        out[spec.name] = new_agent(spec.name, spec.description, spec.instruction, spec_tools, max_calls(spec), model=model)
     return out

@@ -10,11 +10,7 @@ from google.adk.agents import LlmAgent
 from google.adk.tools.agent_tool import AgentTool
 
 from scanner.adapter import knowledge as kn
-from scanner.app.callbacks import (
-    budget_callback,
-    log_tools_callback,
-    tool_window_callback,
-)
+from scanner.app.agents import new_agent
 
 KNOWLEDGE_INSTRUCTION = """You are the Knowledge consultant of a security scan. You answer ONE question about known
 vulnerabilities using the databases behind your tools; you never read the target's code and never guess an id.
@@ -88,14 +84,9 @@ def new_knowledge_agent(model, max_calls: int = 10) -> LlmAgent:
     tools = [osv_query, ghsa, nvd_cve, epss, kev, deps_dev]
     if os.environ.get("WEB_SEARCH") == "tavily" and os.environ.get("TAVILY_API_KEY"):
         tools.append(web_search)
-    return LlmAgent(
-        name="knowledge",
-        description="answers questions about known vulnerabilities from OSV, GitHub Advisory DB, NVD, EPSS, KEV, deps.dev",
-        model=model, instruction=KNOWLEDGE_INSTRUCTION, tools=tools, include_contents="none",
-        # an AgentTool call is a fresh root invocation (branch None): budget per invocation, not one shared counter
-        before_model_callback=[budget_callback(max_calls, per_invocation=True), tool_window_callback()],
-        before_tool_callback=log_tools_callback,
-    )
+    # an AgentTool call is a fresh root invocation (branch None): budget per invocation, not one shared counter
+    return new_agent("knowledge", "answers questions about known vulnerabilities from OSV, GitHub Advisory DB, NVD, EPSS, KEV, deps.dev",
+                     KNOWLEDGE_INSTRUCTION, tools, max_calls, model=model, per_branch=False, per_invocation=True)
 
 
 def make_consult_knowledge(model, max_calls: int = 10) -> AgentTool:

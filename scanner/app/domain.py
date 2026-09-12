@@ -7,7 +7,7 @@ from collections.abc import Callable
 from google.adk.agents import LlmAgent
 
 from scanner.adapter.domain import consult
-from scanner.app.callbacks import budget_callback, log_tools_callback
+from scanner.app.agents import new_agent
 from scanner.app.instructions import OPERATING_PRINCIPLES
 from scanner.core.domain import DomainMap
 
@@ -37,11 +37,8 @@ Answer with the DomainMap as JSON only: {"entities":[...],"roles":[...],"rules":
 
 
 def new_domain_modeler(model, tools: list, max_calls: int = 12) -> LlmAgent:
-    return LlmAgent(
-        name="domain_modeler", description="turns the domain skeleton + ArchitectureModel into grounded business rules",
-        model=model, instruction=DOMAIN_MODELER_INSTRUCTION, tools=tools, include_contents="none",
-        before_model_callback=budget_callback(max_calls, per_branch=True), before_tool_callback=log_tools_callback,
-    )
+    return new_agent("domain_modeler", "turns the domain skeleton + ArchitectureModel into grounded business rules",
+                     DOMAIN_MODELER_INSTRUCTION, tools, max_calls, model=model, window=False)
 
 
 def make_consult_domain(run, index=None) -> Callable[[str], dict]:
