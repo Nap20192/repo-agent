@@ -266,7 +266,8 @@ SPECIALIST_SECTIONS = {
   callbacks, image fetch, proxies) — an allowlist of scheme+host is the control, a blocklist is not;
   XSS: innerHTML/outerHTML/document.write, `{{{ }}}`/`<%- %>`/`|safe`/dangerouslySetInnerHTML, res.send of
   request text, encoders of the wrong context (HTML-encoding inside a JS string is not a control); stored XSS =
-  a DB read rendered without a context encoder — that alone confirms, no need to find the write;
+  a DB read rendered without a context encoder is the sink, but confirmed still needs the request-controlled
+  write cited (skill wstg-injt-02); a render with no traceable write is `uncertain`;
   redirect: res.redirect/Location with a request URL and no same-origin/allowlist check;
   ReDoS: a regex with nested quantifiers or overlapping alternations applied to request input.
 - Slot rule: the control must match the sink's slot — binds for SQL values, allowlists for identifiers/keywords,

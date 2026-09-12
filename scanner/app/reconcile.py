@@ -336,6 +336,8 @@ def coverage(entry_points: list[Candidate], queue: list[Hypothesis], done: set[s
         h, a = _baseline(where, c.file, c.line, c.symbol, classes, claim, 10)
         hyps.append(h)
         minted.append(a)
+        if c.symbol:
+            covered_syms.add(c.symbol)  # one handler under several routes is one audit
     read = {f for h in [*queue, *hyps] for f in h.reads}
     for f in [f for f in files if f not in read][:FILE_BASELINE_MAX]:
         classes = hunt_classes("", f, "")
