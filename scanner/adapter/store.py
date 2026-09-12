@@ -140,6 +140,24 @@ class Run:
             return f
         return None
 
+    ANNOTATIONS = ("review", "viability", "repro_status", "calibration")
+
+    def annotate(self, finding_id: str, **fields) -> Finding | None:
+        """Merge report-only annotations into a finding (card 45). Dict fields merge key-wise (review keeps earlier
+        keys); anything outside ANNOTATIONS is refused — the verdict changes only through report/disprove."""
+        bad = set(fields) - set(self.ANNOTATIONS)
+        if bad:
+            raise ValueError(f"annotate: {sorted(bad)} are not annotations (verdict fields belong to the gates)")
+        for i, f in enumerate(self.findings(), 1):
+            if f.id != finding_id:
+                continue
+            merged = {k: ({**getattr(f, k), **v} if isinstance(v, dict) else v) for k, v in fields.items()}
+            f = f.model_copy(update=merged)
+            with self.db:
+                self.db.execute("UPDATE findings SET json=? WHERE run=? AND n=?", (f.model_dump_json(), self.id, i))
+            return f
+        return None
+
     def log_gate(self, anchor_id: str, reason: str) -> None:
         with self.db:
             self.db.execute("INSERT INTO gate_log VALUES(?,?,?,?)", (self.id, time.time(), anchor_id, reason))
@@ -181,7 +199,8 @@ class Run:
             "message": {"text": f.title + ("\n" + "\n".join(f.evidence) if f.evidence else "")},
             "locations": [{"physicalLocation": {"artifactLocation": {"uri": f.file}, "region": {"startLine": f.line}}}],
             "properties": {"finding_id": f.id, "anchor_id": f.anchor_id, "confidence": f.confidence,
-                           "source": f.source, "calibration": self._calibrate(f, intent)},
+                           "source": f.source, "calibration": f.calibration or self._calibrate(f, intent),
+                           **{k: getattr(f, k) for k in ("review", "viability", "repro_status") if getattr(f, k)}},
             "taxa": _taxa(f),
             **({"fixes": [{"description": {"text": f.remediation}, "properties": {"url": f.remediation_url}}]}
                if f.remediation else {}),

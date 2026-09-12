@@ -60,6 +60,18 @@ class FakeRun:
                 return self._findings[i]
         return None
 
+    ANNOTATIONS = ("review", "viability", "repro_status", "calibration")
+
+    def annotate(self, fid, **fields):  # mirrors Store.Run.annotate (card 45)
+        if set(fields) - set(self.ANNOTATIONS):
+            raise ValueError("not annotations")
+        for i, f in enumerate(self._findings):
+            if f.id == fid:
+                merged = {k: ({**getattr(f, k), **v} if isinstance(v, dict) else v) for k, v in fields.items()}
+                self._findings[i] = f.model_copy(update=merged)
+                return self._findings[i]
+        return None
+
     def log_gate(self, anchor_id, reason): self.gate.append((anchor_id, reason))
     def add_note(self, text, ref=""): self._notes.append({"time": "t", "text": text, "ref": ref})
     def notes(self): return list(self._notes)
@@ -222,3 +234,37 @@ def _workflow(run, **kw):
         has_anchor=lambda i: run.anchor(i) is not None, has_symbol=kw.pop("has_symbol", lambda s: False),
         entry_points_fn=kw.pop("entry_points_fn", list), **kw,
     )
+
+
+# --- card 45 doubles for the static Shannon graph (route maps, output_schema stages, parallel workers) ----------
+
+def fake_route_node(name: str, route: str):
+    """A route FunctionNode that always emits `route`, passing its input through as the output."""
+    from google.adk.events import Event
+    from google.adk.workflow import FunctionNode
+
+    def pick(node_input):
+        return Event(route=route, output=node_input)
+    return FunctionNode(func=pick, name=name)
+
+
+def fake_schema_stage_node(store, name: str, schema, payload):
+    """An output_schema stage stand-in: validates `payload` against `schema` (raises at construction on a
+    mismatch, like an LlmAgent's final output would fail validation), records what it received, returns the dict."""
+    from google.adk.workflow import FunctionNode
+
+    out = schema.model_validate(payload).model_dump()
+
+    async def stage(ctx, node_input):
+        store.add_note("seen:" + json.dumps(node_input, default=str), name)
+        return out
+    return FunctionNode(func=stage, name=name, rerun_on_resume=True)
+
+
+def fake_parallel_node(name: str, fn, max_parallel_workers: int | None = None):
+    """A @node(parallel_worker=True) over a pure per-item function: list in, list out in input order."""
+    from google.adk.workflow import node
+
+    async def one(ctx, node_input):
+        return fn(node_input)
+    return node(one, parallel_worker=True, max_parallel_workers=max_parallel_workers, rerun_on_resume=True, name=name)

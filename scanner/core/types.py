@@ -124,6 +124,11 @@ class Finding(_Model):
     asvs_id: str = ""  # ASVS 5.0 requirement id (from the hypothesis / CWE map)
     top10: str = ""  # OWASP Top 10 2025 category
     source: Literal["llm", "direct"] = "llm"  # direct: a scanner result reported without an LLM verdict (card 42)
+    # card 45 annotations (report-only, written through RunStore.annotate; the verdict stays with the gates)
+    review: dict = Field(default_factory=dict)  # ReviewVerdict dump: status, checklist, repro_hints
+    viability: str = ""  # VIABLE | CONDITIONAL_VIABLE | NON_VIABLE | SAMPLE_OR_TEST
+    repro_status: str = ""  # statically_confirmed | not_attempted
+    calibration: dict = Field(default_factory=dict)  # filled by the calibrate node; exporters compute it when empty
 
 class Threat(_Model):
     """One modeled threat (ThreatModeler output). Grounding: an anchor match by (file, cwe) or a symbol."""

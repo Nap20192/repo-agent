@@ -137,3 +137,36 @@ def test_reporter_summary_and_sarif(tmp_path):
     run.set_status("f_1", "uncertain", ["critic: safe"])  # disprove → reflected in the summary
     assert json.loads(run.write_summary(tmp_path).read_text())["uncertain"] == 1
     store.close()
+
+
+def test_annotate_merges_fields_and_refuses_verdict_fields(tmp_path):
+    """Card 45: review/viability/confirm write annotations; the verdict (status/evidence/confidence) only through the gates."""
+    import pytest
+
+    run = Store(str(tmp_path / "s.db")).start_run("/t")
+    f = run.report(Finding(anchor_id="a1", cwe="CWE-89", file="m.go", line=3, title="sqli", status=CONFIRMED, confidence=0.9))
+    out = run.annotate(f.id, review={"status": "PROVISIONALLY_VALID", "checklist": {"hypothetical_misuse": {"outcome": "PASS", "reason": ""}}},
+                       viability="CONDITIONAL_VIABLE")
+    assert out.review["status"] == "PROVISIONALLY_VALID" and out.viability == "CONDITIONAL_VIABLE" and out.status == CONFIRMED
+    again = run.annotate(f.id, repro_status="statically_confirmed")
+    assert again.review["status"] == "PROVISIONALLY_VALID" and again.repro_status == "statically_confirmed"  # merge, not replace
+    assert run.findings()[0].repro_status == "statically_confirmed"
+    assert run.annotate("f_nope", viability="VIABLE") is None
+    for bad in ("status", "evidence", "confidence", "id", "anchor_id"):
+        with pytest.raises(ValueError):
+            run.annotate(f.id, **{bad: "x"})
+    with pytest.raises(ValueError):
+        run.annotate(f.id, not_a_field="x")
+
+
+def test_annotations_land_in_sarif_properties(tmp_path):
+    run = Store(str(tmp_path / "s.db")).start_run("/t")
+    f = run.report(Finding(anchor_id="a1", cwe="CWE-89", file="m.go", line=3, title="sqli", status=CONFIRMED, confidence=0.9))
+    run.annotate(f.id, review={"status": "VALID"}, viability="VIABLE", repro_status="statically_confirmed")
+    g = run.report(Finding(anchor_id="a2", cwe="CWE-79", file="v.js", line=8, title="xss", status=CONFIRMED, confidence=0.8))
+    sarif = json.loads(run.write_report(tmp_path).read_text())
+    props = {r["properties"]["finding_id"]: r["properties"] for r in sarif["runs"][0]["results"]}
+    assert props[f.id]["review"] == {"status": "VALID"} and props[f.id]["viability"] == "VIABLE" and props[f.id]["repro_status"] == "statically_confirmed"
+    assert "review" not in props[g.id] and "viability" not in props[g.id]  # empty annotations are not exported
+    summary = json.loads(run.write_summary(tmp_path).read_text())
+    assert summary["findings"][0]["viability"] == "VIABLE"
