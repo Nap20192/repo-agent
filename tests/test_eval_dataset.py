@@ -47,15 +47,15 @@ def test_dry_validates_local_dataset(tmp_path, monkeypatch, capsys):
 def test_ensure_target_refuses_unsafe_urls_and_paths(tmp_path, monkeypatch):
     import pytest
 
-    from scanner import main as m
+    from eval import dataset as m
     monkeypatch.chdir(tmp_path)
     calls = []
     monkeypatch.setattr(m.subprocess, "run", lambda argv, **kw: calls.append((argv, kw)))
     for url in ("ext::sh -c id", "file:///etc", "--upload-pack=id", "http://github.com/a/b", "git@github.com:a/b.git"):
         with pytest.raises(ValueError):
-            m._ensure_target({"target": ".targets/x", "url": url})
+            m.ensure_target({"target": ".targets/x", "url": url})
     with pytest.raises(ValueError):
-        m._ensure_target({"target": str(tmp_path / "elsewhere"), "url": "https://github.com/OWASP/NodeGoat"})
-    m._ensure_target({"target": ".targets/NodeGoat", "url": "https://github.com/OWASP/NodeGoat"})
+        m.ensure_target({"target": str(tmp_path / "elsewhere"), "url": "https://github.com/OWASP/NodeGoat"})
+    m.ensure_target({"target": ".targets/NodeGoat", "url": "https://github.com/OWASP/NodeGoat"})
     argv, kw = calls[0]
     assert argv[:5] == ["git", "clone", "--depth", "1", "--"] and kw["timeout"] and kw["env"]["GIT_TERMINAL_PROMPT"] == "0"

@@ -38,7 +38,7 @@ from scanner.app.agents import (
     new_verifier,
 )
 from scanner.app.domain import make_consult_domain
-from scanner.app.graph import _activation, _text_of, parse_json
+from scanner.app.graph import activation, parse_json, text_of
 from scanner.app.reconcile import KNOWN_WSTG
 from scanner.core import (
     Anchor,
@@ -106,13 +106,13 @@ async def _activate(agent, label: str, payload: dict, probe: Probe, suffix: str 
     """Run one activation like the graph does; returns (final text, tool call names)."""
     cbs = agent.before_model_callback
     agent.before_model_callback = [*(cbs if isinstance(cbs, list) else [cbs] if cbs else []), probe]
-    act = _activation(agent, f"eval_{agent.name}", label, payload, suffix=suffix)
+    act = activation(agent, f"eval_{agent.name}", label, payload, suffix=suffix)
     svc = Runner(app_name="eval", agent=act, session_service=InMemorySessionService())
     await svc.session_service.create_session(app_name="eval", user_id="u", session_id="s")
     text, tools = "", []
     async for ev in svc.run_async(user_id="u", session_id="s", new_message=types.Content(role="user", parts=[types.Part(text="go")])):
         tools += [fc.name for fc in ev.get_function_calls()]
-        text = _text_of(ev) or text
+        text = text_of(ev) or text
     return text, tools
 
 

@@ -16,29 +16,19 @@ from google.adk.agents import BaseAgent, LlmAgent, ParallelAgent
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events import Event, EventActions
 from google.genai import types
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 from scanner import core
 from scanner.adapter import static
 from scanner.adapter.skills import skill_for, skills_for
-from scanner.core import Candidate, Dossier, Finding, Hypothesis
+from scanner.core import Dossier, Finding, Hypothesis
+from scanner.core.ports import Router, RunStore
 
 log = logging.getLogger("scanner.graph")
 
 
-ROUTE_DISPATCH, ROUTE_FINISH = "dispatch", "finish"
 
-class RoundInput(BaseModel):
-    round: int
-    target: str
-    candidates: list[Candidate]
-    last_round: list[Dossier] = Field(default_factory=list)
 
-class RoundOutput(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    hypotheses: list[Hypothesis] = Field(default_factory=list)
-    route: str = ROUTE_FINISH
-    reason: str = ""
 
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
@@ -60,7 +50,7 @@ JSON_NUDGE = "Your previous reply was not valid JSON. Reply with the JSON object
 STATE_JSON_RETRIES = "json_retries"
 
 
-def _activation(agent: BaseAgent, name: str, label: str, payload: dict, suffix: str = "") -> BaseAgent:
+def activation(agent: BaseAgent, name: str, label: str, payload: dict, suffix: str = "") -> BaseAgent:
     """Fresh copy of `agent` for one run: payload goes into the instruction when the agent has one.
     `suffix` is an extra instruction line (e.g. the JSON nudge) placed before the payload."""
     if not isinstance(getattr(agent, "instruction", None), str):
@@ -71,7 +61,7 @@ def _activation(agent: BaseAgent, name: str, label: str, payload: dict, suffix: 
     instr = (lambda _ctx: text) if isinstance(agent, LlmAgent) else text
     return agent.clone(update={"name": name, "instruction": instr})
 
-async def _with_deadline(agen: AsyncGenerator[Event, None], seconds: float) -> AsyncGenerator[Event, None]:
+async def with_deadline(agen: AsyncGenerator[Event, None], seconds: float) -> AsyncGenerator[Event, None]:
     """Re-yield `agen` but give up (asyncio.TimeoutError) once `seconds` have elapsed overall."""
     deadline = time.monotonic() + seconds
     try:
@@ -88,7 +78,7 @@ async def _with_deadline(agen: AsyncGenerator[Event, None], seconds: float) -> A
         await agen.aclose()
 
 
-def _text_of(ev: Event) -> str:
+def text_of(ev: Event) -> str:
     if not ev.content or not ev.content.parts or ev.get_function_calls():
         return ""
     return "".join(p.text or "" for p in ev.content.parts)
@@ -109,7 +99,7 @@ def dossier_from_store(findings: list[Finding], h: Hypothesis) -> Dossier:
         d.verdict, d.finding_id, d.evidence = best.status, best.id, list(best.evidence)
     return d
 
-class _Graph(BaseAgent):
+class Graph(BaseAgent):
     """Shared machinery of both graphs: fan-out activations, hypothesis gate, verify round, critic pass."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -118,8 +108,8 @@ class _Graph(BaseAgent):
     critic: BaseAgent | None = None  # adversarial pass over confirmed findings
     # specialists by name + a pure router (item, lang, role) -> (name, instruction suffix); no router = one generic agent
     specialists: dict[str, BaseAgent] = Field(default_factory=dict)
-    router: Any = None
-    store: Any  # store.Run contract
+    router: Router | None = None
+    store: RunStore
     target: str = ""
     has_anchor: Callable[[str], bool]
     has_symbol: Callable[[str], bool]
@@ -140,7 +130,7 @@ class _Graph(BaseAgent):
         self, ctx: InvocationContext, name: str, agents: list[BaseAgent], out: dict[str, str]
     ) -> AsyncGenerator[Event, None]:
         """Run `agents` in parallel on isolated sub-branches; final text per agent name → out."""
-        # ponytail: ParallelAgent is deprecated for Workflow in ADK 2.9; swap when Workflow accepts dynamic fan-out.
+        # ParallelAgent stays by decision — see docs/adr/0001-parallel-fanout.md (Workflow cannot run inside a BaseAgent).
         par = ParallelAgent(name=name, sub_agents=agents)
         async for ev in par.run_async(ctx):
             if ev.author in {a.name for a in agents} and (t := _text_of(ev)):
@@ -287,3 +277,7 @@ class _Graph(BaseAgent):
             content=types.Content(role="model", parts=[types.Part(text=f"rounds: {rnd}")]),
             actions=EventActions(state_delta={core.STATE_STOP_REASON: stop}),
         )
+
+
+# Deprecated private aliases — kept one release for callers that import the old names.
+_activation, _with_deadline, _text_of, _Graph = activation, with_deadline, text_of, Graph

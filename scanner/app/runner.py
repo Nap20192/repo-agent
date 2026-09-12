@@ -35,7 +35,7 @@ from scanner.app.domain import new_domain_modeler
 from scanner.app.knowledge_agent import make_consult_knowledge
 from scanner.app.observe import compaction_config, setup_tracing
 from scanner.app.pipeline_v2 import PipelineV2
-from scanner.app.specialists import ROUTER, architect_overlay
+from scanner.app.specialists import architect_overlay, route_name
 from scanner.app.specialists import build as build_specialists
 from scanner.core import Candidate
 from scanner.core.ports import Index
@@ -116,7 +116,7 @@ def build_agent(run, target: Path, entries: list[Candidate], model, index: Index
         if tm and os.environ.get("DOMAIN_MODEL") != "0" else None,
         threat_modeler=new_threat_modeler(model, [consult_owasp], _env_int("THREAT_MODELER_MAX_MODEL_CALLS", 6)) if tm else None,
         specialists=specialists,
-        router=ROUTER,
+        router=route_name,
         verifier=new_verifier(model, verifier_tools(run, target, index=index), _env_int("VERIFIER_MAX_MODEL_CALLS", 30)),
         critic=None if os.environ.get("CRITIC") == "0" else
         new_critic(model, critic_tools(run, target, index=index), _env_int("CRITIC_MAX_MODEL_CALLS", 20)),

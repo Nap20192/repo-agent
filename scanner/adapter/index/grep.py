@@ -19,7 +19,7 @@ class GrepIndex:
     def __init__(self, target: Path, extensions: tuple[str, ...] | None = None):
         self.target = Path(target).resolve()
         self.extensions = extensions  # None = every known source extension; else one language's files only
-        self.failed = False
+        self.failed = False  # Degradable contract (core.ports): grep never gives up, so a fallback never engages
 
     def _owns(self, p: Path) -> bool:
         return p.suffix in static.LANG_EXT and (not self.extensions or p.suffix in self.extensions)

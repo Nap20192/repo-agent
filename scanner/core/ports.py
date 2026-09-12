@@ -1,4 +1,7 @@
-"""Ports declared by the core: what the graph and the tools need from a code index.
+"""Ports declared by the core (Cockburn's hexagon): what the graph and the tools need from the outside.
+
+`RunStore` is the run-scoped State; `Router` picks a specialist; `Index` is the code index, split by
+consumer (ISP): `SymbolLocator` (gate, synthetic anchors), `Definitions` (bodies), `CallGraph` (reachability).
 
 `Index` is language-agnostic. Adapters live in scanner/adapter/index: one LSP-backed adapter per
 language (Go, Python, TypeScript, JavaScript), a grep fallback, and a multiplexer that picks the
@@ -8,7 +11,7 @@ adapter by file extension. Symbols are addressed by fully-qualified-ish names as
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -26,20 +29,26 @@ class Symbol(BaseModel):
 
 
 @runtime_checkable
-class Index(Protocol):
+class SymbolLocator(Protocol):
     def find_symbol(self, fqn: str) -> tuple[str, int] | None:
         """(file, line) of the definition, or None when the symbol is not defined in the target."""
 
     def has_symbol(self, fqn: str) -> bool: ...
 
+
+@runtime_checkable
+class Definitions(Protocol):
+    def symbols(self, file: str) -> list[Symbol]:
+        """Definitions declared in one file (relative path)."""
+
     def definition_range(self, fqn: str) -> tuple[str, int, int] | None:
         """(file, start_line, end_line) of the whole definition body, or None."""
 
+
+@runtime_checkable
+class CallGraph(Protocol):
     def references(self, fqn: str) -> list[tuple[str, int, str]]:
         """Call/use sites as (file, line, line_text); [] when unknown or unsupported."""
-
-    def symbols(self, file: str) -> list[Symbol]:
-        """Definitions declared in one file (relative path)."""
 
     def callers(self, fqn: str) -> list[tuple[str, int, str]]:
         """Call sites of fqn as (file, line, calling symbol name); [] when unknown."""
@@ -50,5 +59,46 @@ class Index(Protocol):
     def path_to_entry(self, fqn: str, entries: list[str], max_depth: int = 6) -> list[str] | None:
         """Chain of symbol names [entry, ..., fqn] found by walking callers up to max_depth, else None."""
 
+
+@runtime_checkable
+class Closeable(Protocol):
     def close(self) -> None:
         """Release servers/processes; idempotent."""
+
+
+@runtime_checkable
+class Degradable(Protocol):
+    """An index that can give up (missing server, protocol error) — `failed` lets a fallback take over."""
+
+    failed: bool
+
+
+@runtime_checkable
+class Index(SymbolLocator, Definitions, CallGraph, Closeable, Protocol):
+    """The full code index: every adapter implements all of it; consumers should ask for the part they use."""
+
+
+@runtime_checkable
+class RunStore(Protocol):
+    """Run-scoped State as the graph and the tools use it (scanner.adapter.store.Run implements it)."""
+
+    def anchors(self) -> list[Any]: ...
+    def anchor(self, anchor_id: str) -> Any | None: ...
+    def save_anchors(self, anchors: list[Any]) -> None: ...
+    def put_hypotheses(self, rnd: int, hs: list[Any]) -> None: ...
+    def put_dossiers(self, rnd: int, ds: list[Any]) -> None: ...
+    def findings(self) -> list[Any]: ...
+    def report(self, f: Any) -> Any: ...
+    def set_status(self, finding_id: str, status: str, evidence: list[str], note: str = "") -> Any | None: ...
+    def log_gate(self, anchor_id: str, reason: str) -> None: ...
+    def add_note(self, text: str, ref: str = "") -> None: ...
+    def notes(self) -> list[dict]: ...
+    def put_artifact(self, stage: str, obj: dict) -> None: ...
+    def artifact(self, stage: str) -> dict | None: ...
+
+
+@runtime_checkable
+class Router(Protocol):
+    """Picks a specialist for a hypothesis/finding: (specialist name or "" for the generic fallback, instruction suffix)."""
+
+    def __call__(self, item: Any, lang: str, role: str) -> tuple[str, str]: ...

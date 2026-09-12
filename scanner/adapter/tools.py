@@ -49,38 +49,12 @@ def _default_reader(target: Path):
 
 
 def _default_index(target: Path) -> Index:
-    """The real multiplexer when the index package exists, else a grep-backed minimal Index."""
-    try:
-        from scanner.adapter.index import build_index
+    """The real multiplexer (LSP per language, grep fallback) when a caller passed no Index."""
+    from scanner.adapter.index import (
+        build_index,  # tools ↔ index: import here keeps the module graph acyclic
+    )
 
-        return build_index(target)
-    except ImportError:
-        return _GrepIndex(target)
-
-
-class _GrepIndex:
-    """ponytail: grep-only Index (no bodies, no references) — used until scanner/adapter/index lands."""
-
-    def __init__(self, target: Path):
-        self.target = target
-
-    def find_symbol(self, fqn):
-        return static.find_symbol(self.target, fqn)
-
-    def has_symbol(self, fqn):
-        return static.find_symbol(self.target, fqn) is not None
-
-    def definition_range(self, fqn):
-        return None
-
-    def references(self, fqn):
-        return []
-
-    def symbols(self, file):
-        return []
-
-    def close(self):
-        pass
+    return build_index(target)
 
 
 def _lsp_tools(target: Path, index: Index, entries_fn: Callable[[], list[str]] | None = None) -> list[Callable]:

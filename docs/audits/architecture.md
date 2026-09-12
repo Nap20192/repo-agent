@@ -51,3 +51,33 @@ has one side [HEX; CA ch.11 DIP].
 | `Any` fields [PEP484] | `graph.py store/router`, `pipeline_v2.py index` (bag field for the runner to close) |
 | Flags read deep | `JSON_RETRY`, `STAGE_TIMEOUT`, `PYTEST_CURRENT_TEST`; import-time env `OSV_MAX`, `INDEX_MAX_*` (untestable after import) [GPSG 2.5] |
 | Dead code | `RoundInput/RoundOutput`, `tools._GrepIndex/_default_index`, `reconcile.adversarial_sweep` (tests only), `app/domain.make_consult_domain` (eval only — runner wires the grep heuristic path instead) |
+
+## 4. Naming / readability
+- `specialists.ROUTER` — a function in CAPS [PEP 8]; `route`'s "docstring" sits after a statement → not a docstring [PEP 257].
+- Private names imported across modules: `pipeline_v2` (`_activation`, `_Graph`, `_with_deadline`), `eval/agents.py` (`_activation`, `_text_of`), `grep.py` (`static._DEF_KW`), tests (`tools._lsp_tools`, `static._run_jobs`) [PEP 8; GPSG 2.2].
+- Three modules named `domain` (`core/`, `adapter/`, `app/`) while "domain" also means the DDD leaf [DDD ch. 2].
+- Misleading names: `graph.py` (fan-out/retry/dossier), `static.py` (fs + detectors), `store.Run` (unit-of-work + exporters); `main.py` holds eval logic contra CLAUDE.md "CLI only".
+- `web/fullscan/agent.py`: `sys.path` hack, full pre-pass at import [GPSG 3.17].
+- Docstrings ≈ 55 % of public callables; missing on `static.detect_langs/entry_points/has_symbol/read_lines`, `store.Store/Run` + 14 methods, 3 of 4 `agents.new_*`, `callbacks.log_tools_callback`.
+
+## 5. Tests
+No `conftest.py`. Test modules act as libraries: `tests.test_graph` ← 6 files; `tests.test_tools` ← `test_specialists` (a second `FakeRun`); `tests.test_lsp_index` ← 3 files; `tests.test_stages.Node` ← `test_domain`. `FakeRun` is the de-facto `RunStore` port → make it the Protocol. Positive: per-node tests, roster contract tests, fake LSP client ([HEX] "test per boundary").
+
+## 6. Refactor task list (what — fixes — files — effort — risk)
+1. `RunStore`/`Router`/`Closeable` Protocols in `core/ports.py`; type `_Graph.store/router`, `PipelineV2.index`; assert `FakeRun` conforms — DIP, `Any` — S — low.
+2. Split `Index` → `SymbolLocator`/`Definitions`/`CallGraph`/`Closeable` + `Degradable(failed)`; delete `tools._GrepIndex/_default_index` — ISP, LSP — M — low.
+3. `tests/conftest.py` + `tests/fakes.py` (single FakeRun/FakeVerifier/FakeClient/Node) — test-as-library — M — low.
+4. One CWE taxonomy in `core/types.py`; router and gate derive from it — shotgun surgery — S — med (CWE-352 gate semantics).
+5. `adapter/tools/{gates,code,lsp,common,rosters}.py`; one `_inside`; roster tool sets next to `Specialist` — SRP, duplication — M — low.
+6. `adapter/fs.py` (`files`, `LANG_EXT`, `FILE_CAP`, `read_lines`, `inside`) + `adapter/entrypoints.py` per-language detector table — God module, OCP — M — low.
+7. One `new_agent(...)` factory; Knowledge AgentTool injected at build, not appended — duplication, temporal coupling — S — low.
+8. Runner wires map-backed `consult_domain` with grep fallback in one impl; `tools.consult_knowledge` → `knowledge.osv_vuln` — duplicate impls — S — med (model-visible).
+9. `Settings` built once in runner; no `os.environ` in graph/pipeline/knowledge/static/lsp; drop `PYTEST_CURRENT_TEST` — deep flags — M — low.
+10. `ground_artifacts` over typed models returning a dataclass; `_verify/_stage` return values, not out-dicts — primitive obsession, out-params — M — low.
+11. Eval logic → `eval/dataset.py`; `ROUTER → route_name`; fix `route` docstring; publicize `Graph/activation/with_deadline`; delete `RoundInput/Output` — naming, PEP 8/257 — S — low.
+12. `web/` lazy `prepare()`, drop the `sys.path` hack via pyproject — import side effects — S — low (verify the `adk web` loader).
+
+## ADR candidates
+1. Ports live in `core/ports.py`; app imports adapter concretes only in `runner.py`.
+2. One CWE taxonomy and the consult-requirement rule per CWE.
+3. Index port split (ISP) and the degradable-adapter contract. 4. Settings object as the only env reader. 5. Test fakes as a shared library conforming to the ports.

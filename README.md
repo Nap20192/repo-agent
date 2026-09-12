@@ -12,6 +12,9 @@
 
 ## Слои (`scanner/core` / `adapter` / `app`)
 
+Архитектура, порты, инварианты гейтов и источники (SOLID, Clean/Hexagonal Architecture, PEP, ADK) —
+`docs/architecture.md`; решения — `docs/adr/`; аудиты — `docs/audits/`; план фазы качества — `docs/plans/quality.md`.
+
 - `scanner/core` — типы (`types.py`) и чистые правила (`rules.py`): доменный лист без ADK и I/O.
 - `scanner/adapter` — сканеры → якоря (`static.py`), SQLite State включая таблицу `artifacts`
   для стадий v2 (`store.py`), OWASP-справочник (`owasp.py`), тулы агентов (`tools.py`).

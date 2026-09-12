@@ -1,4 +1,6 @@
-"""v2 graph: Architect → ThreatModeler → Reconciler → Investigator ⇄ queue → Critic → report. No Lead."""
+"""v2 graph: Architect → DomainModeler → ThreatModeler → Reconciler → Investigator ⇄ queue → Critic → report.
+
+Stage artifacts (architecture_model, domain_map, threat_model) are grounded in code before the queue is built."""
 
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ from google.adk.events import Event
 from pydantic import Field
 
 from scanner import core
-from scanner.app.graph import _activation, _Graph, _with_deadline, parse_json
+from scanner.app.graph import Graph, activation, parse_json, with_deadline
 from scanner.app.reconcile import (
     KNOWN_WSTG,
     coverage,
@@ -26,11 +28,12 @@ from scanner.app.reconcile import (
     reconcile,
 )
 from scanner.core import ArchitectureModel, Candidate, Threat, ThreatModel
+from scanner.core.ports import Closeable
 
 log = logging.getLogger("scanner.pipeline_v2")
 
 
-class PipelineV2(_Graph):
+class PipelineV2(Graph):
     """v2 (step 2): no Lead. Reconciler builds one queue from anchors + threats + Verifier new_hypotheses;
     the Investigator (= Verifier) drains it in batches until empty, round limit or budget; then Critic."""
 
@@ -40,7 +43,7 @@ class PipelineV2(_Graph):
     threats: list[Threat] = Field(default_factory=list)  # explicit threats (tests) — merged with the ThreatModel's
     locate: Callable[[str], tuple[str, int] | None] | None = None  # symbol → (file, line) for synthetic anchors
     entry_points_fn: Callable[[], list[Candidate]] | None = None
-    index: Any = None  # the code Index (closed by the runner), not used by the graph itself
+    index: Closeable | None = None  # the code Index (closed by the runner), not used by the graph itself
 
     def __init__(self, name: str = "scan_v2", **kw):
         super().__init__(name=name, **kw)
@@ -57,10 +60,10 @@ class PipelineV2(_Graph):
         t0 = time.monotonic()
         limit = float(os.environ.get("STAGE_TIMEOUT", "600") or 600)
         try:
-            run = self._run_activations(ctx, f"stage_{stage}", [_activation(agent, stage, stage, payload)], texts)
-            async for ev in _with_deadline(run, limit):
+            run = self._run_activations(ctx, f"stage_{stage}", [activation(agent, stage, stage, payload)], texts)
+            async for ev in with_deadline(run, limit):
                 yield ev
-            async for ev in _with_deadline(self._retry_json(ctx, agent, stage, stage, payload, texts), limit):
+            async for ev in with_deadline(self._retry_json(ctx, agent, stage, stage, payload, texts), limit):
                 yield ev
         except Exception as e:  # noqa: BLE001 — a failed/slow model stage degrades to "no artifact", the scan goes on
             log.warning("stage %s failed: %s", stage, e)

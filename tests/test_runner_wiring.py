@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from scanner.app import runner
-from scanner.app.specialists import REGISTRY, ROUTER
+from scanner.app.specialists import REGISTRY, route_name
 from tests.test_graph import FakeRun
 
 
@@ -17,7 +17,7 @@ def test_build_agent_wires_specialists(tmp_path, monkeypatch):
     monkeypatch.delenv("SPECIALISTS", raising=False)
     agent = runner.build_agent(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
     try:
-        assert set(agent.specialists) == {s.name for s in REGISTRY} and agent.router is ROUTER
+        assert set(agent.specialists) == {s.name for s in REGISTRY} and agent.router is route_name
         assert agent.domain_modeler is not None and agent.architect is not None
         assert "Go" in agent.architect.instruction  # stack overlay appended for a Go target
         names = {getattr(t, "name", getattr(t, "__name__", "")) for t in agent.specialists["dependency"].tools}
@@ -30,4 +30,4 @@ def test_build_agent_wires_specialists(tmp_path, monkeypatch):
 def test_specialists_can_be_disabled(tmp_path, monkeypatch):
     monkeypatch.setenv("SPECIALISTS", "0")
     agent = runner.build_agent(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
-    assert agent.specialists == {} and agent.router is ROUTER  # router with no registry → generic fallback
+    assert agent.specialists == {} and agent.router is route_name  # router with no registry → generic fallback

@@ -108,8 +108,8 @@ def lang_of(files: list[str]) -> str:
 
 
 def route(item: Hypothesis | Finding, lang: str = "", role: str = "investigate", kind: str = "") -> tuple[Specialist, str]:
-    lang = _OVERLAY_OF.get(lang, lang)  # the graph passes static.LANG_EXT names (javascript/typescript → node)
     """Most specific first: CWE → kind → generic fallback. Returns (specialist, language overlay suffix)."""
+    lang = _OVERLAY_OF.get(lang, lang)  # the graph passes static.LANG_EXT names (javascript/typescript → node)
     kind = kind or getattr(item, "kind", "")
     cwe = (item.cwe or "").upper()
     candidates = [s for s in REGISTRY if s.role == role]
@@ -119,10 +119,13 @@ def route(item: Hypothesis | Finding, lang: str = "", role: str = "investigate",
     return chosen, LANG_OVERLAYS.get(lang, "")
 
 
-def ROUTER(item: Hypothesis | Finding, lang: str = "", role: str = "investigate", kind: str = "") -> tuple[str, str]:
+def route_name(item: Hypothesis | Finding, lang: str = "", role: str = "investigate", kind: str = "") -> tuple[str, str]:
     """Graph-facing router: (specialist name, overlay suffix); "" as the name means the generic fallback."""
     spec, suffix = route(item, lang, role, kind)
     return (spec.name if spec.name in BY_NAME else "", suffix)
+
+
+ROUTER = route_name  # deprecated alias, remove after the next release
 
 
 def max_calls(spec: Specialist) -> int:
