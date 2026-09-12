@@ -40,7 +40,7 @@ def test_build_agent_returns_the_workflow_with_its_index(tmp_path, monkeypatch):
     monkeypatch.setenv("SPECIALISTS", "0")
     wf = runner.build_agent(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
     try:
-        assert isinstance(wf, ScanWorkflow) and wf.name == "scan_v3" and wf.index is not None
+        assert isinstance(wf, ScanWorkflow) and wf.name == "scan" and wf.index is not None
     finally:
         wf.index.close()
 

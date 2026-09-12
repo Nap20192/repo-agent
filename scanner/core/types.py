@@ -1,6 +1,6 @@
 """Domain types (pydantic, tolerant of extra fields) and constants. No ADK, no I/O.
 
-Ported from git-agent3 internal/core; v2 artifacts (Threat, ArchitectureModel, ThreatModel) live here too."""
+Ported from git-agent3 internal/core; the modelling artifacts (Threat, ArchitectureModel, ThreatModel) live here too."""
 
 from __future__ import annotations
 

@@ -193,7 +193,7 @@ def test_plan_grounds_artifacts_before_the_queue():
 def test_workflow_is_a_four_node_graph():
     from google.adk.workflow import Workflow
     wf = _workflow(FakeRun())
-    assert isinstance(wf, Workflow) and wf.name == "scan_v3"
+    assert isinstance(wf, Workflow) and wf.name == "scan"
     names = {n.name for e in wf.edges for n in e if hasattr(n, "name")}
     assert {"build_skeleton", "plan", "investigate", "finish"} <= names
 

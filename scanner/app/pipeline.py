@@ -204,7 +204,7 @@ def build_workflow(
                 still = sum(1 for f in store.findings() if f.status == core.CONFIRMED and f.source != "direct")
                 log.info("critic: %d confirmed → %d survived", len(confirmed), still)
         if res.stop:
-            log.warning("scan_v3: finish (%s)", res.stop)
+            log.warning("scan: finish (%s)", res.stop)
         ctx.state[core.STATE_STOP_REASON] = res.stop
         store.put_artifact("timings", timings)
         return Report(rounds=res.rounds, stop_reason=res.stop, timings=timings).model_dump()
@@ -212,4 +212,4 @@ def build_workflow(
     a = build_skeleton_node(store, target, entry_points_fn)
     b, c, d = (node(f, rerun_on_resume=True, name=f.__name__) for f in (plan, investigate, finish))
     # no state_schema: ADK rejects undeclared keys, and the budget callback writes per-branch keys (`budget_exhausted:<branch>`)
-    return ScanWorkflow(name="scan_v3", edges=[(START, a), (a, b), (b, c), (c, d)], index=index)
+    return ScanWorkflow(name="scan", edges=[(START, a), (a, b), (b, c), (c, d)], index=index)

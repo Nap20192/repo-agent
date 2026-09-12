@@ -1,4 +1,4 @@
-"""Reconciler (v2): two candidate streams — scanner Anchors and modeled Threats — plus Verifier
+"""Reconciler: two candidate streams — scanner Anchors and modeled Threats — plus Verifier
 new_hypotheses, merged into one prioritized queue of Hypotheses without duplicates. Pure functions."""
 
 from __future__ import annotations

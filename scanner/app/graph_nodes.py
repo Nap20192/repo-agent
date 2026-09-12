@@ -1,5 +1,5 @@
 """Nodes of the ADK 2.9 Workflow graph (card 43, docs/plans/workflow-migration.md §2/§4), built per run by
-factories that close over the RunStore and the wired agents — the graph itself is assembled in pipeline v3.
+factories that close over the RunStore and the wired agents — the graph itself is assembled in scanner.app.pipeline.
 
 Deterministic steps are FunctionNodes (`build_skeleton`, `direct_findings`); the fan-outs are parallel-worker
 nodes (`route_and_verify`, `route_and_critique`) that route each item to a specialist in code, run it with
