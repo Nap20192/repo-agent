@@ -4,6 +4,7 @@ finding validation, consult requirements, secret redaction."""
 from __future__ import annotations
 
 import hashlib
+import html
 import re
 
 from scanner.core.types import (
@@ -141,6 +142,15 @@ def required_consults(a: Anchor) -> tuple[bool, bool, str]:
     elif cwe in TAINT_CWES and not knowledge:
         reasons.append(f"taint class ({cwe}): proven by code path")
     return knowledge, domain, "; ".join(reasons) or "no consult rule for this class"
+
+_QUOTE_PREFIX = re.compile(r"^[\w./\\-]+:\d+:\s*")
+
+
+def bare_quote(evidence: str) -> str:
+    """Evidence line → the code text to match: a leading `path:line:` prefix (the shape agents are told to use)
+    and HTML entities (some models emit `=&gt;`) are removed, whitespace trimmed."""
+    return html.unescape(_QUOTE_PREFIX.sub("", evidence.strip())).strip()
+
 
 _SECRET = re.compile(r"[A-Za-z0-9_\-+/=]{16,}")
 

@@ -2,6 +2,7 @@
 
 from scanner.core.calibrate import calibrate, exposure_for, priority
 from scanner.core.rules import (
+    bare_quote,
     check_consulted,
     consult_required,
     ground_hypothesis,
@@ -80,6 +81,7 @@ __all__ = [
     "ThreatModel",
     "Tool",
     "VulnClass",
+    "bare_quote",
     "calibrate",
     "check_consulted",
     "consult_required",

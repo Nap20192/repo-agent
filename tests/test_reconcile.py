@@ -70,9 +70,10 @@ def test_coverage_baselines_uncovered_entry_points():
            Candidate(kind="entry", symbol="", file="x.go", line=1)]
     queue = [Hypothesis(kind="sink", cwe="CWE-89", claim="x", anchor_id="a_sql", reads=["main.go"])]
     out, minted = coverage(eps, queue, done={"pingHandler|CWE-78"})
-    assert [h.symbol for h in out] == ["adminHandler", ""] and len(minted) == 1  # main.go read, ping done, x.go minted
-    assert out[0].kind == "entry" and out[0].priority == 10 and out[0].reads == ["admin.go"] and "adminHandler" in out[0].claim
-    assert core.ground_hypothesis(out[0], lambda i: False, lambda s: s == "adminHandler") is None  # gate accepts a real symbol
+    # ping done; searchHandler is NOT covered by an anchor merely living in main.go (symbol rule); x.go minted
+    assert [h.symbol for h in out] == ["searchHandler", "adminHandler", ""] and len(minted) == 1
+    assert out[1].kind == "entry" and out[1].priority == 10 and out[1].reads == ["admin.go"] and "adminHandler" in out[1].claim
+    assert core.ground_hypothesis(out[1], lambda i: False, lambda s: s == "adminHandler") is None  # gate accepts a real symbol
 
 
 def test_adversarial_sweep_is_deterministic_fraction():
@@ -104,7 +105,7 @@ def test_coverage_examines_every_route_of_a_file_with_an_anchor():
            Candidate(kind="entry", file="server.js", line=20, route=["GET /ping"]),
            Candidate(kind="entry", file="server.js", line=30, route=["GET /file"])]
     hyps, minted = coverage(eps, reconcile(from_anchors(anchors), [], set()), set())
-    assert [h.reads for h in hyps] == [["server.js"], ["server.js"]] and len(minted) == 2  # inline routes still examined
+    assert [h.reads for h in hyps] == [["server.js"]] * 3 and len(minted) == 2  # the handler and both inline routes examined
     assert {a.line for a in minted} == {20, 30}
 
 
@@ -211,3 +212,32 @@ def test_split_direct_caps_each_tool_by_severity():
                  file="b", line=i) for i in range(5)]
     direct, rest = split_direct([*ls, *sg, Anchor(id="m", tool="semgrep", rule_id="r", cwe="CWE-79", severity="medium", file="c", line=1)], max_per_tool=2)
     assert [a.id for a in direct] == ["g0", "g1", "s0", "s4"] and [a.id for a in rest] == ["m"]  # input order kept
+
+
+def test_coverage_examines_every_handler_of_a_file_with_an_anchor():
+    """NodeGoat run 17: one open-redirect anchor in routes/index.js must not mark its 20 handlers as covered."""
+    from scanner.app.reconcile import coverage
+    from scanner.core import Candidate
+    anchors = [Anchor(id="a_r", tool="semgrep", cwe="CWE-601", severity="medium", file="index.js", line=72)]
+    eps = [Candidate(kind="entry", file="index.js", line=34, symbol="handleLoginRequest", route=["POST /login"]),
+           Candidate(kind="entry", file="index.js", line=48, symbol="handleProfileUpdate", route=["POST /profile"])]
+    hyps, _ = coverage(eps, reconcile(from_anchors(anchors), [], set()), set())
+    assert [h.symbol for h in hyps] == ["handleLoginRequest", "handleProfileUpdate"]
+
+
+def test_direct_osv_title_keeps_advisory_ids_and_gitleaks_is_redacted():
+    from scanner.app.reconcile import direct_finding
+    osv = Anchor(id="o", tool="osv", rule_id="GHSA-23hp-3jrh-7fpw", rule_ids=["GHSA-23hp-3jrh-7fpw"], severity="high",
+                 file="package-lock.json", line=1, snippet="tar 4.4.8", message="tar@4.4.8: 1 advisories (GHSA-23hp-3jrh-7fpw)")
+    assert "GHSA-23hp-3jrh-7fpw" in direct_finding(osv).title
+    leak = Anchor(id="g", tool="gitleaks", rule_id="generic-api-key", cwe="CWE-798", severity="high", file="cfg.js", line=6,
+                  snippet='apiKey: "v9dnABCDEFGHIJKLMNOPQRSTUV"')
+    f = direct_finding(leak)
+    assert "v9dnABCDEFGHIJKLMNOPQRSTUV" not in f.evidence[0] and "v9dn" in f.evidence[0]
+
+
+def test_bare_quote_strips_location_prefix_and_html_entities():
+    from scanner.core import bare_quote
+    assert bare_quote("app/routes/c.js:33:        const afterTax = eval(req.body.afterTax);") == "const afterTax = eval(req.body.afterTax);"
+    assert bare_quote("    app.get(\"/learn\", isLoggedIn, (req, res) =&gt; {") == 'app.get("/learn", isLoggedIn, (req, res) => {'
+    assert bare_quote("owasp:WSTG-INJT-11") == "owasp:WSTG-INJT-11"

@@ -79,7 +79,9 @@ def direct_finding(a: Anchor, enrichment: dict | None = None, imported_by: int |
     not computed). Secrets are redacted in title and evidence."""
     e = enrichment or {}
     at = f"{a.file}:{a.line}"
-    evidence = [f"{at}: {core.redact_secrets(a.snippet)}" if a.snippet else at]
+    secret = a.tool == "gitleaks" or a.cwe == "CWE-798"
+    red = core.redact_secrets if secret else (lambda s: s)  # advisory ids and package names are not secrets
+    evidence = [f"{at}: {red(a.snippet)}" if a.snippet else at]
     title, severity, cwe = a.message or a.rule_id, a.severity, a.cwe
     if a.tool == "osv":
         ids = [i for i in dict.fromkeys([*(a.rule_ids or [a.rule_id]), *e.get("aliases", [])]) if i]
@@ -99,7 +101,7 @@ def direct_finding(a: Anchor, enrichment: dict | None = None, imported_by: int |
     elif a.tool == "gitleaks":
         title = f"Hardcoded secret ({a.rule_id}) in {a.file}"
         cwe = a.cwe or "CWE-798"
-    return Finding(anchor_id=a.id, cwe=cwe, file=a.file, line=a.line, title=core.redact_secrets(title),
+    return Finding(anchor_id=a.id, cwe=cwe, file=a.file, line=a.line, title=red(title),
                    severity=severity, status=core.CONFIRMED, evidence=evidence, confidence=1.0, source="direct")
 
 
@@ -280,11 +282,10 @@ def coverage(entry_points: list[Candidate], queue: list[Hypothesis], done: set[s
     PHP pages that have no symbol — on a synthetic anchor (tool "entrypoint") minted at file:line so the
     anchor-only gate still applies. Returns (hypotheses, minted anchors)."""
     covered_syms = {h.symbol for h in queue if h.symbol} | {k.split("|", 1)[0] for k in done if "|" in k}
-    covered_files = {f for h in queue for f in h.reads}
     hyps: list[Hypothesis] = []
     minted: list[Anchor] = []
     for c in entry_points:
-        if (c.symbol and (c.symbol in covered_syms or c.file in covered_files)) or (not c.symbol and not c.file):
+        if (c.symbol and c.symbol in covered_syms) or (not c.symbol and not c.file):  # a file's anchor covers no handler
             continue
         where = c.symbol or " ".join(c.route) or c.file
         claim = f"Baseline: untrusted input entering {where} ({c.file}:{c.line}) reaches a dangerous sink unsanitized"

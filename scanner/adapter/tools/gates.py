@@ -43,8 +43,8 @@ def gate_finding(run, read: Callable[[str, int], str], draft: Finding) -> str | 
             return f"cannot read {a.file}:{a.line} to verify evidence: {e}"
         if secret:
             code = core.redact_secrets(code)
-        quotes = [e.strip() for e in f.evidence if e.strip() and not core.is_consult_ref(e)]
-        if not any(q in code for q in quotes):
+        quotes = [core.bare_quote(e) for e in f.evidence if e.strip() and not core.is_consult_ref(e)]
+        if not any(q and q in code for q in quotes):
             return f"evidence does not match the code at {a.file}:{a.line} — quote the lines exactly as read"
     if r := core.validate_finding(f):
         return r
