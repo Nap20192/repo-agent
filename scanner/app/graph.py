@@ -289,7 +289,7 @@ class Graph(BaseAgent):
             except Exception as e:  # noqa: BLE001 — critic failure never loses confirmed findings
                 log.warning("critic chunk %d failed: %s", ci, e)
                 self.store.add_note(f"critic chunk {ci} failed: {e}")
-        still = sum(1 for f in self.store.findings() if f.status == core.CONFIRMED)
+        still = sum(1 for f in self.store.findings() if f.status == core.CONFIRMED and f.source != "direct")
         log.info("critic: %d confirmed → %d survived", len(confirmed), still)
 
     async def _finish(self, ctx: InvocationContext, stop: str, rnd: int, timings: dict | None = None) -> AsyncGenerator[Event, None]:
