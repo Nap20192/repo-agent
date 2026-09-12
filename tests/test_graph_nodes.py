@@ -1,9 +1,10 @@
 """Card 43 steps 3–4: the Workflow nodes, run one at a time under the real ADK Runner with the fakes."""
 
+from scanner import core
 from scanner.app import graph_nodes
-from scanner.core import Anchor, Candidate
+from scanner.core import Anchor, Candidate, Dossier, Finding, Hypothesis
 from scanner.core.workflow import ScanSkeleton
-from tests.fakes import A1, A2, FakeRun, _run_node
+from tests.fakes import A1, A2, FakeRun, _run_node, notes_of
 
 OSV = Anchor(id="a_osv", tool="osv", rule_id="GHSA-x", rule_ids=["GHSA-x"], severity="high", file="package-lock.json",
              line=1, snippet="lodash 4.17.11", message="lodash@4.17.11: 1 advisories")
@@ -25,3 +26,72 @@ def test_direct_findings_node_reports_without_the_model_and_returns_the_rest():
     assert [f.anchor_id for f in run.findings()] == ["a_osv"] and run.findings()[0].source == "direct"
     assert out["reported"] == ["f_1"] and [a["id"] for a in out["remaining"]] == ["a_1"]
     assert run.artifact("direct_findings") == {"ids": ["f_1"]}
+
+
+# --- step 4: parallel-worker nodes -------------------------------------------------------------------------
+
+def _verifier_node(store, fail: bool = False):
+    """Node-shaped specialist double: confirms CWE-89 through the store, returns a Dossier dict; or raises."""
+    from google.adk.workflow import FunctionNode
+
+    async def fake(ctx, node_input: dict) -> dict:
+        if fail:
+            raise RuntimeError("boom")
+        h = node_input
+        status = core.CONFIRMED if h["cwe"] == "CWE-89" else core.REJECTED
+        store.report(Finding(anchor_id=h["anchor_id"], hypothesis_id=h["id"], cwe=h["cwe"], file="main.go",
+                             title="t", status=status, evidence=["db.Query(x)"]))
+        return {"hypothesis_id": h["id"], "verdict": status, "notes": "seen " + h["specialist"],
+                "new_hypotheses": [{"kind": "sink", "cwe": "CWE-89", "claim": "dup", "anchor_id": "a_1"}]}
+    return FunctionNode(func=fake, name="fake_fail" if fail else "fake_ok", rerun_on_resume=True)
+
+
+def _router(item, lang, role):
+    return ("taint", "overlay") if getattr(item, "cwe", "") == "CWE-89" else ("", "")
+
+
+def test_route_and_verify_routes_contains_failures_and_keeps_order():
+    run = FakeRun([A1, A2])
+    node = graph_nodes.route_and_verify_node(run, verifier=_verifier_node(run, fail=True),
+                                             specialists={"taint": _verifier_node(run)}, router=_router, max_parallel=2)
+    hs = [Hypothesis(id="h0-1", kind="sink", cwe="CWE-89", anchor_id="a_1", reads=["main.go"]),
+          Hypothesis(id="h0-2", kind="sink", cwe="CWE-78", anchor_id="a_2", reads=["main.go"])]
+    outs = _run_node(node, [h.model_dump() for h in hs])
+    ds = [Dossier.model_validate(d) for d in outs[-1]]
+    assert [d.hypothesis_id for d in ds] == ["h0-1", "h0-2"]  # batch order, not completion order
+    assert ds[0].verdict == core.CONFIRMED and ds[0].finding_id == "f_1" and ds[0].specialist == "taint"
+    assert ds[0].notes == "seen taint" and ds[0].new_hypotheses[0].anchor_id == "a_1"
+    assert ds[1].verdict == core.UNCERTAIN and "boom" in ds[1].error and ds[1].specialist == ""
+    assert len(run.findings()) == 1  # the failing generic verifier reported nothing
+
+
+def test_route_and_verify_verdict_comes_from_the_store_not_the_model_text():
+    run = FakeRun([A1])
+    from google.adk.workflow import FunctionNode
+
+    async def prose(ctx, node_input: dict) -> str:
+        run.report(Finding(anchor_id="a_1", hypothesis_id="h0-1", cwe="CWE-89", file="main.go", title="t",
+                           status=core.CONFIRMED, evidence=["db.Query(x)"]))
+        return "I confirmed it but forgot the JSON"
+    node = graph_nodes.route_and_verify_node(run, verifier=FunctionNode(func=prose, name="prose", rerun_on_resume=True),
+                                             specialists={}, router=None, max_parallel=0)
+    d = Dossier.model_validate(_run_node(node, [Hypothesis(id="h0-1", kind="sink", cwe="CWE-89", anchor_id="a_1").model_dump()])[-1][0])
+    assert d.verdict == core.CONFIRMED and d.finding_id == "f_1" and d.error == ""
+
+
+def test_route_and_critique_runs_specialist_critics_and_notes_them():
+    run = FakeRun([A1])
+    f = run.report(Finding(anchor_id="a_1", cwe="CWE-89", file="main.go", title="t", status=core.CONFIRMED, evidence=["e"]))
+    from google.adk.workflow import FunctionNode
+
+    async def critic(ctx, node_input: dict) -> dict:
+        assert node_input["finding"]["status"] == core.CONFIRMED and node_input["anchor"]["id"] == "a_1"
+        run.set_status(node_input["finding"]["id"], core.UNCERTAIN, ["critic: parameterized"])
+        return {"finding_id": node_input["finding"]["id"], "disproved": True}
+    node = graph_nodes.route_and_critique_node(run, critic=FunctionNode(func=critic, name="c", rerun_on_resume=True),
+                                               specialists={"taint_critic": FunctionNode(func=critic, name="tc", rerun_on_resume=True)},
+                                               router=lambda item, lang, role: ("taint_critic", ""), max_parallel=1)
+    outs = _run_node(node, [f.model_dump()])
+    assert outs[-1] == [{"finding_id": "f_1", "specialist": "taint_critic", "error": ""}]
+    assert run.findings()[0].status == core.UNCERTAIN
+    assert ("critic:taint_critic reviewed f_1", "f_1") in notes_of(run)

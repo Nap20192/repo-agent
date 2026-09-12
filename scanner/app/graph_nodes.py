@@ -12,12 +12,14 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from google.adk.workflow import FunctionNode
+from google.adk.workflow import FunctionNode, node
 
 from scanner.adapter.knowledge import enrichment_for, imported_by
+from scanner.adapter.skills import skill_for, skills_for
+from scanner.app.graph import dossier_from_store, parse_json, pick_agent
 from scanner.app.reconcile import direct_finding, split_direct
-from scanner.core import Anchor, Candidate
-from scanner.core.ports import RunStore
+from scanner.core import Anchor, Candidate, Dossier, Finding, Hypothesis
+from scanner.core.ports import Router, RunStore
 from scanner.core.workflow import ScanSkeleton
 
 log = logging.getLogger("scanner.graph_nodes")
@@ -65,3 +67,72 @@ def direct_findings_node(store: RunStore, target: str) -> FunctionNode:
         direct, rest = split_direct([Anchor.model_validate(a) for a in node_input])
         return {"remaining": [a.model_dump() for a in rest], "reported": report_direct(store, target, direct)}
     return FunctionNode(func=direct_findings, name="direct_findings", rerun_on_resume=True)
+
+
+def _why(e: Exception) -> str:
+    """ADK wraps a dynamic node's exception (DynamicNodeFailError.error): keep the original message."""
+    cause = getattr(e, "error", None)
+    return f"{e}: {cause}" if cause is not None else str(e)
+
+
+def _model_json(out) -> dict | None:
+    """The model's JSON from a node output: a dict (FunctionNode/output_schema), text (LlmAgent) or nothing."""
+    if isinstance(out, dict):
+        return out
+    return parse_json(out) if isinstance(out, str) else None
+
+
+def route_and_verify_node(store: RunStore, verifier, specialists: dict, router: Router | None, max_parallel: int):
+    """Investigator fan-out: one hypothesis dict in, one Dossier dict out; ADK runs the items ≤ max_parallel at a
+    time. Verdict from STORE facts (report_finding/disprove_finding wrote them); the model's JSON only adds
+    notes/new_hypotheses; a failing item yields an error dossier instead of cancelling the batch."""
+    async def route_and_verify(ctx, node_input: dict) -> dict:
+        h = Hypothesis.model_validate(node_input)
+        agent, name, suffix = pick_agent(h, "investigate", specialists, router, verifier)
+        payload = {**h.model_dump(), "skill": skill_for(h.cwe, h.kind), "skills": skills_for(h.cwe, h.kind), "specialist": name}
+        if suffix:
+            payload["instructions"] = suffix  # language overlay, once an instruction append at clone time
+        out, err = None, ""
+        try:
+            out = await ctx.run_node(agent, payload, run_id=f"verify_{h.id}")
+        except Exception as e:  # noqa: BLE001 — one lost hypothesis must not cancel the batch (ADK raises the first)
+            err = _why(e)
+        d = dossier_from_store(store.findings(), h).model_copy(update={"specialist": name})
+        if (md := _model_json(out)) is not None:
+            try:
+                m = Dossier.model_validate(md)
+                d.notes, d.new_hypotheses = m.notes, m.new_hypotheses
+            except ValueError as e:
+                d.error = f"invalid Dossier JSON: {e}"
+        elif not d.finding_id:  # nothing in the store and no JSON: the verifier never got there
+            d.error = err or "no Dossier JSON and nothing reported"
+        if d.error:
+            log.warning("verify %s: %s", h.id, d.error)
+        return d.model_dump()
+    return node(route_and_verify, parallel_worker=True, max_parallel_workers=max_parallel or None,
+                rerun_on_resume=True, name="route_and_verify")
+
+
+def route_and_critique_node(store: RunStore, critic, specialists: dict, router: Router | None, max_parallel: int):
+    """Critic fan-out over confirmed findings: {finding, anchor, specialist, skills} → the (specialist) critic;
+    verdict changes land in the store through disprove_finding. Output per item: finding id, specialist, error."""
+    async def route_and_critique(ctx, node_input: dict) -> dict:
+        f = Finding.model_validate(node_input)
+        a = store.anchor(f.anchor_id)
+        agent, name, suffix = pick_agent(f, "critique", specialists, router, critic)
+        payload = {"finding": f.model_dump(), "anchor": a.model_dump() if a else None, "specialist": name,
+                   "skills": skills_for(f.cwe, "", "critique")}
+        if suffix:
+            payload["instructions"] = suffix
+        if name:
+            store.add_note(f"critic:{name} reviewed {f.id}", f.id)
+        err = ""
+        try:
+            await ctx.run_node(agent, payload, run_id=f"critic_{f.id}")
+        except Exception as e:  # noqa: BLE001 — critic failure never loses confirmed findings
+            err = _why(e)
+            log.warning("critic %s failed: %s", f.id, err)
+            store.add_note(f"critic {f.id} failed: {err}", f.id)
+        return {"finding_id": f.id, "specialist": name, "error": err}
+    return node(route_and_critique, parallel_worker=True, max_parallel_workers=max_parallel or None,
+                rerun_on_resume=True, name="route_and_critique")

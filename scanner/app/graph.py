@@ -94,6 +94,22 @@ def text_of(ev: Event) -> str:
 
 _RANK = {core.CONFIRMED: 2, core.REJECTED: 1}
 
+def pick_agent(item, role: str, specialists: dict, router: Router | None, fallback):
+    """(agent, specialist name or "", instruction suffix): the router's choice for `item` (a Hypothesis for
+    role "investigate", a Finding for "critique") among `specialists`, else the generic `fallback`."""
+    if router is None:
+        return fallback, "", ""
+    files = list(getattr(item, "reads", None) or []) or [getattr(item, "file", "") or ""]
+    lang = next((fs.LANG_EXT[s] for f in files if (s := "." + f.rsplit(".", 1)[-1]) in fs.LANG_EXT), "")
+    name, suffix = router(item, lang, role)
+    agent = specialists.get(name) if name else None
+    if agent is None:
+        if name:
+            log.warning("router: unknown specialist %r for %s — using the generic %s", name, role, getattr(fallback, "name", "?"))
+        return fallback, "", ""
+    return agent, name, suffix
+
+
 def dossier_from_store(findings: list[Finding], h: Hypothesis) -> Dossier:
     """Verdict from facts: findings bound to the hypothesis (id, else anchor without foreign id)."""
     d = Dossier(hypothesis_id=h.id)
@@ -167,17 +183,7 @@ class Graph(BaseAgent):
     def _pick(self, item, role: str) -> tuple[BaseAgent | None, str, str]:
         """(agent, specialist name or "", instruction suffix): the router's choice, else the generic fallback."""
         fallback = self.verifier if role == "investigate" else self.critic
-        if self.router is None:
-            return fallback, "", ""
-        files = list(getattr(item, "reads", None) or []) or [getattr(item, "file", "") or ""]
-        lang = next((fs.LANG_EXT[s] for f in files if (s := "." + f.rsplit(".", 1)[-1]) in fs.LANG_EXT), "")
-        name, suffix = self.router(item, lang, role)
-        agent = self.specialists.get(name) if name else None
-        if agent is None:
-            if name:
-                log.warning("router: unknown specialist %r for %s — using the generic %s", name, role, fallback.name)
-            return fallback, "", ""
-        return agent, name, suffix
+        return pick_agent(item, role, self.specialists, self.router, fallback)
 
     def _budget_hit(self, ctx: InvocationContext) -> bool:
         return bool(ctx.session.state.get(core.STATE_BUDGET_EXHAUSTED))
