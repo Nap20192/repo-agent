@@ -18,7 +18,6 @@ class _Model(BaseModel):
 class ScanSkeleton(_Model):
     target: str = ""
     entry_points: list[Candidate] = Field(default_factory=list)
-    anchors: list[dict] = Field(default_factory=list)  # trimmed anchor view: id, tool, cwe, file, line, message[:120]
 
 
 class QueueState(_Model):

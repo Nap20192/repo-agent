@@ -34,7 +34,7 @@ from scanner.app.agents import (
 from scanner.app.domain import new_domain_modeler
 from scanner.app.knowledge_agent import make_consult_knowledge
 from scanner.app.observe import compaction_config, setup_tracing
-from scanner.app.pipeline_v3 import build_workflow
+from scanner.app.pipeline import build_workflow
 from scanner.app.settings import Settings, apply_dotenv
 from scanner.app.specialists import architect_overlay, route_name
 from scanner.app.specialists import build as build_specialists

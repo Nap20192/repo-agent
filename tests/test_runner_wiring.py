@@ -4,7 +4,7 @@ Workflow; `wiring` is the inspectable kwargs dict behind it."""
 from pathlib import Path
 
 from scanner.app import runner
-from scanner.app.pipeline_v3 import ScanWorkflow
+from scanner.app.pipeline import ScanWorkflow
 from scanner.app.specialists import REGISTRY, route_name
 from tests.fakes import FakeRun
 

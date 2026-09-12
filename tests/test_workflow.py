@@ -13,7 +13,7 @@ from google.adk.sessions.sqlite_session_service import SqliteSessionService
 from scanner import core, main
 from scanner.adapter.store import Run, Store
 from scanner.app import runner
-from scanner.app.pipeline_v3 import build_workflow
+from scanner.app.pipeline import build_workflow
 from tests.fakes import fake_stage_node, fake_verifier_node
 
 SAMPLE = Path(__file__).resolve().parent.parent / "samples" / "02-vulnshop"

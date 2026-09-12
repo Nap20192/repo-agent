@@ -1,5 +1,5 @@
 """Shared graph helpers: JSON parsing, the specialist pick, the hypothesis gate and the verdict-from-store
-rule. The graph itself is the ADK Workflow in pipeline_v3 (nodes in graph_nodes)."""
+rule. The graph itself is the ADK Workflow in pipeline (nodes in graph_nodes)."""
 
 from __future__ import annotations
 

@@ -16,7 +16,6 @@ def test_build_skeleton_node_trims_anchors_and_lists_entry_points():
     outs = _run_node(graph_nodes.build_skeleton_node(run, "/t", lambda: entries))
     sk = ScanSkeleton.model_validate(outs[-1])
     assert sk.target == "/t" and [c.symbol for c in sk.entry_points] == ["h"]
-    assert sk.anchors[0] == {"id": "a_1", "tool": "gosec", "cwe": "CWE-89", "file": "main.go", "line": 22, "message": ""}
 
 
 def test_direct_findings_node_reports_without_the_model_and_returns_the_rest():

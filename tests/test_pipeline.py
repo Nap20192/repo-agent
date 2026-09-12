@@ -113,6 +113,7 @@ def test_verify_failure_round0_raises_later_finishes_with_reason():
     run = FakeRun()
     with pytest.raises(Exception, match="verify round 0 failed"):
         _run(_workflow(run, verifier=fake_verifier_node(run, fail_prefix="h0")))
+    assert run.doss == {}  # a failed round 0 leaves no dossiers behind (review: store parity)
     run = FakeRun()
     state = _run(_workflow(run, verifier=fake_verifier_node(run, fail_prefix="h1"), max_hyps=1, max_parallel=1))
     assert state[core.STATE_STOP_REASON].startswith("verify round 1 failed:") and "boom" in state[core.STATE_STOP_REASON]

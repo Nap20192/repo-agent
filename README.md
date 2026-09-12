@@ -24,7 +24,7 @@
   пакет `index/` (LSP-адаптеры и grep fallback: `lsp.py`, `grep.py`, `rpc.py`, `languages.py`, `callgraph.py`).
 - `scanner/app` — инструкции (`instructions.py`), колбэки (`callbacks.py`), агенты (`agents.py`),
   специалисты и роутер (`specialists.py`), knowledge AgentTool (`knowledge_agent.py`),
-  граф Workflow (`pipeline_v3.py`, узлы в `graph_nodes.py`, общие помощники в `graph.py`), Reconciler (`reconcile.py`), domain-модель (`domain.py`),
+  граф Workflow (`pipeline.py`, узлы в `graph_nodes.py`, общие помощники в `graph.py`), Reconciler (`reconcile.py`), domain-модель (`domain.py`),
   трассировка и сжатие (`observe.py`), сборка и прогон (`runner.py`), settings (`settings.py`).
 - `scanner/main.py` — только CLI, вся логика в `scanner/app/runner.py`.
 - `web/fullscan/agent.py` — точка входа `adk web` (тот же граф, установка via `uv sync`).
@@ -165,5 +165,5 @@ git-aware обход osv-scanner ничего не находит в мелко�
 Модули: `scanner/core/{types,rules,calibrate,settings,ports,domain}.py` (доменный лист), `scanner/adapter/static.py`
 (сканеры → якоря), `scanner/adapter/{store,owasp,domain,dominance,knowledge,entrypoints,fs,skills}.py` (адаптеры),
 `scanner/adapter/tools/{common,code,lsp,gates,rosters}.py` (агент-тулы), `scanner/adapter/index/{lsp,grep,rpc,languages,callgraph}.py`
-(код индекс), `scanner/app/{agents,specialists,knowledge_agent,pipeline_v3,graph_nodes,graph,reconcile,domain}.py` (специалисты и граф),
+(код индекс), `scanner/app/{agents,specialists,knowledge_agent,pipeline,graph_nodes,graph,reconcile,domain}.py` (специалисты и граф),
 `scanner/app/{callbacks,observe,runner,settings}.py` (исполнение), `scanner/main.py` (CLI, eval), `web/fullscan/agent.py` (`adk web`).

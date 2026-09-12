@@ -62,7 +62,7 @@ until its replacement (`ctx.run_node` fan-out + `parallel_worker`) has passed th
   the deterministic CWE→specialist router (`scanner/app/specialists.py`) stays exactly as it is, only its
   caller moves from `_Graph._pick` to a node body (`route_and_verify`/`route_and_critique`).
 - Hexagonal layering is preserved: ADK `Workflow`/node imports land only in `scanner/app/*` (the new
-  `graph_nodes.py`/`pipeline_v3.py`), never in `scanner/core` or `scanner/adapter`; `runner.py` remains the
+  `graph_nodes.py`/`pipeline.py`), never in `scanner/core` or `scanner/adapter`; `runner.py` remains the
   only place that wires adapter concretes into the graph.
 
 ## Alternatives considered

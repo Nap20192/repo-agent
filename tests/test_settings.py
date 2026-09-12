@@ -35,7 +35,7 @@ def test_dotenv_process_env_wins(tmp_path, monkeypatch):
 
 
 def test_no_env_reads_outside_settings():
-    owned = ["scanner/app/runner.py", "scanner/app/graph.py", "scanner/app/pipeline_v3.py", "scanner/app/graph_nodes.py", "scanner/adapter/knowledge.py",
+    owned = ["scanner/app/runner.py", "scanner/app/graph.py", "scanner/app/pipeline.py", "scanner/app/graph_nodes.py", "scanner/adapter/knowledge.py",
              "scanner/adapter/index/lsp.py", "scanner/app/observe.py"]
     root = Path(__file__).resolve().parent.parent
     offenders = [f for f in owned if re.search(r"os\.(environ|getenv)", (root / f).read_text())]

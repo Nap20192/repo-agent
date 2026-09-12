@@ -7,7 +7,7 @@ Read `README.md` for the pipeline, `BOARD.md` for the cards/contract, `docs/rnd/
 ```
 scanner/core      domain leaf: types (Literal vocabularies), rules, calibrate, settings, ports (Index parts, RunStore, Router)
 scanner/adapter   fs, entrypoints, static scanners, SQLite State, OWASP, skills, knowledge, domain, dominance, tools/ (package), index/ (LSP per language + grep)
-scanner/app       ADK agents (one `new_agent` factory), specialists registry + router, the ADK Workflow graph (pipeline_v3 + graph_nodes, helpers in graph), reconcile, callbacks, observe, runner (composition root)
+scanner/app       ADK agents (one `new_agent` factory), specialists registry + router, the ADK Workflow graph (pipeline + graph_nodes, helpers in graph), reconcile, callbacks, observe, runner (composition root)
 scanner/main.py   CLI only            eval/dataset.py  eval logic            web/fullscan/agent.py   adk web entrypoint (lazy)
 ```
 Arrows point inward: `core` imports nothing of ours; `adapter` never imports `app`; only `runner.py` wires adapter

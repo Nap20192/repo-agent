@@ -25,12 +25,9 @@ from scanner.core.workflow import ScanSkeleton
 log = logging.getLogger("scanner.graph_nodes")
 
 
-def skeleton(store: RunStore, target: str, entry_points_fn: Callable[[], list[Candidate]] | None,
-             anchors: list[Anchor] | None = None) -> ScanSkeleton:
-    """What the modelling stages receive: the target, its entry points and a trimmed anchor view."""
-    anchors = store.anchors() if anchors is None else anchors
-    return ScanSkeleton(target=target, entry_points=list(entry_points_fn()) if entry_points_fn else [],
-                        anchors=anchor_view(anchors))
+def skeleton(target: str, entry_points_fn: Callable[[], list[Candidate]] | None) -> ScanSkeleton:
+    """What the modelling stages receive: the target and its entry points (anchors are read from the store by plan)."""
+    return ScanSkeleton(target=target, entry_points=list(entry_points_fn()) if entry_points_fn else [])
 
 
 def anchor_view(anchors: list[Anchor]) -> list[dict]:
@@ -42,7 +39,7 @@ def anchor_view(anchors: list[Anchor]) -> list[dict]:
 def build_skeleton_node(store: RunStore, target: str, entry_points_fn: Callable[[], list[Candidate]] | None) -> FunctionNode:
     """START → skeleton. The pre-pass (scanners) already ran in runner.prepare; this node reads its anchors."""
     def build_skeleton(node_input) -> ScanSkeleton:  # node_input: the user turn that started the run, unused
-        return skeleton(store, target, entry_points_fn)
+        return skeleton(target, entry_points_fn)
     return FunctionNode(func=build_skeleton, name="build_skeleton")
 
 

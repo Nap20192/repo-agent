@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from scanner.adapter.domain import consult, extract
-from scanner.app.pipeline_v3 import build_workflow
+from scanner.app.pipeline import build_workflow
 from scanner.core.domain import DomainMap, Entity, Rule
 from tests.fakes import FakeRun, _run, fake_stage_node, fake_verifier_node, notes_of
 

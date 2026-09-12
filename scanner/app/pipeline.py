@@ -31,7 +31,7 @@ from scanner.core import Anchor, ArchitectureModel, Candidate, Dossier, Threat, 
 from scanner.core.ports import Closeable, Router, RunStore
 from scanner.core.workflow import InvestigateResult, QueueState, Report, ScanSkeleton
 
-log = logging.getLogger("scanner.pipeline_v3")
+log = logging.getLogger("scanner.pipeline")
 
 STAGES = ("architecture_model", "domain_map", "threat_model")
 
@@ -142,12 +142,12 @@ def build_workflow(
             outs = await ctx.run_node(verify_node, [h.model_dump() for h in accepted], run_id=f"verify_r{rnd}") or []
             timings[f"verify_{rnd}"] = round(time.monotonic() - t0, 3)
             dossiers = [Dossier.model_validate(o) for o in outs]
-            store.put_dossiers(rnd, dossiers)
             budget = bool(ctx.state.get(core.STATE_BUDGET_EXHAUSTED))
-            # every specialist of the round raised (not a soft "no JSON"): the round failed, like a v2 chunk failure
+            # every specialist of the round raised (not a soft "no JSON"): the round failed
             failed = "; ".join(d.error for d in dossiers if d.error) if outs and all(o.get("failed") for o in outs) else ""
             if failed and not budget and rnd == 0:
-                raise RuntimeError(f"verify round 0 failed: {failed}")
+                raise RuntimeError(f"verify round 0 failed: {failed}")  # a failed run keeps no round-0 dossiers
+            store.put_dossiers(rnd, dossiers)
             rnd += 1
             if budget:
                 stop = "budget"
