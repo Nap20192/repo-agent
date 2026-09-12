@@ -27,3 +27,12 @@ dev = [
 [tool.pytest.ini_options]
 markers = ["live: exercises real models/servers (LIVE_EVAL=1)"]
 addopts = "-m 'not live'"
+
+[tool.ruff]
+line-length = 130
+target-version = "py312"
+
+[tool.ruff.lint]
+# defaults (E4, E7, E9, F) + bugbear, blind-except (every `except Exception` names its reason), pyupgrade,
+# isort, simplify, return — the rule set the `# noqa` comments in the code refer to.
+extend-select = ["B", "BLE", "UP", "I", "SIM", "RET"]

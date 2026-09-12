@@ -3,6 +3,7 @@
 import sys
 
 import pytest
+
 from scanner.adapter.index.rpc import LspClient, LspError
 
 # A minimal LSP-ish server: Content-Length frames on stdin/stdout, canned answers, one notification

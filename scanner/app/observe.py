@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from google.adk.apps._configs import EventsCompactionConfig
+from google.adk.apps.app import EventsCompactionConfig
 from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
 from google.adk.models.registry import LLMRegistry
 

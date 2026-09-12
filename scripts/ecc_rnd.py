@@ -11,6 +11,7 @@ stdlib only. Reads the plugin cache read-only; never touches settings or permiss
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import glob
 import json
@@ -98,10 +99,8 @@ def used_names() -> set[str]:
     text = ""
     for p in [ROOT / "BOARD.md", ROOT / "README.md", *ROOT.glob(".claude/skills/*/SKILL.md"),
               *Path.home().glob(".claude/projects/*repo-agent2*/memory/*.md")]:
-        try:
+        with contextlib.suppress(OSError):
             text += p.read_text(errors="replace")
-        except OSError:
-            pass
     return set(re.findall(r"ecc:([a-z0-9-]+)", text)) | set(re.findall(r"`/([a-z0-9-]+)`", text))
 
 

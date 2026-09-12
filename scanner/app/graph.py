@@ -62,10 +62,11 @@ def activation(agent: BaseAgent, name: str, label: str, payload: dict, suffix: s
     """Fresh copy of `agent` for one run: payload goes into the instruction when the agent has one.
     `suffix` is an extra instruction line (e.g. the JSON nudge) placed before the payload."""
     if not isinstance(getattr(agent, "instruction", None), str):
-        return agent.clone(update={"name": name})
+        return agent.clone(update={"name": name})  # workflow agents / provider instructions: nothing to append to
     extra = f"\n\n{suffix}" if suffix else ""
     text = f"{agent.instruction}{extra}\n\n{label} (JSON):\n{json.dumps(payload, ensure_ascii=False)}"
     # LlmAgent: an InstructionProvider bypasses {state} templating, so JSON braces are safe.
+    # Test doubles are plain BaseAgents with a str `instruction` and get the text as-is (ADR-0005).
     instr = (lambda _ctx: text) if isinstance(agent, LlmAgent) else text
     return agent.clone(update={"name": name, "instruction": instr})
 
@@ -256,7 +257,7 @@ class Graph(BaseAgent):
                 failed = str(e)
                 break
         if not failed:  # a verifier that answered in prose gets one nudge to hand over its Dossier JSON
-            for i, (h, a) in enumerate(acts):
+            for i, (_, a) in enumerate(acts):
                 if parse_json(texts.get(a.name, "")) is None and not self._budget_hit(ctx):
                     agent, _, suffix = routed[i]  # the retry goes to the same specialist with the same overlay
                     act = _ActivationSpec(a.name, "Hypothesis", payloads[i])

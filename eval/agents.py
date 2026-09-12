@@ -503,7 +503,7 @@ async def run_all(model_spec: str, k: int, budget: int, only: set[str] | None = 
                     window_probes.append(probe)
             card["agents"][name] = _summary(rows)
             if name == "investigator":
-                wrows = [dict(zip(("pass", "reason"), grade_window(p))) for p in window_probes]
+                wrows = [dict(zip(("pass", "reason"), grade_window(p), strict=True)) for p in window_probes]
                 card["agents"]["tool_window"] = _summary([{**r, "model_calls": 0, "seconds": 0} for r in wrows])
     index.close()
     passes = [a["pass_at_k"] for a in card["agents"].values()]

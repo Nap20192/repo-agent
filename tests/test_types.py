@@ -29,7 +29,7 @@ def test_intent_is_normalised_then_validated():
 
 
 def test_cwe_taxonomy_covers_gate_sets_and_consult_rule():
-    assert (core.AUTHZ_CWES | core.TAINT_CWES) <= set(core.CWE_CLASSES)
+    assert set(core.CWE_CLASSES) >= (core.AUTHZ_CWES | core.TAINT_CWES)
     assert core.CWE_CLASSES["CWE-639"] == "authz" and core.CWE_CLASSES["CWE-798"] == "secret"
     assert core.consult_required("CWE-639") == (False, True)
     assert core.consult_required("CWE-352") == (False, False)  # routes to authz, gate needs no domain: ref (today's rule)
