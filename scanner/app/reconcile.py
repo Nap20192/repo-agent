@@ -8,6 +8,7 @@ import random
 from collections.abc import Callable
 
 from scanner import core
+from scanner.adapter import owasp
 from scanner.core import Anchor, Candidate, Hypothesis, Threat, new_anchor_id
 
 _KIND_CONSULT = {"dependency": "knowledge", "authz": "domain"}
@@ -28,13 +29,18 @@ def key(h: Hypothesis) -> str:
     return h.anchor_id or f"{h.symbol}|{h.cwe}"
 
 
+def _owasp_ids(cwe: str) -> dict:
+    g = owasp.consult(cwe) if cwe else {}
+    return {"wstg_id": g.get("wstg_id", ""), "asvs_id": g.get("asvs_id", "")}
+
+
 def from_anchors(anchors: list[Anchor]) -> list[Hypothesis]:
-    """Every anchor is a task: kind by class, consult by kind, claim from the scanner message."""
+    """Every anchor is a task: kind by class, consult by kind, claim from the scanner message, OWASP ids by CWE."""
     out = []
     for a in anchors:
         kind = anchor_kind(a)
         out.append(Hypothesis(
-            kind=kind, cwe=a.cwe, anchor_id=a.id, consult=_KIND_CONSULT.get(kind, ""),
+            kind=kind, cwe=a.cwe, anchor_id=a.id, consult=_KIND_CONSULT.get(kind, ""), **_owasp_ids(a.cwe),
             claim=f"{a.message or a.rule_id} at {a.file}:{a.line} is exploitable" + (f" ({a.cwe})" if a.cwe else ""),
             reads=[a.file], priority=core.SEVERITY_RANK.get(a.severity, 0) * 20,
         ))
@@ -69,8 +75,9 @@ def from_threats(
                        message=t.claim, snippet="")
             minted.append(a)
         kind = anchor_kind(a) if a else ("authz" if t.cwe in core.AUTHZ_CWES else "sink")
+        ids = _owasp_ids(t.cwe)
         hyps.append(Hypothesis(
-            kind=kind, cwe=t.cwe, claim=t.claim, anchor_id=a.id if a else "", symbol="" if a else t.symbol,
+            kind=kind, cwe=t.cwe, claim=t.claim, wstg_id=t.wstg_id or ids["wstg_id"], asvs_id=ids["asvs_id"], anchor_id=a.id if a else "", symbol="" if a else t.symbol,
             consult=_KIND_CONSULT.get(kind, ""), reads=t.reads or ([a.file] if a else [t.file] if t.file else []),
             priority=t.priority + (10 if a and a.tool != "threatmodel" else 0),
         ))

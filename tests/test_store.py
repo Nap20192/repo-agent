@@ -40,3 +40,40 @@ def test_orphans_marked_stopped(tmp_path):
     r1 = s.start_run("t")
     s.start_run("t")
     assert s.db.execute("SELECT status FROM runs WHERE id=?", (r1.id,)).fetchone()[0] == "stopped"
+
+
+def test_report_fills_owasp_fields_and_sarif_taxonomies(tmp_path):
+    run = Store(str(tmp_path / "s.db")).start_run("t")
+    f = run.report(Finding(anchor_id="a_1", cwe="CWE-89", file="main.go", line=22, title="sqli", severity="high",
+                           status=CONFIRMED, evidence=["db.Query(x)"], confidence=0.9))
+    assert f.wstg_id == "WSTG-INJT-05" and f.top10 == "A05:2025" and f.remediation and "SQL_Injection" in f.remediation_url
+    sarif = json.loads(run.write_report(tmp_path / "out").read_text())
+    run0 = sarif["runs"][0]
+    names = {t["name"] for t in run0["taxonomies"]}
+    assert names == {"WSTG", "OWASP Top 10 2021", "OWASP Top 10 2025", "ASVS"}
+    res = run0["results"][0]
+    assert {x["toolComponent"]["name"] for x in res["taxa"]} == names
+    assert res["fixes"][0]["description"]["text"] == f.remediation
+    summary = json.loads(run.write_summary(tmp_path / "out").read_text())
+    assert summary["findings"][0]["remediation_url"] == f.remediation_url
+
+
+def test_report_without_cwe_does_not_raise(tmp_path):
+    """Dependency (osv) and entrypoint anchors carry no CWE; report() must still record the verdict."""
+    from scanner.core import Anchor, Finding
+    run = Store(str(tmp_path / "s.db")).start_run("t")
+    run.save_anchors([Anchor(id="a_osv", tool="osv", rule_id="GHSA-x", cwe="", severity="high", file="go.mod", line=1)])
+    f = run.report(Finding(anchor_id="a_osv", cwe="", file="go.mod", line=1, title="vuln dep", status="confirmed", evidence=["knowledge:GHSA-x"]))
+    assert f.id == "f_1" and f.remediation == "" and f.top10 == ""
+
+
+def test_sarif_taxonomies_declare_every_result_taxon(tmp_path):
+    from scanner.core import Anchor, Finding
+    run = Store(str(tmp_path / "s.db")).start_run("t")
+    run.save_anchors([Anchor(id="a", tool="gosec", cwe="CWE-89", severity="high", file="m.go", line=1)])
+    run.report(Finding(anchor_id="a", cwe="CWE-89", file="m.go", line=1, title="sqli", status="confirmed", evidence=["x"]))
+    sarif = json.loads(run.write_report(tmp_path).read_text())["runs"][0]
+    declared = {(t["name"], x["id"]) for t in sarif["taxonomies"] for x in t["taxa"]}
+    used = {(x["toolComponent"]["name"], x["id"]) for r in sarif["results"] for x in r["taxa"]}
+    assert used and used <= declared
+    assert any(x["name"] == "SQL Injection" for t in sarif["taxonomies"] if t["name"] == "WSTG" for x in t["taxa"])

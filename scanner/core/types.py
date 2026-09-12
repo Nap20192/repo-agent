@@ -67,6 +67,8 @@ class Hypothesis(_Model):
     reads: list[str] = Field(default_factory=list)
     consult: str = ""  # knowledge|domain|""
     priority: int = 0
+    wstg_id: str = ""  # OWASP WSTG test the claim maps to (from the anchor's CWE or the threat)
+    asvs_id: str = ""  # ASVS 5.0 requirement id
 
 class Dossier(_Model):
     hypothesis_id: str = ""
@@ -76,6 +78,7 @@ class Dossier(_Model):
     notes: str = ""
     new_hypotheses: list[Hypothesis] = Field(default_factory=list)
     error: str = ""
+    specialist: str = ""  # which specialist agent investigated (routing; "" = generic verifier)
 
 class Finding(_Model):
     id: str = ""
@@ -89,6 +92,10 @@ class Finding(_Model):
     status: str = UNCERTAIN
     evidence: list[str] = Field(default_factory=list)
     confidence: float = 0.0
+    remediation: str = ""  # one line, filled from the CWE by the store when empty
+    remediation_url: str = ""  # OWASP Cheat Sheet
+    wstg_id: str = ""
+    top10: str = ""  # OWASP Top 10 2025 category
 
 class Threat(_Model):
     """One modeled threat (ThreatModeler output). Grounding: an anchor match by (file, cwe) or a symbol."""

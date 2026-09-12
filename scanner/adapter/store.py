@@ -8,6 +8,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+from scanner.adapter import owasp
+from scanner.adapter.knowledge import enrichment_for
 from scanner.core import (
     CONFIRMED,
     REJECTED,
@@ -30,6 +32,28 @@ CREATE TABLE IF NOT EXISTS notes(run INTEGER, time REAL, text TEXT, ref TEXT);
 CREATE TABLE IF NOT EXISTS artifacts(run INTEGER, stage TEXT, json TEXT, PRIMARY KEY(run, stage));
 """
 _LEVEL = {"critical": "error", "high": "error", "medium": "warning", "low": "note", "info": "note"}
+_TAXONOMIES = {  # SARIF toolComponent name → (Finding field, GUID-less reference info)
+    "WSTG": ("wstg_id", "OWASP Web Security Testing Guide", "https://owasp.org/www-project-web-security-testing-guide/"),
+    "OWASP Top 10 2021": ("top10_2021", "OWASP Top 10 2021", "https://owasp.org/Top10/"),
+    "OWASP Top 10 2025": ("top10", "OWASP Top 10 2025", "https://owasp.org/Top10/"),
+    "ASVS": ("asvs_id", "OWASP ASVS 5.0", "https://owasp.org/www-project-application-security-verification-standard/"),
+}
+
+
+def _owasp_fill(f: Finding) -> dict:
+    """Remediation / WSTG / Top 10 for a finding from its CWE, only where the finding has no value yet."""
+    g = owasp.consult(f.cwe) if f.cwe else {}
+    if not g or "status" in g:  # no CWE (dependency/entrypoint anchors) or unknown class: nothing to fill
+        return {}
+    return {k: v for k, v in {"remediation": g.get("remediation", ""), "remediation_url": g.get("remediation_url", ""),
+                              "wstg_id": g.get("wstg_id", ""), "top10": g.get("top10_2025", "")}.items() if v and not getattr(f, k)}
+
+
+def _taxa(f: Finding) -> list[dict]:
+    g = owasp.consult(f.cwe) if f.cwe else {}
+    vals = {"wstg_id": f.wstg_id or g.get("wstg_id", ""), "top10_2021": g.get("top10_2021", ""),
+            "top10": f.top10 or g.get("top10_2025", ""), "asvs_id": g.get("asvs_id", "")}
+    return [{"id": vals[field], "toolComponent": {"name": name}} for name, (field, _, _) in _TAXONOMIES.items() if vals[field]]
 
 
 class Store:
@@ -94,7 +118,7 @@ class Run:
                     self.db.execute("UPDATE findings SET json=? WHERE run=? AND n=?", (old.model_dump_json(), self.id, i))
             return old
         n = self.db.execute("SELECT COALESCE(MAX(n),0)+1 FROM findings WHERE run=?", (self.id,)).fetchone()[0]
-        f = f.model_copy(update={"id": f"f_{n}"})
+        f = f.model_copy(update={"id": f"f_{n}", **_owasp_fill(f)})
         with self.db:
             self.db.execute("INSERT INTO findings VALUES(?,?,?)", (self.id, n, f.model_dump_json()))
         return f
@@ -146,10 +170,20 @@ class Run:
             "message": {"text": f.title + ("\n" + "\n".join(f.evidence) if f.evidence else "")},
             "locations": [{"physicalLocation": {"artifactLocation": {"uri": f.file}, "region": {"startLine": f.line}}}],
             "properties": {"finding_id": f.id, "anchor_id": f.anchor_id, "confidence": f.confidence,
-                           "calibration": calibrate(f, intent)},
+                           "calibration": calibrate(f, intent, knowledge=enrichment_for(f.anchor_id))},
+            "taxa": _taxa(f),
+            **({"fixes": [{"description": {"text": f.remediation}, "properties": {"url": f.remediation_url}}]}
+               if f.remediation else {}),
         } for f in self.findings() if f.status == CONFIRMED]
+        used: dict[str, set[str]] = {name: set() for name in _TAXONOMIES}
+        for r in results:
+            for t in r.get("taxa", []):
+                used[t["toolComponent"]["name"]].add(t["id"])
+        taxonomies = [{"name": name, "fullName": full, "informationUri": uri,
+                       "taxa": [{"id": tid, "name": owasp.taxon_name(name, tid)} for tid in sorted(used[name])]}
+                      for name, (_, full, uri) in _TAXONOMIES.items()]  # every result taxon is declared in its taxonomy
         sarif = {"version": "2.1.0", "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-                 "runs": [{"tool": {"driver": {"name": "scanner"}}, "results": results}]}
+                 "runs": [{"tool": {"driver": {"name": "scanner"}}, "taxonomies": taxonomies, "results": results}]}
         p = out_dir / "report.sarif"
         p.write_text(json.dumps(sarif, indent=1))
         return p
@@ -162,7 +196,7 @@ class Run:
         intent = (self.artifact("threat_model") or {}).get("intent", "production")
         summary = {"run_id": self.id, "target": self.target,
                    **{s: sum(f.status == s for f in fs) for s in (CONFIRMED, REJECTED, UNCERTAIN)},
-                   "findings": [{**f.model_dump(), "calibration": calibrate(f, intent)} for f in fs], "gate_refusals": gate,
+                   "findings": [{**f.model_dump(), "calibration": calibrate(f, intent, knowledge=enrichment_for(f.anchor_id))} for f in fs], "gate_refusals": gate,
                    "intent": intent}
         if (timings := self.artifact("timings")) is not None:
             summary["timings"] = timings

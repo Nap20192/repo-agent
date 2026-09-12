@@ -104,3 +104,13 @@ def test_coverage_examines_every_route_of_a_file_with_an_anchor():
     hyps, minted = coverage(eps, reconcile(from_anchors(anchors), [], set()), set())
     assert [h.reads for h in hyps] == [["server.js"], ["server.js"]] and len(minted) == 2  # inline routes still examined
     assert {a.line for a in minted} == {20, 30}
+
+
+def test_from_anchors_and_threats_carry_owasp_ids():
+    (h,) = from_anchors([SQL])
+    assert h.wstg_id == "WSTG-INJT-05" and h.asvs_id == "V1.2.4"
+    t = Threat(cwe="CWE-639", claim="idor", symbol="getOrder", wstg_id="WSTG-ATHZ-04", priority=80)
+    (ht,), (a,) = from_threats([t], [], locate=lambda s: ("main.go", 31))
+    assert ht.wstg_id == "WSTG-ATHZ-04" and a.rule_id == "WSTG-ATHZ-04"
+    (hu,) = from_anchors([Anchor(id="x", tool="gosec", rule_id="G104", cwe="CWE-703", severity="low", file="f.go", line=1)])
+    assert hu.wstg_id == "" and hu.asvs_id == "V16.5.3"
