@@ -45,3 +45,20 @@ def test_knowledge_raises_likelihood():
     assert kev["likelihood"] == base["likelihood"] + 1 and "exploited_in_the_wild" in kev["rules_applied"]
     assert epss["likelihood"] == base["likelihood"] + 1 and "epss_high" in epss["rules_applied"]
     assert cold == base
+
+
+def test_exposure_for_uses_the_architecture_model():
+    from scanner.core.calibrate import calibrate, exposure_for
+    am = {"entities": [{"name": "Srv", "grounding_symbol": "searchHandler", "criticality": "CRITICAL", "files": ["main.go"]}],
+          "trust_boundaries": ["Srv: pingHandler - untrusted host input"]}
+    f_exposed = Finding(anchor_id="a", cwe="CWE-78", file="main.go", line=30, title="t", status=CONFIRMED, evidence=["x"],
+                        hypothesis_id="h", confidence=0.9)
+    f_exposed_sym = f_exposed.model_copy(update={"title": "pingHandler cmdi"})
+    assert exposure_for(f_exposed_sym, am)[0] == "exposed"
+    crit = Finding(anchor_id="a", cwe="CWE-89", file="main.go", line=22, title="searchHandler sqli", status=CONFIRMED, evidence=["x"], confidence=0.9)
+    exp, rules = exposure_for(crit, am)
+    assert exp == "internal" and "critical_entity" in rules
+    assert exposure_for(crit, None) == ("internal", [])
+    plain = calibrate(crit, "production")
+    boosted = calibrate(crit, "production", exposure=exp, extra_rules=rules)
+    assert boosted["impact"] == plain["impact"] + 1 and "critical_entity" in boosted["rules_applied"]

@@ -114,3 +114,37 @@ def test_from_anchors_and_threats_carry_owasp_ids():
     assert ht.wstg_id == "WSTG-ATHZ-04" and a.rule_id == "WSTG-ATHZ-04"
     (hu,) = from_anchors([Anchor(id="x", tool="gosec", rule_id="G104", cwe="CWE-703", severity="low", file="f.go", line=1)])
     assert hu.wstg_id == "" and hu.asvs_id == "V16.5.3"
+
+
+# --- card 39: grounding is a property of the code, not of the prompt --------------------------------
+
+def _has(sym):
+    return sym in {"searchHandler", "pingHandler", "getOrder"}
+
+
+def test_ground_artifacts_drops_fabrications():
+    from scanner.app.reconcile import ground_artifacts
+    am = {"entities": [{"name": "Server", "grounding_symbol": "Server"}, {"name": "H", "grounding_symbol": "searchHandler"}],
+          "vuln_classes": [{"cwe": "CWE-89", "wstg_id": "WSTG-174"}, {"cwe": "CWE-999", "wstg_id": "WSTG-999"}], "notes": []}
+    dm = {"entities": [], "roles": [], "rules": [{"id": "r1", "statement": "Order visible to owner", "entity": "Order", "symbol": "Server.login"},
+                                                 {"id": "r2", "statement": "getOrder must check owner", "entity": "Order", "symbol": "getOrder"}], "gaps": [], "notes": []}
+    tm = {"intent": "production", "threats": [{"cwe": "CWE-89", "claim": "sqli", "symbol": "searchHandler", "wstg_id": "WSTG-174"},
+                                             {"cwe": "CWE-79", "claim": "ghost", "symbol": "nowhere"}], "notes": []}
+    am2, dm2, tm2, notes = ground_artifacts(am, dm, tm, _has, {"WSTG-INJT-05"})
+    assert [e["name"] for e in am2["entities"]] == ["H"] and any("ungrounded entity Server" in n for n in am2["notes"])
+    assert am2["vuln_classes"][0]["wstg_id"] == "WSTG-INJT-05" and am2["vuln_classes"][1]["wstg_id"] == ""  # fabricated → owasp map / cleared
+    assert [r["id"] for r in dm2["rules"]] == ["r2"] and any("r1" in g and "Server.login" in g for g in dm2["gaps"])
+    assert [t["symbol"] for t in tm2["threats"]] == ["searchHandler"] and tm2["threats"][0]["wstg_id"] == "WSTG-INJT-05"
+    assert any("ghost" in n or "nowhere" in n for n in tm2["notes"]) and len(notes) >= 4
+
+
+def test_ground_artifacts_tolerates_missing_artifacts():
+    from scanner.app.reconcile import ground_artifacts
+    assert ground_artifacts(None, None, None, _has, set()) == (None, None, None, [])
+
+
+def test_from_threats_boosts_critical_entities():
+    t = Threat(cwe="CWE-89", claim="x", symbol="searchHandler", priority=50)
+    (plain,), _ = from_threats([t], [], locate=lambda s: ("main.go", 20))
+    (boosted,), _ = from_threats([t], [], locate=lambda s: ("main.go", 20), criticality={"searchHandler": "CRITICAL"})
+    assert boosted.priority == plain.priority + 10

@@ -77,3 +77,13 @@ def test_sarif_taxonomies_declare_every_result_taxon(tmp_path):
     used = {(x["toolComponent"]["name"], x["id"]) for r in sarif["results"] for x in r["taxa"]}
     assert used and used <= declared
     assert any(x["name"] == "SQL Injection" for t in sarif["taxonomies"] if t["name"] == "WSTG" for x in t["taxa"])
+
+
+def test_summary_exposure_comes_from_the_architecture_model(tmp_path):
+    from scanner.core import Anchor, Finding
+    run = Store(str(tmp_path / "s.db")).start_run("t")
+    run.save_anchors([Anchor(id="a", tool="gosec", cwe="CWE-78", severity="high", file="main.go", line=30)])
+    run.report(Finding(anchor_id="a", cwe="CWE-78", file="main.go", line=30, title="pingHandler cmdi", status="confirmed", evidence=["x"], confidence=0.9))
+    run.put_artifact("architecture_model", {"entities": [], "trust_boundaries": ["Srv: pingHandler - untrusted input"]})
+    s = json.loads(run.write_summary(tmp_path).read_text())
+    assert s["findings"][0]["calibration"]["multiplier"] > 0.7  # exposed: ×1.0 instead of internal ×0.8

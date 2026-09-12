@@ -412,3 +412,27 @@ def test_new_architect_overlay_is_appended():
     from scanner.app.agents import new_architect
     a = new_architect("gemini-flash-lite-latest", [], 5, overlay="GO OVERLAY")
     assert a.instruction.endswith("GO OVERLAY")
+
+
+# --- card 39: artifacts are grounded in code before they feed the queue --------------------------------
+
+def test_pipeline_grounds_artifacts_before_reconcile():
+    run = FakeRun()
+    arch = FakeStage(name="architect", store=run, reply={"entities": [{"name": "X", "grounding_symbol": "nowhere"}],
+                                                          "vuln_classes": [{"cwe": "CWE-89", "wstg_id": "WSTG-174"}]})
+    dm = FakeStage(name="domain_modeler", store=run, reply={"entities": [], "roles": [], "gaps": [], "notes": [],
+                                                              "rules": [{"id": "r1", "statement": "s", "entity": "Order", "symbol": "Server.login"}]})
+    tm = FakeStage(name="threat_modeler", store=run, reply={"intent": "production", "notes": [], "threats": [
+        {"cwe": "CWE-79", "claim": "ghost", "symbol": "nowhere", "priority": 90},
+        {"cwe": "CWE-89", "claim": "real", "symbol": "searchHandler", "priority": 80, "wstg_id": "WSTG-999"}]})
+    agent = PipelineV2(architect=arch, domain_modeler=dm, threat_modeler=tm, verifier=FakeVerifier(name="verify", store=run), store=run,
+                       target="/t", has_anchor=lambda i: run.anchor(i) is not None, has_symbol=lambda s: s == "searchHandler",
+                       locate=lambda s: ("main.go", 20) if s == "searchHandler" else None, entry_points_fn=list, max_parallel=1)
+    state = _run(agent)
+    assert run.artifact("architecture_model")["vuln_classes"][0]["wstg_id"] == "WSTG-INJT-05"
+    assert run.artifact("architecture_model")["entities"] == []
+    assert run.artifact("domain_map")["rules"] == [] and run.artifact("domain_map")["gaps"]
+    assert [t["symbol"] for t in run.artifact("threat_model")["threats"]] == ["searchHandler"]
+    claims = [h.claim for h in run.hyps[0]]
+    assert "real" in claims and "ghost" not in claims  # the ungrounded threat never became a hypothesis
+    assert state["grounding_dropped"] >= 3 and any("nowhere" in t for t, _ in run.notes())
