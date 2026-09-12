@@ -79,7 +79,8 @@ class MultiIndex:
         self.fallback.close()
 
 
-def build_index(target: Path, languages: dict[str, Language] = LANGUAGES, client_factory=LspClient) -> MultiIndex:
+def build_index(target: Path, languages: dict[str, Language] = LANGUAGES, client_factory=LspClient,
+                max_files: int | None = None, max_bytes: int | None = None) -> MultiIndex:
     """One index per detected language: LSP adapter with grep fallback; unknown languages → grep only."""
     target = Path(target).resolve()
     exts_of = {}
@@ -89,7 +90,7 @@ def build_index(target: Path, languages: dict[str, Language] = LANGUAGES, client
     for lang in sorted(fs.detect_langs(target)):
         scoped = GrepIndex(target, tuple(exts_of.get(lang, ())))  # grep sees only this language's files
         if lang in languages:
-            indexes[lang] = FallbackIndex(LspIndex(target, languages[lang], client_factory), scoped)
+            indexes[lang] = FallbackIndex(LspIndex(target, languages[lang], client_factory, max_files=max_files, max_bytes=max_bytes), scoped)
         else:
             indexes[lang] = scoped
     return MultiIndex(target, indexes, GrepIndex(target))

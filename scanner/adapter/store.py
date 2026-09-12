@@ -77,6 +77,7 @@ class Store:
 class Run:
     def __init__(self, db: sqlite3.Connection, run_id: int, target: str):
         self.db, self.id, self.target = db, run_id, target
+        self.knowledge = None  # KnowledgeConfig set by the runner; None → environment defaults
 
     def save_anchors(self, anchors: list[Anchor]) -> None:
         with self.db:
@@ -164,7 +165,7 @@ class Run:
 
     def _calibrate(self, f: Finding, intent: str) -> dict:
         exp, rules = exposure_for(f, self.artifact("architecture_model"))
-        return calibrate(f, intent, exposure=exp, knowledge=enrichment_for(f.anchor_id), extra_rules=rules)
+        return calibrate(f, intent, exposure=exp, knowledge=enrichment_for(f.anchor_id, getattr(self, "knowledge", None)), extra_rules=rules)
 
     def write_report(self, out_dir: Path) -> Path:
         out_dir = Path(out_dir)

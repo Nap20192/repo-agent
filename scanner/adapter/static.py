@@ -18,6 +18,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from scanner.adapter import knowledge
 from scanner.adapter.entrypoints import (  # noqa: F401 — re-export
     DEF_KW,
     entry_points,
@@ -34,6 +35,7 @@ from scanner.adapter.fs import (  # noqa: F401 — re-export: importers still sa
     read_lines,
     rel,
 )
+from scanner.adapter.knowledge import KnowledgeConfig
 from scanner.core import (
     Anchor,
     merge_duplicates,
@@ -215,7 +217,7 @@ def _gitleaks(target: Path) -> list[Anchor]:
     return anchors
 
 
-def scan(target: Path, skip_deps: bool = False) -> ScanResult:
+def scan(target: Path, skip_deps: bool = False, knowledge_cfg: KnowledgeConfig | None = None) -> ScanResult:
     """Run every applicable scanner; a failed/missing scanner lands in `failed`, never raises."""
     target = Path(target)
     langs = detect_langs(target)
@@ -229,9 +231,8 @@ def scan(target: Path, skip_deps: bool = False) -> ScanResult:
     jobs.append(("gitleaks", _gitleaks))
     res = _run_jobs(target, jobs)
     if "osv" in res.ran:  # round 2 of the Knowledge consultant: aliases, CVSS, EPSS, KEV, fixed versions per package
-        from scanner.adapter import knowledge
 
-        res.anchors = knowledge.enrich_if_enabled(res.anchors)
+        res.anchors = knowledge.enrich_if_enabled(res.anchors, knowledge_cfg)
     return res
 
 

@@ -30,14 +30,14 @@ def test_run_jobs_parallel_ordered_and_failures_recorded(tmp_path):
             time.sleep(0.2)
             if tool == "bad":
                 raise RuntimeError("boom")
-            return [Anchor(id=tool, tool=tool, cwe="CWE-1", file="f", line=len(tool))]  # distinct lines: no merge
+            return [Anchor(id=tool, tool="semgrep", rule_id=tool, cwe="CWE-1", file="f", line=len(tool))]  # distinct lines: no merge
         return fn
 
-    jobs = [(t, job(t)) for t in ("a", "bb", "bad", "ccc")]
+    jobs = [(t, job(t)) for t in ("a", "bb", "bad", "ccc")]  # job names are free; Anchor.tool is a Literal
     t0 = time.monotonic()
     res = static._run_jobs(tmp_path, jobs)
     assert time.monotonic() - t0 < 0.6  # 4 × 0.2 s sequentially would be ≥ 0.8
-    assert [a.tool for a in res.anchors] == ["a", "bb", "ccc"] and res.ran == ["a", "bb", "ccc"]
+    assert [a.rule_id for a in res.anchors] == ["a", "bb", "ccc"] and res.ran == ["a", "bb", "ccc"]
     assert "RuntimeError: boom" in res.failed["bad"]
 
 

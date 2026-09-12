@@ -15,8 +15,9 @@ from google.adk.sessions.sqlite_session_service import SqliteSessionService
 from google.genai import types
 
 from scanner import core
-from scanner.adapter import static
+from scanner.adapter import entrypoints, fs, static
 from scanner.adapter.index import build_index
+from scanner.adapter.knowledge import KnowledgeConfig
 from scanner.adapter.owasp import consult_owasp
 from scanner.adapter.store import Store
 from scanner.adapter.tools import (
@@ -86,9 +87,9 @@ def build_agent(run, target: Path, entries: list[Candidate], model, index: Index
                 settings: Settings | None = None):
     """Wire the staged graph for one run: Architect → ThreatModeler → Reconciler → Investigator ⇄ queue → Critic."""
     s = settings or Settings.from_env()
-    index = index or build_index(target)  # LSP per language (gopls/pyright/tsserver), grep fallback
+    index = index or build_index(target, max_files=s.index_max_files, max_bytes=s.index_max_bytes)  # LSP per language, grep fallback
     has_symbol = index.has_symbol
-    langs = static.detect_langs(target)
+    langs = fs.detect_langs(target)
     specialists = build_specialists(model, run, target, index) if s.specialists else {}
     for name in ("dependency", "dependency_critic"):  # the Knowledge consultant answers open questions as an AgentTool
         if name in specialists:  # one instance each: the AgentTool's budget counter must not be shared
@@ -127,7 +128,8 @@ def prepare(target: Path, deps: bool = False, settings: Settings | None = None):
     store = Store(s.state_path)
     run = store.start_run(str(target))
     try:
-        res = static.scan(target, skip_deps=not deps and s.skip_deps)
+        run.knowledge = KnowledgeConfig.from_settings(s)  # calibration reads EPSS/KEV through the run's config
+        res = static.scan(target, skip_deps=not deps and s.skip_deps, knowledge_cfg=run.knowledge)
         for tool, why in res.failed.items():
             log.warning("static: %s failed: %s", tool, why)
         run.save_anchors(res.anchors)
@@ -135,8 +137,8 @@ def prepare(target: Path, deps: bool = False, settings: Settings | None = None):
         log.info("pre-pass: %d anchors — %s%s", len(res.anchors),
                  ", ".join(f"{t} {n}" for t, n in by_tool.items()),
                  f"; failed: {', '.join(res.failed)}" if res.failed else "")
-        index = build_index(target)
-        agent = build_agent(run, target, static.entry_points(target), model_from_env(s), index, s)
+        index = build_index(target, max_files=s.index_max_files, max_bytes=s.index_max_bytes)
+        agent = build_agent(run, target, entrypoints.entry_points(target), model_from_env(s), index, s)
     except Exception as e:
         run.finish("failed", str(e))
         store.close()

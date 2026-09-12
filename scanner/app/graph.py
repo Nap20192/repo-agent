@@ -17,7 +17,7 @@ from google.genai import types
 from pydantic import ConfigDict, Field
 
 from scanner import core
-from scanner.adapter import static
+from scanner.adapter import fs
 from scanner.adapter.skills import skill_for, skills_for
 from scanner.core import Dossier, Finding, Hypothesis
 from scanner.core.ports import Router, RunStore
@@ -159,7 +159,7 @@ class Graph(BaseAgent):
         if self.router is None:
             return fallback, "", ""
         files = list(getattr(item, "reads", None) or []) or [getattr(item, "file", "") or ""]
-        lang = next((static.LANG_EXT[s] for f in files if (s := "." + f.rsplit(".", 1)[-1]) in static.LANG_EXT), "")
+        lang = next((fs.LANG_EXT[s] for f in files if (s := "." + f.rsplit(".", 1)[-1]) in fs.LANG_EXT), "")
         name, suffix = self.router(item, lang, role)
         agent = self.specialists.get(name) if name else None
         if agent is None:
