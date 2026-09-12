@@ -198,3 +198,26 @@ file-baseline'ы (до 60) не были просмотрены вовсе; 6 и
 `$where`, IDOR `allocations/:userId`, XSS профиля, `isAdmin`, CSRF и ReDoS попадают в аудируемое множество (ожидание, не измерение — проверяется
 NodeGoat-прогоном после шага 3 и после шага 6). Ручки для снижения: `TRIAGE_BATCH=15` (−30 % triage), `LLM_MODEL_SMALL` на ollama (0 $),
 `max_rounds×max_hyps` как жёсткий потолок аудита, `CALIBRATE_LLM=0` по умолчанию.
+
+## 6. Spike results (ADK 2.9, `tests/test_adk_spike.py`)
+
+Все открытые вопросы §4 про ADK закрыты тестами против установленного `google-adk` 2.9.0; каждый ответ пришпилен
+тестом, номера — `test_qN_*`.
+
+| # | Вопрос | Ответ | Тест | Где в ADK |
+|---|---|---|---|---|
+| 1 | Route-карты | `Event(route="x", output=...)` из FunctionNode; `route` попадает в `actions.route`; в `edges` карта `{route: node, DEFAULT_ROUTE: node}`; нероутированная ветка не выполняется вовсе | `test_q1_route_map_runs_only_the_routed_branch` | `events/event.py:170-224`, `_graph.py:133-170` |
+| 2 | `export` с несколькими входящими рёбрами | Обычный `FunctionNode` получает по триггеру на каждое **сработавшее** ребро (`_workflow.py:866-890`); при взаимоисключающих маршрутах он выполняется ровно один раз — это и есть форма для `export`. `JoinNode` ждёт **все** предшественники (`_join_node.py:38`, барьер `_workflow.py:831-861`): предшественник, пропущенный маршрутом, никогда не завершится, join не сработает — JoinNode терминалом быть не может. Ограничение валидатора: одно ребро `(r2, export)` не может встречаться дважды (`Duplicate edge`), т.е. из одного route-узла в `export` ведёт максимум один маршрут + DEFAULT | `test_q2_plain_terminal_with_many_predecessors_fires_on_the_first_route_taken`, `test_q2_join_terminal_waits_for_every_predecessor_so_a_route_skip_never_reaches_it` | `_workflow.py:463-500,831-890` |
+| 3 | JoinNode fan-in | `(a, (b, c)), ((b, c), join)` → выход join = `{"b": out_b, "c": out_c}` (ключи — имена предшественников) | `test_q3_join_output_is_a_dict_keyed_by_predecessor_name` | `_join_node.py:52-64`, `_workflow.py:852` |
+| 4 | `output_schema` + `tools` | Допустимо в одном `LlmAgent`: инструменты на цикле рассуждения, схема на финальном ответе (док-строка ADK). `tools` хранятся как сырые callables, оборачиваются в `canonical_tools()` | `test_q4_llm_agent_accepts_output_schema_and_tools_together` | `agents/llm_agent.py:449-452` |
+| 5 | `RetryConfig` | `max_attempts=2` = оригинал + один повтор; узел перезапускается, граф идёт дальше с успешным выходом. Исчерпанные попытки роняют Workflow — примитива «продолжить с None» на статическом ребре нет: деградация остаётся внутри динамических узлов (try/except вокруг `ctx.run_node`), как и требует ADR-0007. Дефолты без конфига: 5 попыток, задержка 1 с ×2, jitter 1.0 — для тестов ставить `initial_delay=0, jitter=0` | `test_q5_retry_config_reruns_a_failing_node_once_then_succeeds`, `test_q5_a_node_failing_past_max_attempts_fails_the_workflow` | `_node_runner.py:125-200`, `utils/_retry_utils.py:34-40` |
+| 6 | parallel_worker на статическом ребре | `@node(parallel_worker=True, max_parallel_workers=N)` получает список предшественника и возвращает список выходов **в порядке входа**; `Workflow.max_concurrency` ограничивает узлы, `max_parallel_workers` — элементы; лимиты независимы (max_concurrency=1 не мешает fan-out) | `test_q6_parallel_worker_fans_out_a_list_input_on_a_static_edge_in_input_order` | `_parallel_worker.py:95-135`, `_workflow.py:_at_concurrency_limit` |
+| 7 | `ResumabilityConfig` | Возобновление = повторный `run_async` с **тем же `invocation_id` и без `new_message`**: replay ищет чекпоинты `node@run_id` в событиях этой invocation (`_replay_manager.py:289`); завершённые узлы фаст-форвардятся (функция не вызывается), упавший выполняется заново. Новое сообщение = новая invocation = полный перезапуск. Для CLI это значит: resume работает только внутри одной сессии-invocation; при перезапуске процесса нужен сохранённый `invocation_id`, иначе остаётся наш артефактный resume через `store.artifact` | `test_q7_resumable_app_replays_completed_nodes_and_reruns_the_failed_one` | `_workflow.py:229-235,600-650`, `utils/_replay_manager.py:274-296` |
+
+**Рекомендуемая форма `export`:** обычный `FunctionNode` со всеми входящими рёбрами из route-карт и из `calibrate`;
+каждый route-узел ведёт в `export` не более чем одним маршрутом. `calibrate` имеет двух предшественников
+(`mark_sample`, `confirm`) — тоже обычный узел (сработает от того, кто пришёл), не JoinNode.
+
+**Дублёры для волны 2** (`tests/fakes.py`): `fake_route_node(name, route)`, `fake_schema_stage_node(store, name,
+schema, payload)` (валидирует payload по pydantic-схеме при конструировании), `fake_parallel_node(name, fn,
+max_parallel_workers=None)`.
