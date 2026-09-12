@@ -149,3 +149,9 @@ def test_from_threats_boosts_critical_entities():
     (plain,), _ = from_threats([t], [], locate=lambda s: ("main.go", 20))
     (boosted,), _ = from_threats([t], [], locate=lambda s: ("main.go", 20), criticality={"searchHandler": "CRITICAL"})
     assert boosted.priority == plain.priority + 10
+
+
+def test_threat_without_claim_still_becomes_a_hypothesis():
+    """A weak model may emit {cwe, symbol} only; the gate requires a claim, so the Reconciler supplies one."""
+    (h,), _ = from_threats([Threat(cwe="CWE-78", symbol="pingHandler")], [], locate=lambda s: ("main.go", 9))
+    assert h.claim and "CWE-78" in h.claim and "pingHandler" in h.claim

@@ -78,7 +78,7 @@ def from_threats(
         kind = anchor_kind(a) if a else ("authz" if t.cwe in core.AUTHZ_CWES else "sink")
         ids = _owasp_ids(t.cwe)
         hyps.append(Hypothesis(
-            kind=kind, cwe=t.cwe, claim=t.claim, wstg_id=t.wstg_id or ids["wstg_id"], asvs_id=ids["asvs_id"], anchor_id=a.id if a else "", symbol="" if a else t.symbol,
+            kind=kind, cwe=t.cwe, claim=t.claim or f"{t.cwe or 'threat'} in {t.symbol or t.file}: modeled threat without a claim — prove or reject it", wstg_id=t.wstg_id or ids["wstg_id"], asvs_id=ids["asvs_id"], anchor_id=a.id if a else "", symbol="" if a else t.symbol,
             consult=_KIND_CONSULT.get(kind, ""), reads=t.reads or ([a.file] if a else [t.file] if t.file else []),
             priority=t.priority + (10 if a and a.tool != "threatmodel" else 0)
             + (10 if (criticality or {}).get(t.symbol.split(".")[-1]) == "CRITICAL" else 0),
