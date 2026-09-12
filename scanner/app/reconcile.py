@@ -3,13 +3,17 @@ new_hypotheses, merged into one prioritized queue of Hypotheses without duplicat
 
 from __future__ import annotations
 
+import logging
 import math
 import random
 from collections.abc import Callable
 
 from scanner import core
 from scanner.adapter import owasp
-from scanner.core import Anchor, Candidate, Finding, Hypothesis, Threat, new_anchor_id
+from scanner.core import Anchor, Candidate, Finding, Hypothesis, Threat, ThreatModel, new_anchor_id
+from scanner.core.ports import RunStore
+
+log = logging.getLogger("scanner.reconcile")
 
 _KIND_CONSULT = {"dependency": "knowledge", "authz": "domain"}
 
@@ -294,3 +298,34 @@ def adversarial_sweep(candidates: list[Candidate], fraction: float = 0.25, seed:
         claim=f"Adversarial sweep of {c.symbol} ({c.file}:{c.line}): ignore assumed safety and trust boundaries, "
               "treat every input as untrusted and malformed, look for any sink it can reach",
     ) for c in picked]
+
+
+def build_queue(
+    store: RunStore, anchors: list[Anchor], threats: list[Threat] | None = None,
+    locate: Callable[[str], tuple[str, int] | None] | None = None,
+    entry_points_fn: Callable[[], list[Candidate]] | None = None,
+) -> tuple[list[Hypothesis], set[str]]:
+    """One prioritized queue from the grounded threat model (store artifacts), the scanner anchors and
+    entry-point coverage; synthetic anchors minted on the way are saved to the store. Shared by PipelineV2
+    and the Workflow `plan` node (card 43)."""
+    am = store.artifact("architecture_model") or {}
+    tm = store.artifact("threat_model")
+    threats = list(threats or [])
+    if tm:
+        try:
+            threats += ThreatModel.model_validate(tm).threats
+        except ValueError as e:
+            log.warning("threat_model: invalid after grounding: %s", e)
+    criticality = {e.get("grounding_symbol", ""): e.get("criticality", "") for e in am.get("entities", [])}
+    hyps, minted = from_threats(threats, anchors, locate, criticality)
+    if minted:
+        store.save_anchors(minted)  # synthetic anchors keep the single anchor-only gate
+        log.info("reconcile: %d synthetic anchors for grounded threats", len(minted))
+    done: set[str] = set()
+    queue = reconcile(from_anchors(anchors) + hyps, [], done)
+    if entry_points_fn is not None:  # plan-stage rule: no entry point stays unexamined
+        baseline, minted_entries = coverage(entry_points_fn(), queue, done)
+        if minted_entries:
+            store.save_anchors(minted_entries)  # inline handlers / PHP pages: anchors at file:line
+        queue = reconcile(baseline, queue, done)
+    return queue, done

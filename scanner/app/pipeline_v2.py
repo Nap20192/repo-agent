@@ -26,10 +26,8 @@ from scanner.app.graph import (
 )
 from scanner.app.reconcile import (
     KNOWN_WSTG,
-    coverage,
+    build_queue,
     direct_finding,
-    from_anchors,
-    from_threats,
     ground_artifacts,
     key,
     reconcile,
@@ -152,27 +150,7 @@ class PipelineV2(Graph):
 
     def _build_queue(self, anchors: list) -> tuple[list[Hypothesis], set[str]]:
         """One prioritized queue from the grounded threat model, the scanner anchors and entry-point coverage."""
-        am = self.store.artifact("architecture_model") or {}
-        tm = self.store.artifact("threat_model")
-        threats = list(self.threats)
-        if tm:
-            try:
-                threats += ThreatModel.model_validate(tm).threats
-            except ValueError as e:
-                log.warning("threat_model: invalid after grounding: %s", e)
-        criticality = {e.get("grounding_symbol", ""): e.get("criticality", "") for e in am.get("entities", [])}
-        hyps, minted = from_threats(threats, anchors, self.locate, criticality)
-        if minted:
-            self.store.save_anchors(minted)  # synthetic anchors keep the single anchor-only gate
-            log.info("reconcile: %d synthetic anchors for grounded threats", len(minted))
-        done: set[str] = set()
-        queue = reconcile(from_anchors(anchors) + hyps, [], done)
-        if self.entry_points_fn is not None:  # plan-stage rule: no entry point stays unexamined
-            baseline, minted_entries = coverage(self.entry_points_fn(), queue, done)
-            if minted_entries:
-                self.store.save_anchors(minted_entries)  # inline handlers / PHP pages: anchors at file:line
-            queue = reconcile(baseline, queue, done)
-        return queue, done
+        return build_queue(self.store, anchors, self.threats, self.locate, self.entry_points_fn)
 
     async def _investigate_round(
         self, ctx: InvocationContext, queue: list[Hypothesis], done: set[str], rnd: int, timings: dict,
