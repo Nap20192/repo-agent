@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import AsyncGenerator, Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from google.adk.agents import BaseAgent
@@ -15,7 +16,13 @@ from google.adk.events import Event
 from pydantic import Field
 
 from scanner import core
-from scanner.app.graph import Graph, activation, parse_json, with_deadline
+from scanner.app.graph import (
+    Graph,
+    _ActivationSpec,
+    activation,
+    parse_json,
+    with_deadline,
+)
 from scanner.app.reconcile import (
     KNOWN_WSTG,
     coverage,
@@ -25,10 +32,18 @@ from scanner.app.reconcile import (
     key,
     reconcile,
 )
-from scanner.core import ArchitectureModel, Candidate, Threat, ThreatModel
+from scanner.core import ArchitectureModel, Candidate, Hypothesis, Threat, ThreatModel
 from scanner.core.ports import Closeable
 
 log = logging.getLogger("scanner.pipeline_v2")
+
+
+@dataclass
+class _RoundResult:
+    """Out-param for `_investigate_round`: an async generator can't `return` a value while still yielding events."""
+
+    rnd: int = 0
+    stop: str = ""
 
 
 class PipelineV2(Graph):
@@ -62,7 +77,8 @@ class PipelineV2(Graph):
             run = self._run_activations(ctx, f"stage_{stage}", [activation(agent, stage, stage, payload)], texts)
             async for ev in with_deadline(run, limit):
                 yield ev
-            async for ev in with_deadline(self._retry_json(ctx, agent, stage, stage, payload, texts), limit):
+            act = _ActivationSpec(stage, stage, payload)
+            async for ev in with_deadline(self._retry_json(ctx, agent, act, texts), limit):
                 yield ev
         except Exception as e:  # noqa: BLE001 — a failed/slow model stage degrades to "no artifact", the scan goes on
             log.warning("stage %s failed: %s", stage, e)
@@ -111,12 +127,12 @@ class PipelineV2(Graph):
                 except ValueError as e:
                     log.warning("threat_model: invalid: %s", e)
 
-    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
-        anchors = self.store.anchors()
-        timings: dict[str, float] = {}
+    async def _run_stages(self, ctx: InvocationContext, anchors: list, timings: dict) -> AsyncGenerator[Event, None]:
+        """Architect → DomainModeler → ThreatModeler, then ground the artifacts in code: symbols must exist
+        (index or locate), WSTG ids must be real. Grounded artifacts are persisted back to the store; the
+        caller re-reads them (`architecture_model`, `threat_model`) once this generator is exhausted."""
         async for ev in self._model_threats(ctx, anchors, [], timings):  # threats are rebuilt from the grounded artifact
             yield ev
-        # grounding is a property of the code: symbols must exist (index or locate), WSTG ids must be real
         grounded = lambda s: self.has_symbol(s) or bool(self.locate and self.locate(s))
         arts = [self.store.artifact(st) for st in ("architecture_model", "domain_map", "threat_model")]
         am, dm, tm, notes = ground_artifacts(*arts, grounded, KNOWN_WSTG)
@@ -128,13 +144,18 @@ class PipelineV2(Graph):
         if notes:
             log.info("grounding: %d items dropped or corrected", len(notes))
         yield self._state_event(ctx, {"grounding_dropped": len(notes)})
+
+    def _build_queue(self, anchors: list) -> tuple[list[Hypothesis], set[str]]:
+        """One prioritized queue from the grounded threat model, the scanner anchors and entry-point coverage."""
+        am = self.store.artifact("architecture_model") or {}
+        tm = self.store.artifact("threat_model")
         threats = list(self.threats)
         if tm:
             try:
                 threats += ThreatModel.model_validate(tm).threats
             except ValueError as e:
                 log.warning("threat_model: invalid after grounding: %s", e)
-        criticality = {e.get("grounding_symbol", ""): e.get("criticality", "") for e in (am or {}).get("entities", [])}
+        criticality = {e.get("grounding_symbol", ""): e.get("criticality", "") for e in am.get("entities", [])}
         hyps, minted = from_threats(threats, anchors, self.locate, criticality)
         if minted:
             self.store.save_anchors(minted)  # synthetic anchors keep the single anchor-only gate
@@ -146,7 +167,14 @@ class PipelineV2(Graph):
             if minted_entries:
                 self.store.save_anchors(minted_entries)  # inline handlers / PHP pages: anchors at file:line
             queue = reconcile(baseline, queue, done)
-        rnd = int(ctx.session.state.get(core.STATE_ROUND) or 0)
+        return queue, done
+
+    async def _investigate_round(
+        self, ctx: InvocationContext, queue: list[Hypothesis], done: set[str], rnd: int, timings: dict,
+        result: _RoundResult,
+    ) -> AsyncGenerator[Event, None]:
+        """Drain `queue` in ≤ max_hyps batches through the gate and the Verifier until empty, the round limit
+        or the budget; final round/stop reason land in `result` (an async generator can't return a value)."""
         stop = ""
         while queue:
             if rnd >= self.max_rounds:
@@ -177,7 +205,18 @@ class PipelineV2(Graph):
                 stop = f"verify round {rnd - 1} failed: {failed}"
                 break
             queue = reconcile([h for d in dossiers for h in d.new_hypotheses[:3]], queue, done)
+        result.rnd, result.stop = rnd, stop
 
-        async for ev in self._finish(ctx, stop, rnd, timings):
+    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+        anchors = self.store.anchors()
+        timings: dict[str, float] = {}
+        async for ev in self._run_stages(ctx, anchors, timings):
+            yield ev
+        queue, done = self._build_queue(anchors)
+        rnd = int(ctx.session.state.get(core.STATE_ROUND) or 0)
+        result = _RoundResult()
+        async for ev in self._investigate_round(ctx, queue, done, rnd, timings, result):
+            yield ev
+        async for ev in self._finish(ctx, result.stop, result.rnd, timings):
             yield ev
         self.store.put_artifact("timings", timings)

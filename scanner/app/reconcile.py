@@ -96,6 +96,55 @@ def _wstg_or_map(wid: str, cwe: str, known: set[str]) -> tuple[str, bool]:
     return (owasp.consult(cwe).get("wstg_id", "") if cwe else ""), True
 
 
+def _drop_ungrounded_entities(entities: list[dict], sym_ok: Callable[[str], bool]) -> tuple[list[dict], list[str]]:
+    """Entities whose `grounding_symbol` is not in the index are dropped; a note explains each drop."""
+    kept, notes = [], []
+    for e in entities:
+        if e.get("grounding_symbol") and not sym_ok(e["grounding_symbol"]):
+            notes.append(f"ungrounded entity {e.get('name', '?')}: symbol {e['grounding_symbol']!r} not in the index")
+        else:
+            kept.append(e)
+    return kept, notes
+
+
+def _fix_wstg(vuln_classes: list[dict], known_wstg: set[str]) -> tuple[list[dict], list[str]]:
+    """A fabricated `wstg_id` on a vuln class → the CWE's mapped id (or cleared); real/absent ids pass through."""
+    fixed, notes = [], []
+    for v in vuln_classes:
+        wid, fake = _wstg_or_map(v.get("wstg_id", ""), v.get("cwe", ""), known_wstg)
+        if fake:
+            notes.append(f"fabricated wstg id {v.get('wstg_id')!r} for {v.get('cwe')} → {wid or 'none'}")
+            v = {**v, "wstg_id": wid}
+        fixed.append(v)
+    return fixed, notes
+
+
+def _ground_rules(rules: list[dict], sym_ok: Callable[[str], bool]) -> tuple[list[dict], list[str]]:
+    """Domain-map rules whose `symbol` is not in the index are dropped; a note (a "gap") explains each drop."""
+    kept, notes = [], []
+    for r in rules:
+        if not sym_ok(r.get("symbol", "")):
+            notes.append(f"rule {r.get('id', '?')} ungrounded: symbol {r.get('symbol')!r} not in the index — {r.get('statement', '')}")
+        else:
+            kept.append(r)
+    return kept, notes
+
+
+def _ground_threats(threats: list[dict], sym_ok: Callable[[str], bool], known_wstg: set[str]) -> tuple[list[dict], list[str]]:
+    """A threat grounded on neither a symbol nor a (file, line) is dropped; survivors get `_fix_wstg`'s treatment."""
+    kept, notes = [], []
+    for t in threats:
+        if not sym_ok(t.get("symbol", "")) and not (t.get("file") and t.get("line")):
+            notes.append(f"ungrounded threat dropped: {t.get('claim', '')[:80]} (symbol {t.get('symbol')!r})")
+            continue
+        wid, fake = _wstg_or_map(t.get("wstg_id", ""), t.get("cwe", ""), known_wstg)
+        if fake:
+            notes.append(f"fabricated wstg id {t.get('wstg_id')!r} on threat {t.get('claim', '')[:40]!r} → {wid or 'none'}")
+            t = {**t, "wstg_id": wid}
+        kept.append(t)
+    return kept, notes
+
+
 def ground_artifacts(am: dict | None, dm: dict | None, tm: dict | None, has_symbol, known_wstg: set[str]):
     """Enforce in code what the prompts ask for: symbols must exist, WSTG ids must be real.
 
@@ -113,49 +162,28 @@ def ground_artifacts(am: dict | None, dm: dict | None, tm: dict | None, has_symb
 
     if am is not None:
         am, mine = dict(am), []
-        kept = []
-        for e in am.get("entities") or []:
-            if e.get("grounding_symbol") and not sym_ok(e["grounding_symbol"]):
-                mine.append(f"ungrounded entity {e.get('name', '?')}: symbol {e['grounding_symbol']!r} not in the index")
-            else:
-                kept.append(e)
+        kept, entity_notes = _drop_ungrounded_entities(am.get("entities") or [], sym_ok)
+        mine += entity_notes
         if "entities" in am:
             am["entities"] = kept
-        vcs = []
-        for v in am.get("vuln_classes") or []:
-            wid, fake = _wstg_or_map(v.get("wstg_id", ""), v.get("cwe", ""), known_wstg)
-            if fake:
-                mine.append(f"fabricated wstg id {v.get('wstg_id')!r} for {v.get('cwe')} → {wid or 'none'}")
-                v = {**v, "wstg_id": wid}
-            vcs.append(v)
+        vcs, wstg_notes = _fix_wstg(am.get("vuln_classes") or [], known_wstg)
+        mine += wstg_notes
         if "vuln_classes" in am:
             am["vuln_classes"] = vcs
         noted(am, "notes", mine)
         notes += mine
     if dm is not None:
         dm, mine = dict(dm), []
-        rules = []
-        for r in dm.get("rules") or []:
-            if not sym_ok(r.get("symbol", "")):
-                mine.append(f"rule {r.get('id', '?')} ungrounded: symbol {r.get('symbol')!r} not in the index — {r.get('statement', '')}")
-            else:
-                rules.append(r)
+        rules, rule_notes = _ground_rules(dm.get("rules") or [], sym_ok)
+        mine += rule_notes
         if "rules" in dm:
             dm["rules"] = rules
         noted(dm, "gaps", mine)
         notes += mine
     if tm is not None:
         tm, mine = dict(tm), []
-        threats = []
-        for t in tm.get("threats") or []:
-            if not sym_ok(t.get("symbol", "")) and not (t.get("file") and t.get("line")):
-                mine.append(f"ungrounded threat dropped: {t.get('claim', '')[:80]} (symbol {t.get('symbol')!r})")
-                continue
-            wid, fake = _wstg_or_map(t.get("wstg_id", ""), t.get("cwe", ""), known_wstg)
-            if fake:
-                mine.append(f"fabricated wstg id {t.get('wstg_id')!r} on threat {t.get('claim', '')[:40]!r} → {wid or 'none'}")
-                t = {**t, "wstg_id": wid}
-            threats.append(t)
+        threats, threat_notes = _ground_threats(tm.get("threats") or [], sym_ok, known_wstg)
+        mine += threat_notes
         if "threats" in tm:
             tm["threats"] = threats
         noted(tm, "notes", mine)

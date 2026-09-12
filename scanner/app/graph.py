@@ -9,6 +9,7 @@ import logging
 import re
 import time
 from collections.abc import AsyncGenerator, Callable
+from dataclasses import dataclass
 
 from google.adk.agents import BaseAgent, LlmAgent, ParallelAgent
 from google.adk.agents.invocation_context import InvocationContext
@@ -46,6 +47,15 @@ def parse_json(text: str) -> dict | None:
 
 JSON_NUDGE = "Your previous reply was not valid JSON. Reply with the JSON object only."
 STATE_JSON_RETRIES = "json_retries"
+
+
+@dataclass(frozen=True)
+class _ActivationSpec:
+    """The (name, label, payload) triple `_retry_json` needs to replay an activation with the JSON nudge."""
+
+    name: str
+    label: str
+    payload: dict
 
 
 def activation(agent: BaseAgent, name: str, label: str, payload: dict, suffix: str = "") -> BaseAgent:
@@ -137,20 +147,20 @@ class Graph(BaseAgent):
             yield ev
 
     async def _retry_json(
-        self, ctx: InvocationContext, agent: BaseAgent, name: str, label: str, payload: dict, texts: dict[str, str],
-        suffix: str = "",
+        self, ctx: InvocationContext, agent: BaseAgent, act: _ActivationSpec, texts: dict[str, str], suffix: str = "",
     ) -> AsyncGenerator[Event, None]:
-        """One more activation with the JSON nudge when `texts[name]` has no valid JSON; result lands in texts[name].
-        Counted in session state `json_retries`; `json_retry=False` disables."""
-        if not self.json_retry or parse_json(texts.get(name, "")) is not None:
+        """One more activation with the JSON nudge when `texts[act.name]` has no valid JSON; result lands in
+        texts[act.name]. Counted in session state `json_retries`; `json_retry=False` disables."""
+        if not self.json_retry or parse_json(texts.get(act.name, "")) is not None:
             return
-        retry = _activation(agent, f"{name}_retry", label, payload, suffix=f"{suffix}\n\n{JSON_NUDGE}" if suffix else JSON_NUDGE)
-        async for ev in self._run_activations(ctx, f"{name}_retry_run", [retry], texts):
+        retry = _activation(agent, f"{act.name}_retry", act.label, act.payload,
+                             suffix=f"{suffix}\n\n{JSON_NUDGE}" if suffix else JSON_NUDGE)
+        async for ev in self._run_activations(ctx, f"{act.name}_retry_run", [retry], texts):
             yield ev
         if (t := texts.pop(retry.name, "")):
-            texts[name] = t
+            texts[act.name] = t
         n = int(ctx.session.state.get(STATE_JSON_RETRIES) or 0) + 1
-        log.info("json retry #%d for %s", n, name)
+        log.info("json retry #%d for %s", n, act.name)
         yield self._state_event(ctx, {STATE_JSON_RETRIES: n})
 
     def _pick(self, item, role: str) -> tuple[BaseAgent, str, str]:
@@ -185,6 +195,47 @@ class Graph(BaseAgent):
                 break
         return out
 
+    @staticmethod
+    def _verify_payloads(accepted: list[Hypothesis], routed: list[tuple[BaseAgent, str, str]]) -> list[dict]:
+        """Hypothesis + its skill hints + the routed specialist name, one dict per accepted hypothesis."""
+        return [{**h.model_dump(), "skill": skill_for(h.cwe, h.kind), "skills": skills_for(h.cwe, h.kind), "specialist": name}
+                for h, (_, name, _) in zip(accepted, routed)]
+
+    @staticmethod
+    def _verify_activations(
+        rnd: int, accepted: list[Hypothesis], routed: list[tuple[BaseAgent, str, str]], payloads: list[dict]
+    ) -> list[tuple[Hypothesis, BaseAgent]]:
+        """One activation per hypothesis, named verify_r<round>_<n>, with the routed agent's overlay suffix."""
+        return [(h, _activation(agent, f"verify_r{rnd}_{i}", "Hypothesis", payloads[i], suffix=suffix))
+                for i, (h, (agent, _, suffix)) in enumerate(zip(accepted, routed))]
+
+    def _assemble_dossiers(
+        self, ctx: InvocationContext, acts: list[tuple[Hypothesis, BaseAgent]], routed: list[tuple[BaseAgent, str, str]],
+        texts: dict[str, str], failed: str, budget: bool,
+    ) -> list[Dossier]:
+        """Verdict from STORE facts for each hypothesis; the model's JSON (if any) only adds notes/new_hypotheses."""
+        findings = self.store.findings()
+        dossiers = []
+        exhausted = {k.rsplit(".", 1)[-1] for k, v in ctx.session.state.items() if v and k.startswith(f"{core.STATE_BUDGET_EXHAUSTED}:")}
+        for i, (h, a) in enumerate(acts):
+            d = dossier_from_store(findings, h)
+            if "specialist" in Dossier.model_fields:
+                d = d.model_copy(update={"specialist": routed[i][1]})
+            own_budget = a.name in exhausted  # this verifier ran out of calls; the run goes on
+            md = parse_json(texts.get(a.name, ""))
+            if md is not None:
+                try:
+                    m = Dossier.model_validate(md)
+                    d.notes, d.new_hypotheses = m.notes, m.new_hypotheses
+                except ValueError as e:
+                    d.error = f"invalid Dossier JSON: {e}"
+            elif not d.finding_id:  # nothing in the store and no JSON: the verifier never got there
+                d.error = failed or ("budget" if budget or own_budget else "no Dossier JSON and nothing reported")
+            if d.error:
+                log.warning("verify %s: %s", h.id, d.error)
+            dossiers.append(d)
+        return dossiers
+
     async def _verify(
         self, ctx: InvocationContext, rnd: int, accepted: list[Hypothesis], out: dict
     ) -> AsyncGenerator[Event, None]:
@@ -193,10 +244,8 @@ class Graph(BaseAgent):
         texts: dict[str, str] = {}
         failed = ""
         routed = [self._pick(h, "investigate") for h in accepted]  # (agent, specialist name, suffix) per hypothesis
-        payloads = [{**h.model_dump(), "skill": skill_for(h.cwe, h.kind), "skills": skills_for(h.cwe, h.kind), "specialist": name}
-                    for h, (_, name, _) in zip(accepted, routed)]
-        acts = [(h, _activation(agent, f"verify_r{rnd}_{i}", "Hypothesis", payloads[i], suffix=suffix))
-                for i, (h, (agent, _, suffix)) in enumerate(zip(accepted, routed))]
+        payloads = self._verify_payloads(accepted, routed)
+        acts = self._verify_activations(rnd, accepted, routed, payloads)
         step = self.max_parallel if self.max_parallel > 0 else len(acts)
         for ci in range(0, len(acts), step):
             chunk = [a for _, a in acts[ci : ci + step]]
@@ -210,30 +259,11 @@ class Graph(BaseAgent):
             for i, (h, a) in enumerate(acts):
                 if parse_json(texts.get(a.name, "")) is None and not self._budget_hit(ctx):
                     agent, _, suffix = routed[i]  # the retry goes to the same specialist with the same overlay
-                    async for ev in self._retry_json(ctx, agent, a.name, "Hypothesis", payloads[i], texts, suffix=suffix):
+                    act = _ActivationSpec(a.name, "Hypothesis", payloads[i])
+                    async for ev in self._retry_json(ctx, agent, act, texts, suffix=suffix):
                         yield ev
         budget = self._budget_hit(ctx)
-        findings = self.store.findings()
-        dossiers = []
-        exhausted = {k.rsplit(".", 1)[-1] for k, v in ctx.session.state.items() if v and k.startswith(f"{core.STATE_BUDGET_EXHAUSTED}:")}
-        for i, (h, a) in enumerate(acts):
-            d = dossier_from_store(findings, h)
-            if "specialist" in Dossier.model_fields:
-                d = d.model_copy(update={"specialist": routed[i][1]})
-            own_budget = a.name in exhausted  # this verifier ran out of calls; the run goes on
-            raw = texts.get(a.name, "")
-            md = parse_json(raw)
-            if md is not None:
-                try:
-                    m = Dossier.model_validate(md)
-                    d.notes, d.new_hypotheses = m.notes, m.new_hypotheses
-                except ValueError as e:
-                    d.error = f"invalid Dossier JSON: {e}"
-            elif not d.finding_id:  # nothing in the store and no JSON: the verifier never got there
-                d.error = failed or ("budget" if budget or own_budget else "no Dossier JSON and nothing reported")
-            if d.error:
-                log.warning("verify %s: %s", h.id, d.error)
-            dossiers.append(d)
+        dossiers = self._assemble_dossiers(ctx, acts, routed, texts, failed, budget)
         out.update(dossiers=dossiers, failed=failed, budget=budget)
 
     async def _critic_pass(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
