@@ -16,7 +16,6 @@ from google.adk.events import Event
 from pydantic import Field
 
 from scanner import core
-from scanner.adapter.knowledge import enrichment_for, imported_by
 from scanner.app.graph import (
     Graph,
     _ActivationSpec,
@@ -24,16 +23,16 @@ from scanner.app.graph import (
     parse_json,
     with_deadline,
 )
+from scanner.app.graph_nodes import report_direct
 from scanner.app.reconcile import (
     KNOWN_WSTG,
     build_queue,
-    direct_finding,
     ground_artifacts,
     key,
     reconcile,
     split_direct,
 )
-from scanner.core import Anchor, ArchitectureModel, Candidate, Hypothesis, Threat, ThreatModel
+from scanner.core import ArchitectureModel, Candidate, Hypothesis, Threat, ThreatModel
 from scanner.core.ports import Closeable
 
 log = logging.getLogger("scanner.pipeline_v2")
@@ -190,24 +189,9 @@ class PipelineV2(Graph):
             queue = reconcile([h for d in dossiers for h in d.new_hypotheses[:3]], queue, done)
         result.rnd, result.stop = rnd, stop
 
-    def _report_direct(self, direct: list[Anchor]) -> None:
-        """Direct anchors → confirmed findings through the store's dedup, no model: osv with its knowledge record
-        and an import count, gitleaks/semgrep as they are. Artifact `direct_findings` lists the ids."""
-        cfg = getattr(self.store, "knowledge", None)
-        ids = []
-        for a in direct:
-            e = enrichment_for(a.id, cfg) if a.tool == "osv" and cfg is not None else None
-            pkg = (e or {}).get("package") or (a.snippet.split() or [""])[0]
-            n = imported_by(Path(self.target), pkg) if a.tool == "osv" and pkg and self.target else None
-            ids.append(self.store.report(direct_finding(a, e, n)).id)
-        self.store.put_artifact("direct_findings", {"ids": ids})
-        if direct:
-            log.info("direct findings: %d scanner results reported without the model (%s)", len(direct),
-                     ", ".join(f"{t} {sum(a.tool == t for a in direct)}" for t in dict.fromkeys(a.tool for a in direct)))
-
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         direct, anchors = split_direct(self.store.anchors())
-        self._report_direct(direct)
+        report_direct(self.store, self.target, direct)
         timings: dict[str, float] = {}
         async for ev in self._run_stages(ctx, anchors, timings):
             yield ev
