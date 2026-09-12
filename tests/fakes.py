@@ -36,7 +36,10 @@ class FakeRun:
 
     def anchors(self): return list(self._anchors)
     def anchor(self, anchor_id): return next((a for a in self._anchors if a.id == anchor_id), None)
-    def save_anchors(self, xs): self._anchors = self._anchors + list(xs)
+    def save_anchors(self, xs):  # INSERT OR REPLACE by id, like Store.Run
+        by_id = {a.id: a for a in self._anchors}
+        by_id.update({a.id: a for a in xs})
+        self._anchors = list(by_id.values())
     def put_hypotheses(self, rnd, hs): self.hyps[rnd] = hs
     def put_dossiers(self, rnd, ds): self.doss[rnd] = ds
     def findings(self): return list(self._findings)

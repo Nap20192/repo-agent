@@ -16,6 +16,7 @@ from google.adk.workflow import FunctionNode, node
 
 from scanner.adapter.knowledge import enrichment_for, imported_by
 from scanner.adapter.skills import skill_for, skills_for
+from scanner.adapter.static import ScanResult
 from scanner.app.graph import dossier_from_store, parse_json, pick_agent
 from scanner.app.reconcile import direct_finding, split_direct
 from scanner.core import Anchor, Candidate, Dossier, Finding, Hypothesis
@@ -34,6 +35,24 @@ def anchor_view(anchors: list[Anchor]) -> list[dict]:
     """The trimmed anchor list the modelling stages see."""
     return [{"id": a.id, "tool": a.tool, "cwe": a.cwe, "file": a.file, "line": a.line, "message": a.message[:120]}
             for a in anchors]
+
+
+def scan_node(store: RunStore, scan_fn: Callable[[], ScanResult]) -> FunctionNode:
+    """START → the pre-pass as a graph node: run the static scanners, save their anchors, record what ran and
+    what failed in the `scan` artifact. Resume: an existing artifact means the anchors are already in the store."""
+    def scan(node_input) -> dict:  # node_input: the user turn that started the run, unused
+        if (cached := store.artifact("scan")) is not None:
+            return {k: cached[k] for k in ("anchors", "ran", "failed")}
+        res = scan_fn()
+        for tool, why in res.failed.items():
+            log.warning("static: %s failed: %s", tool, why)
+        store.save_anchors(res.anchors)
+        by_tool = {t: n for t in res.ran if (n := sum(a.tool == t for a in res.anchors))}
+        log.info("pre-pass: %d anchors — %s%s", len(res.anchors), ", ".join(f"{t} {n}" for t, n in by_tool.items()),
+                 f"; failed: {', '.join(res.failed)}" if res.failed else "")
+        store.put_artifact("scan", {"anchors": len(res.anchors), "by_tool": by_tool, "ran": res.ran, "failed": res.failed})
+        return {"anchors": len(res.anchors), "ran": res.ran, "failed": res.failed}
+    return FunctionNode(func=scan, name="scan")
 
 
 def build_skeleton_node(store: RunStore, target: str, entry_points_fn: Callable[[], list[Candidate]] | None) -> FunctionNode:

@@ -37,7 +37,7 @@ ArchitectureModel; ThreatModeler выдаёт заземлённые threats и 
 сливает якоря сканеров и threats в одну очередь без дублей, чеканя синтетический якорь
 (`tool=threatmodel`, file:line определения символа) для угроз без якоря сканера, чтобы гейт
 `report_finding` остался единственным и якорным. Артефакты стадий — в таблице `artifacts` State
-(resume пропускает готовые стадии). Граф — ADK 2.9 `Workflow` из четырёх узлов `build_skeleton → plan → investigate → finish`
+(resume пропускает готовые стадии). Граф — ADK 2.9 `Workflow` из четырёх узлов `scan → build_skeleton → plan → investigate → finish`
 (ADR-0007; параллельная верификация — `parallel_worker`-узел, роутер специалистов в коде). `THREAT_MODEL=0` — без Architect/ThreatModeler.
 Инструкции стадий адаптированы из Mantis/Shannon (Apache-2.0), см. THIRD_PARTY_NOTICES.md.
 

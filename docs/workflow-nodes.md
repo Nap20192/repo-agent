@@ -1,7 +1,7 @@
 # Узлы рабочего графа сканера: вход, выход, «о чём думает» каждая нода
 
-Документ описывает граф скана репозитория — 23 узла Shannon-графа из `docs/plans/shannon-graph.md` §2–3 — так, как
-он существует в коде сегодня (4-узловой `Workflow` `scan`: `build_skeleton → plan → investigate → finish`,
+Документ описывает граф скана репозитория — 24 узла (23 Shannon-графа + `scan`) из `docs/plans/shannon-graph.md` §2–3 — так, как
+он существует в коде сегодня (4-узловой `Workflow` `scan`: `scan → build_skeleton → plan → investigate → finish`,
 `scanner/app/pipeline.py:212-215`) и как он спланирован (`scan_v4`, план §2, строки 65-78). Для каждой ноды
 различаются статусы **есть** (код с `file:line`), **частично** (поведение есть, но живёт внутри другого узла или в
 другой форме) и **план** (кода нет; ссылка на раздел плана).
@@ -38,12 +38,13 @@ flowchart TD
     route_intent -- "default" --> critic --> confirm --> calibrate --> export
 ```
 
-Сегодняшний граф (`pipeline.py:212-215`): `START → build_skeleton → plan → investigate → finish`, где `plan`
+Сегодняшний граф (`pipeline.py:212-215`): `START → scan → build_skeleton → plan → investigate → finish`, где `plan`
 содержит `direct_findings`, три LLM-стадии, `ground` и `build_queue`; `investigate` — цикл раундов с triage и
 `route_and_verify`; `finish` — `route_and_critique` и отчёт.
 
 | # | Узел | Тип ADK (план §2/§3) | Статус | Вход → выход |
 |---|---|---|---|---|
+| 0 | `scan` | `FunctionNode` | есть (`graph_nodes.py:40-55`) | user turn → `{anchors, ran, failed}`; якоря → стор |
 | 1 | `build_skeleton` | `FunctionNode` | есть (`graph_nodes.py:39-43`) | user turn → `ScanSkeleton` |
 | 2 | `direct_findings` | `FunctionNode` | есть, вызывается изнутри `plan` (`pipeline.py:115`) | якоря стора → `{remaining, reported}` |
 | 3 | `architect` | `stage_node(LlmAgent single_turn, output_schema=ArchitectureModel)` | частично: `stage()` (`pipeline.py:92-110`) | `{target, entry_points, anchors}` (план — `DirectResult`) → артефакт `architecture_model` |
@@ -78,6 +79,36 @@ flowchart TD
 
 ## 3. Узлы
 
+### 3.0 `scan`
+
+**Тип ADK:** `FunctionNode` (`graph_nodes.py:40-55`). **Статус:** есть. Первое ребро графа (`pipeline.py:217-220`):
+узел появляется, когда фабрике передан `scan_fn`; `runner.wiring` подставляет `static.scan(target, skip_deps, knowledge_cfg)`
+(`runner.py:101`), тесты вместо этого кладут якоря в стор напрямую.
+
+**Вход**
+
+| Имя | Откуда | Схема |
+|---|---|---|
+| `node_input` | пользовательский ход, запустивший сессию | текст; не используется |
+| `scan_fn` | замыкание фабрики: `static.scan` с `skip_deps` из CLI-флага `--deps`/`SKIP_DEPS` и `knowledge_cfg = run.knowledge` (`runner.py:101`) | `() -> ScanResult{anchors, ran, failed}` (`static.py:49-52`) |
+
+**Выход:** `{"anchors": N, "ran": [tool…], "failed": {tool: причина}}`; побочно — якоря в таблице `anchors` стора
+(`store.save_anchors`, INSERT OR REPLACE по id) и артефакт `scan{anchors, by_tool, ran, failed}` (`graph_nodes.py:52`).
+
+**Что делает.** Запускает статические сканеры параллельно (`static.scan`: gosec на каждый `go.mod`, semgrep с паками
+под язык, osv-scanner по манифестам, gitleaks; упавший или отсутствующий инструмент попадает в `failed`, а не в
+исключение — `static.py:229-231`), сохраняет якоря и пишет артефакт. **Resume:** если артефакт `scan` уже есть,
+сканеры не запускаются, а выход строится из артефакта (`graph_nodes.py:44-45`) — якоря уже в сторе.
+
+**Инструменты / бюджет:** нет (без модели). **Отказ:** детерминирован; ноль якорей — допустимый результат, скан идёт
+дальше по точкам входа и file-baseline'ам. **Завершение:** всегда один словарь.
+
+**Пример на NodeGoat:** `pre-pass: 48 anchors — semgrep 5, osv 40, gitleaks 3` (run 18), артефакт
+`scan{"anchors": 48, "by_tool": {"semgrep": 5, "osv": 40, "gitleaks": 3}, "ran": [...], "failed": {}}`; на
+Photoview gosec из корня падал (модуль в `api/`), теперь один запуск на каждый `go.mod` (`static.py:129-142`).
+
+**Источники:** `graph_nodes.py:40-55`; `pipeline.py:56,217-220`; `runner.py:101,132-150`; `static.py:49-52,229-231`.
+
 ### 3.1 `build_skeleton`
 
 **Тип ADK:** `FunctionNode` (`graph_nodes.py:43`). **Статус:** есть.
@@ -94,8 +125,8 @@ RunStore (артефакта нет) — он живёт только в соб�
 пересчитываются в `runner.prepare` (`runner.py:152`). Схема терпима к лишним полям (`extra="ignore"`,
 `core/workflow.py:14-15`).
 
-**Что делает.** Ничего не читает из репозитория: сканеры уже отработали в `runner.prepare` (`runner.py:143-146`:
-`static.scan` → `run.save_anchors`), индекс построен (`runner.py:151`). Узел собирает «скелет» — цель и точки входа,
+**Что делает.** Ничего не читает из репозитория: сканеры уже отработали в узле `scan` (§3.0), индекс построен в
+`runner.prepare` (`runner.py:143`). Узел собирает «скелет» — цель и точки входа,
 найденные текстовыми детекторами маршрутов (`adapter/entrypoints.py:20-29`: Go `HandleFunc/GET/POST…`, Python
 `@app.route`/`urls.py`, Express `app|router.get(...)`, Laravel `Route::`). Детекторы точек входа есть только для go,
 python, javascript, typescript и php (`DETECTORS`, `entrypoints.py:82`); строки длиннее `MAX_DETECT_LINE = 1000`

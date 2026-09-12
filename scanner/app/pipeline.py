@@ -1,4 +1,4 @@
-"""The scan graph on the ADK 2.9 Workflow API (docs/adr/0007): START → build_skeleton → plan → investigate → finish.
+"""The scan graph on the ADK 2.9 Workflow API (docs/adr/0007): START → scan → build_skeleton → plan → investigate → finish.
 
 Stages: Architect → DomainModeler → ThreatModeler → grounding → direct findings → queue → Investigator rounds →
 Critic → report. The bodies are dynamic nodes with their own try/except because ADK fails the whole Workflow on
@@ -16,6 +16,7 @@ from google.adk.workflow import START, Workflow, node
 from pydantic import ConfigDict
 
 from scanner import core
+from scanner.adapter.static import ScanResult
 from scanner.app.graph import gate_hypotheses
 from scanner.app.graph_nodes import (
     _model_json,
@@ -25,6 +26,7 @@ from scanner.app.graph_nodes import (
     direct_findings_node,
     route_and_critique_node,
     route_and_verify_node,
+    scan_node,
     triage_node,
 )
 from scanner.app.reconcile import KNOWN_WSTG, build_queue, ground_artifacts, key, reconcile
@@ -51,6 +53,7 @@ def build_workflow(
     has_anchor: Callable[[str], bool], has_symbol: Callable[[str], bool],
     locate: Callable[[str], tuple[str, int] | None] | None = None,
     entry_points_fn: Callable[[], list[Candidate]] | None = None, threats: list[Threat] | None = None,
+    scan_fn: Callable[[], ScanResult] | None = None,
     source_files_fn: Callable[[], list[str]] | None = None,
     max_rounds: int = 4, max_hyps: int = 8, max_parallel: int = 3, stage_timeout: float = 600.0,
     index: Closeable | None = None,
@@ -211,5 +214,9 @@ def build_workflow(
 
     a = build_skeleton_node(store, target, entry_points_fn)
     b, c, d = (node(f, rerun_on_resume=True, name=f.__name__) for f in (plan, investigate, finish))
+    edges = [(START, a), (a, b), (b, c), (c, d)]
+    if scan_fn is not None:  # the pre-pass is the first node (scanners → anchors); tests may inject anchors instead
+        s0 = scan_node(store, scan_fn)
+        edges = [(START, s0), (s0, a), (a, b), (b, c), (c, d)]
     # no state_schema: ADK rejects undeclared keys, and the budget callback writes per-branch keys (`budget_exhausted:<branch>`)
-    return ScanWorkflow(name="scan", edges=[(START, a), (a, b), (b, c), (c, d)], index=index)
+    return ScanWorkflow(name="scan", edges=edges, index=index)

@@ -250,3 +250,12 @@ def test_no_triage_node_means_the_old_flow():
     eps = [Candidate(kind="entry", file="x.js", line=1, symbol="x", route=["GET /x"])]
     _run(_workflow(run, entry_points_fn=lambda: eps, max_parallel=1))
     assert len(run.doss[0]) == 1 and run.doss[0][0].specialist == ""
+
+
+def test_scan_node_is_the_first_edge_when_scan_fn_is_given():
+    from scanner.adapter.static import ScanResult
+    run = FakeRun(anchors=[])  # an empty store: the scan node is what fills it
+    wf = _workflow(run, scan_fn=lambda: ScanResult(anchors=[A1], ran=["gosec"]))
+    assert [n.name for n in wf.graph.nodes][:3] == ["__START__", "scan", "build_skeleton"]
+    _run(wf)
+    assert [a.id for a in run.anchors()] == [A1.id] and run.artifact("scan")["ran"] == ["gosec"]

@@ -86,7 +86,7 @@ async def run_session(agent, target: str, run_id: int, settings: Settings | None
 
 
 def wiring(run, target: Path, entries: list[Candidate], model, index: Index | None = None,
-           settings: Settings | None = None) -> dict:
+           settings: Settings | None = None, deps: bool = False) -> dict:
     """Everything the graph needs for one run, by keyword: agents (Architect → DomainModeler → ThreatModeler,
     Investigator + specialists, Critic), the store, the index-backed callables and the budgets."""
     s = settings or Settings.from_env()
@@ -98,6 +98,7 @@ def wiring(run, target: Path, entries: list[Candidate], model, index: Index | No
     ) if s.specialists else {}
     return {
         "index": index,
+        "scan_fn": lambda: static.scan(target, skip_deps=not deps and s.skip_deps, knowledge_cfg=run.knowledge),
         "architect": new_architect(model, architect_tools(run, target, index=index), s.architect_max_calls,
                                 overlay=architect_overlay(langs)) if s.threat_model else None,
         "domain_modeler": new_domain_modeler(model, architect_tools(run, target, index=index), s.domain_modeler_max_calls)
@@ -124,13 +125,14 @@ def wiring(run, target: Path, entries: list[Candidate], model, index: Index | No
 
 
 def build_agent(run, target: Path, entries: list[Candidate], model, index: Index | None = None,
-                settings: Settings | None = None):
-    """The ADK Workflow for one run: build_skeleton → plan → investigate → finish (docs/adr/0007)."""
-    return build_workflow(**wiring(run, target, entries, model, index, settings))
+                settings: Settings | None = None, deps: bool = False):
+    """The ADK Workflow for one run: scan → build_skeleton → plan → investigate → finish (docs/adr/0007).
+    The static pre-pass runs inside the graph (the `scan` node) so `adk web` shows it and resume replays it."""
+    return build_workflow(**wiring(run, target, entries, model, index, settings, deps=deps))
 
 
 def prepare(target: Path, deps: bool = False, settings: Settings | None = None):
-    """Store → run → pre-pass (scanners → anchors) → entry points → wired graph. Returns (store, run, agent)."""
+    """Store → run → index → entry points → wired graph (the scanners run inside it). Returns (store, run, agent)."""
     s = settings or Settings.from_env()
     setup_tracing(s)
     target = target.resolve()
@@ -140,16 +142,8 @@ def prepare(target: Path, deps: bool = False, settings: Settings | None = None):
     run = store.start_run(str(target))
     try:
         run.knowledge = KnowledgeConfig.from_settings(s)  # calibration reads EPSS/KEV through the run's config
-        res = static.scan(target, skip_deps=not deps and s.skip_deps, knowledge_cfg=run.knowledge)
-        for tool, why in res.failed.items():
-            log.warning("static: %s failed: %s", tool, why)
-        run.save_anchors(res.anchors)
-        by_tool = {t: sum(a.tool == t for a in res.anchors) for t in res.ran}
-        log.info("pre-pass: %d anchors — %s%s", len(res.anchors),
-                 ", ".join(f"{t} {n}" for t, n in by_tool.items()),
-                 f"; failed: {', '.join(res.failed)}" if res.failed else "")
         index = build_index(target, max_files=s.index_max_files, max_bytes=s.index_max_bytes)
-        agent = build_agent(run, target, entrypoints.entry_points(target), model_from_env(s), index, s)
+        agent = build_agent(run, target, entrypoints.entry_points(target), model_from_env(s), index, s, deps=deps)
     except Exception as e:
         run.finish("failed", str(e))
         store.close()
