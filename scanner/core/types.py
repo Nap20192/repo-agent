@@ -4,6 +4,8 @@ Ported from git-agent3 internal/core; v2 artifacts (Threat, ArchitectureModel, T
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 CONFIRMED, REJECTED, UNCERTAIN = "confirmed", "rejected", "uncertain"
@@ -30,15 +32,38 @@ STATE_BUDGET_EXHAUSTED = "budget_exhausted"
 
 STATE_STOP_REASON = "stop_reason"
 
+# --- vocabularies (PEP 586). Applied as field types only where the program, not the model, sets the value:
+# LLM-supplied fields (Finding.status/severity, Dossier.verdict, Hypothesis.kind) stay `str` so the gates can
+# answer the model with a reason instead of a ValidationError — the gate messages are part of the contract.
+Status = Literal["confirmed", "rejected", "uncertain"]
+Kind = Literal["entry", "sink", "dependency", "secret", "authz"]
+CandidateKind = Literal["entry", "sink", "external"]
+Severity = Literal["critical", "high", "medium", "low", "info"]
+Tool = Literal["gosec", "semgrep", "osv", "gitleaks", "threatmodel", "entrypoint"]
+Intent = Literal["production", "sample"]
+
+# One CWE taxonomy (ADR 0006): cwe → class family. The specialists' router and the consult gate derive from it;
+# AUTHZ_CWES/TAINT_CWES above stay as the gate's historical subsets (CWE-352 routes to authz but needs no domain: ref).
+def _cwes(*ns: int) -> frozenset[str]:
+    return frozenset(f"CWE-{n}" for n in ns)
+
+
+CWE_CLASSES: dict[str, str] = {
+    **dict.fromkeys(_cwes(89, 78, 77, 88, 22, 79, 80, 918, 94, 95, 1336, 943, 611, 502, 601), "taint"),
+    **dict.fromkeys(_cwes(284, 285, 639, 862, 863, 840, 352, 287, 347, 915, 306, 307, 384, 613), "authz"),
+    **dict.fromkeys(_cwes(798, 312, 321), "secret"),
+    **dict.fromkeys(_cwes(614, 1004, 942, 16, 209, 532, 778, 327, 328, 338, 295, 319, 1357), "config"),
+}
+
 class _Model(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 class Anchor(_Model):
     id: str
-    tool: str  # gosec | semgrep | osv | gitleaks
+    tool: Tool
     rule_id: str = ""
-    cwe: str = ""
-    severity: str = "info"
+    cwe: str = ""  # "" for synthetic anchors (entrypoint) — the model's CWE is recorded at report time
+    severity: Severity = "info"
     file: str
     line: int
     message: str = ""
@@ -47,7 +72,7 @@ class Anchor(_Model):
     rule_ids: list[str] = Field(default_factory=list)
 
 class Candidate(_Model):
-    kind: str  # entry | sink | external
+    kind: CandidateKind
     file: str = ""
     line: int = 0
     route: list[str] = Field(default_factory=list)
@@ -95,6 +120,7 @@ class Finding(_Model):
     remediation: str = ""  # one line, filled from the CWE by the store when empty
     remediation_url: str = ""  # OWASP Cheat Sheet
     wstg_id: str = ""
+    asvs_id: str = ""  # ASVS 5.0 requirement id (from the hypothesis / CWE map)
     top10: str = ""  # OWASP Top 10 2025 category
 
 class Threat(_Model):
@@ -131,7 +157,7 @@ class ArchitectureModel(_Model):
 class ThreatModel(_Model):
     threats: list[Threat] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)  # design concerns without a symbol: notes, never threats
-    intent: str = "production"  # production | sample (fail-closed: sample only if every check holds)
+    intent: Intent = "production"  # fail-closed: sample only if every check holds; normalised before validation
 
     @field_validator("intent", mode="before")
     @classmethod

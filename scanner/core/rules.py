@@ -123,11 +123,16 @@ def validate_finding(f: Finding) -> str | None:
             return "finding: confirmed requires non-empty evidence (quote the code you read)"
     return None
 
+def consult_required(cwe: str, tool: str = "", rule_id: str = "") -> tuple[bool, bool]:
+    """(knowledge, domain): the consult a class needs before a verdict. Single source for gate and router."""
+    rule, cwe = rule_id.upper(), cwe.strip().upper()
+    return tool == "osv" or rule.startswith(("CVE-", "GHSA-")), cwe in AUTHZ_CWES
+
+
 def required_consults(a: Anchor) -> tuple[bool, bool, str]:
     """(knowledge, domain, reason): which consult an anchor's class needs before a verdict."""
-    rule, cwe = a.rule_id.upper(), a.cwe.strip().upper()
-    knowledge = a.tool == "osv" or rule.startswith(("CVE-", "GHSA-"))
-    domain = cwe in AUTHZ_CWES
+    cwe = a.cwe.strip().upper()
+    knowledge, domain = consult_required(cwe, a.tool, a.rule_id)
     reasons = []
     if knowledge:
         reasons.append("dependency advisory")
