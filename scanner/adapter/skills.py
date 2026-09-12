@@ -26,14 +26,23 @@ _BY_CWE = {
 _BY_KIND = {"dependency": "dependency-advisory", "authz": "authz-idor", "secret": "weak-password-detection"}
 
 
-def _read(path: Path) -> tuple[str, str, str]:
+def _read(path: Path) -> tuple[str, dict, str]:
     text = path.read_text()
     m = re.match(r"---\n(.*?)\n---\n", text, re.DOTALL)
     fm = dict(re.findall(r"^(\w+):\s*(.*)$", m.group(1), re.MULTILINE)) if m else {}
-    return fm.get("name", path.stem), fm.get("description", ""), text[m.end():].strip() if m else text
+    cwes = [c.strip().upper() for c in re.split(r"[,\s]+", fm.get("cwes", "").strip("[]")) if c.strip()]
+    meta = {"description": fm.get("description", ""), "cwes": cwes, "wstg": fm.get("wstg", "").strip(),
+            "top10": fm.get("top10", "").strip(), "role": fm.get("role", "").strip()}
+    return fm.get("name", path.stem), meta, text[m.end():].strip() if m else text
 
 
-SKILLS: dict[str, tuple[str, str]] = {n: (d, b) for n, d, b in (_read(p) for p in sorted(_DIR.glob("*.md")))}
+META: dict[str, dict] = {}
+SKILLS: dict[str, tuple[str, str]] = {}
+for _n, _m, _b in (_read(p) for p in sorted(_DIR.glob("*.md"))):
+    META[_n], SKILLS[_n] = _m, (_m["description"], _b)
+
+_ANALYSIS = {"entry": "source-aware-discovery", "sink": "verifier-proof", "authz": "authz-idor",
+             "dependency": "dependency-advisory", "secret": "information-disclosure"}
 
 
 def skill_for(cwe: str = "", kind: str = "") -> str:
@@ -45,28 +54,69 @@ def skill_for(cwe: str = "", kind: str = "") -> str:
     return "authz-idor" if cwe in core.AUTHZ_CWES else ""
 
 
-def list_skills(cwe: str = "", kind: str = "") -> dict:
-    """List the available skills (name, description, cwes). Filter by a CWE (e.g. 'CWE-89') or a hypothesis
-    kind (entry|sink|dependency|secret|authz) to get the one that applies; empty filters list all."""
-    cwes: dict[str, list[str]] = {}
+def _wstg_skill(cwe: str) -> str:
+    """The WSTG verdict skill for a CWE: by owasp's CWE→WSTG map first, then by the skills' own cwes lists."""
+    from scanner.adapter import owasp  # adapter → adapter
+
+    wid = owasp.consult(cwe).get("wstg_id", "") if cwe else ""
+    for n, m in META.items():
+        if n.startswith("wstg-") and ((wid and m["wstg"] == wid) or cwe in m["cwes"]):
+            return n
+    return ""
+
+
+def _control_skill(cwe: str) -> str:
+    return next((n for n, m in META.items() if m["role"] == "critic" and cwe in m["cwes"]), "")
+
+
+def skills_for(cwe: str = "", kind: str = "", role: str = "investigate") -> list[str]:
+    """Ordered skill list for one hypothesis/finding: investigators get [WSTG verdict skill, class skill,
+    analysis skill]; critics get [control skill, counterevidence]. Names only; each exists in SKILLS."""
+    if role == "critique":
+        out = [_control_skill(cwe), "counterevidence"]
+    else:
+        out = [_wstg_skill(cwe), skill_for(cwe, kind), _ANALYSIS.get(kind, "verifier-proof" if cwe else "")]
+    seen: list[str] = []
+    for n in out:
+        if n and n in SKILLS and n not in seen:
+            seen.append(n)
+    return seen
+
+
+def list_skills(cwe: str = "", kind: str = "", role: str = "") -> dict:
+    """List the available skills (name, description, cwes, wstg, role). Filter by a CWE (e.g. 'CWE-89'), a
+    hypothesis kind (entry|sink|dependency|secret|authz) and/or role ('critique' → control skills) to get the
+    ones that apply; empty filters list all."""
+    cwes_of: dict[str, list[str]] = {n: list(m["cwes"]) for n, m in META.items()}
     for c, s in _BY_CWE.items():
-        cwes.setdefault(s, []).append(c)
-    want = skill_for(cwe, kind) if (cwe or kind) else ""
+        if c not in cwes_of.setdefault(s, []):
+            cwes_of[s].append(c)
+    if cwe or kind or role:
+        want = set(skills_for(cwe, kind, role or "investigate"))
+        if cwe and not role:
+            want |= {n for n, m in META.items() if cwe in m["cwes"] and m["role"] != "critic"}
+    else:
+        want = set(SKILLS)
     return {"skills": [
-        {"name": n, "description": d, "cwes": cwes.get(n, [])}
-        for n, (d, _) in SKILLS.items() if not want or n == want
+        {"name": n, "description": d, "cwes": cwes_of.get(n, []), "wstg": META[n]["wstg"], "role": META[n]["role"] or "investigate"}
+        for n, (d, _) in SKILLS.items() if n in want
     ]}
 
 
 def load_skill(name: str) -> dict:
-    """Load a skill playbook (markdown) by name and follow it. Method skills: verifier-proof (what counts as
-    proof and the report_finding gate), counterevidence (what does and does not rule a candidate out),
-    severity-calibration, source-aware-discovery, authz-idor, dependency-advisory. Class skills:
-    sql-injection, nosql-injection, xss, ssrf, ssti, rce, argument-injection, header-injection,
-    path-traversal-lfi-rfi, xxe, insecure-deserialization, open-redirect, csrf, mass-assignment,
-    prototype-pollution, race-conditions, insecure-file-uploads, information-disclosure,
-    weak-password-detection, authentication-jwt, idor, broken-function-level-authorization,
-    business-logic, llm-prompt-injection. Frameworks: django, fastapi, nestjs, nextjs."""
+    """Load a skill playbook (markdown) by name and follow it. Your payload lists the ones for this item
+    (`skills`). Groups — analysis: verifier-proof, counterevidence, severity-calibration,
+    source-aware-discovery, authz-idor, dependency-advisory. Class: sql-injection, nosql-injection, xss, ssrf,
+    ssti, rce, argument-injection, header-injection, path-traversal-lfi-rfi, xxe, insecure-deserialization,
+    open-redirect, csrf, mass-assignment, prototype-pollution, race-conditions, insecure-file-uploads,
+    information-disclosure, weak-password-detection, authentication-jwt, idor,
+    broken-function-level-authorization, business-logic, llm-prompt-injection. Frameworks: django, fastapi,
+    nestjs, nextjs. WSTG verdict skills (Investigator): wstg-<category>-<nn>-<slug>, e.g. wstg-injt-05-sqli,
+    wstg-athz-04-idor, wstg-injt-19-ssrf, wstg-sess-05-csrf, wstg-cryp-04-weak-crypto — call list_skills(cwe=…).
+    Control skills (Critic): control-parameterization, control-output-encoding, control-path-traversal,
+    control-csrf, control-ssrf-allowlist, control-deserialization, control-upload-validation,
+    control-authz-ownership, control-redirect-allowlist, control-password-hashing, control-secrets-management,
+    control-xxe."""
     if name not in SKILLS:
         return {"status": "error", "reason": f"unknown skill {name!r}; call list_skills"}
     d, body = SKILLS[name]
