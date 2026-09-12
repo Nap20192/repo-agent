@@ -29,12 +29,14 @@ def skeleton(store: RunStore, target: str, entry_points_fn: Callable[[], list[Ca
              anchors: list[Anchor] | None = None) -> ScanSkeleton:
     """What the modelling stages receive: the target, its entry points and a trimmed anchor view."""
     anchors = store.anchors() if anchors is None else anchors
-    return ScanSkeleton(
-        target=target,
-        entry_points=list(entry_points_fn()) if entry_points_fn else [],
-        anchors=[{"id": a.id, "tool": a.tool, "cwe": a.cwe, "file": a.file, "line": a.line, "message": a.message[:120]}
-                 for a in anchors],
-    )
+    return ScanSkeleton(target=target, entry_points=list(entry_points_fn()) if entry_points_fn else [],
+                        anchors=anchor_view(anchors))
+
+
+def anchor_view(anchors: list[Anchor]) -> list[dict]:
+    """The trimmed anchor list the modelling stages see."""
+    return [{"id": a.id, "tool": a.tool, "cwe": a.cwe, "file": a.file, "line": a.line, "message": a.message[:120]}
+            for a in anchors]
 
 
 def build_skeleton_node(store: RunStore, target: str, entry_points_fn: Callable[[], list[Candidate]] | None) -> FunctionNode:
@@ -108,7 +110,7 @@ def route_and_verify_node(store: RunStore, verifier, specialists: dict, router: 
             d.error = err or "no Dossier JSON and nothing reported"
         if d.error:
             log.warning("verify %s: %s", h.id, d.error)
-        return d.model_dump()
+        return {**d.model_dump(), "failed": bool(err)}  # failed: the specialist raised (not a soft "no JSON")
     return node(route_and_verify, parallel_worker=True, max_parallel_workers=max_parallel or None,
                 rerun_on_resume=True, name="route_and_verify")
 

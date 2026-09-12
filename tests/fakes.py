@@ -147,10 +147,11 @@ def _scan(run, **kw):
 
 
 def _run(agent):
-    """Run an agent under the real ADK Runner with an in-memory session; return the final session state."""
+    """Run an agent (or a Workflow node) under the real ADK Runner with an in-memory session; return the final
+    session state."""
     async def go():
         svc = InMemorySessionService()
-        r = Runner(app_name="t", agent=agent, session_service=svc)
+        r = Runner(app_name="t", session_service=svc, **({"agent": agent} if isinstance(agent, BaseAgent) else {"node": agent}))
         await svc.create_session(app_name="t", user_id="u", session_id="s")
         async for _ in r.run_async(user_id="u", session_id="s",
                                    new_message=types.Content(role="user", parts=[types.Part(text="go")])):
@@ -233,3 +234,65 @@ def _run_node(node, node_input=None) -> list:
                 outs.append(ev.output)
         return outs
     return asyncio.run(go())
+
+
+# --- card 43: node-shaped doubles for the v3 Workflow (payload arrives as node_input, not in the instruction) ----
+
+def fake_stage_node(store, name: str, reply):
+    """Architect / DomainModeler / ThreatModeler stand-in: records the payload it received, returns a canned reply."""
+    from google.adk.workflow import FunctionNode
+
+    async def stage(ctx, node_input: dict):
+        store.add_note("seen:" + json.dumps(node_input), name)
+        return reply
+    return FunctionNode(func=stage, name=name, rerun_on_resume=True)
+
+
+def fake_verifier_node(store, name: str = "verify", budget: bool = False, global_flag: bool = False,
+                       fail_prefix: str = ""):
+    """FakeVerifier as a node: confirms CWE-89, rejects the rest, proposes one duplicate and one ungrounded
+    hypothesis; `fail_prefix` raises for hypothesis ids starting with it (e.g. "h1" = every round-1 item)."""
+    from google.adk.workflow import FunctionNode
+
+    async def verify(ctx, node_input: dict):
+        h = node_input
+        if fail_prefix and h["id"].startswith(fail_prefix):
+            raise RuntimeError("boom")
+        if global_flag:
+            ctx.state[core.STATE_BUDGET_EXHAUSTED] = True
+            return None
+        if budget:
+            ctx.state[f"{core.STATE_BUDGET_EXHAUSTED}:{name}"] = True
+            return None
+        status = core.CONFIRMED if h["cwe"] == "CWE-89" else core.REJECTED
+        store.report(Finding(anchor_id=h["anchor_id"], hypothesis_id=h["id"], cwe=h["cwe"], file="main.go",
+                             title="t", status=status, evidence=["db.Query(x)"]))
+        new = [{"kind": "sink", "cwe": "CWE-89", "claim": "dup of a_1", "anchor_id": "a_1"},
+               {"kind": "sink", "claim": "ungrounded", "symbol": "nope"}]
+        return {"hypothesis_id": h["id"], "verdict": status, "notes": "n", "new_hypotheses": new}
+    return FunctionNode(func=verify, name=name, rerun_on_resume=True)
+
+
+def fake_critic_node(store, name: str = "critic", fail: bool = False):
+    from google.adk.workflow import FunctionNode
+
+    async def critic(ctx, node_input: dict):
+        if fail:
+            raise RuntimeError("boom")
+        f = node_input["finding"]
+        assert f["status"] == core.CONFIRMED
+        store.add_note("critic:" + name)
+        store.set_status(f["id"], core.UNCERTAIN, ["critic: parameterized after all"])
+        return {"finding_id": f["id"], "disproved": True}
+    return FunctionNode(func=critic, name=name, rerun_on_resume=True)
+
+
+def _workflow(run, **kw):
+    """The v3 Workflow with the node doubles (mirror of `_scan` for PipelineV2)."""
+    from scanner.app.pipeline_v3 import build_workflow
+
+    return build_workflow(
+        store=run, target="/t", verifier=kw.pop("verifier", fake_verifier_node(run)),
+        has_anchor=lambda i: run.anchor(i) is not None, has_symbol=kw.pop("has_symbol", lambda s: False),
+        entry_points_fn=kw.pop("entry_points_fn", list), **kw,
+    )

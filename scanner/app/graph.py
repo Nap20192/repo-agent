@@ -110,6 +110,23 @@ def pick_agent(item, role: str, specialists: dict, router: Router | None, fallba
     return agent, name, suffix
 
 
+def gate_hypotheses(hs: list[Hypothesis], rnd: int, store: RunStore, has_anchor: Callable[[str], bool],
+                    has_symbol: Callable[[str], bool], max_hyps: int) -> list[Hypothesis]:
+    """Belt over the dispatch tool: drop ungrounded, cap at max_hyps, assign ids h<round>-<n>. Shared by
+    PipelineV2 and the Workflow `investigate` node (card 43)."""
+    out = []
+    for n, h in enumerate(hs, 1):
+        h.id = h.id or f"h{rnd}-{n}"
+        if reason := core.ground_hypothesis(h, has_anchor, has_symbol):
+            log.warning("gate: dropped ungrounded hypothesis %s: %s", h.id, reason)
+            store.add_note(f"dropped ungrounded hypothesis {h.id}: {reason}", h.id)
+            continue
+        out.append(h)
+        if len(out) >= max_hyps:
+            break
+    return out
+
+
 def dossier_from_store(findings: list[Finding], h: Hypothesis) -> Dossier:
     """Verdict from facts: findings bound to the hypothesis (id, else anchor without foreign id)."""
     d = Dossier(hypothesis_id=h.id)
@@ -189,18 +206,7 @@ class Graph(BaseAgent):
         return bool(ctx.session.state.get(core.STATE_BUDGET_EXHAUSTED))
 
     def _gate(self, hs: list[Hypothesis], rnd: int) -> list[Hypothesis]:
-        """Belt over the dispatch tool: drop ungrounded, cap at max_hyps, assign ids h<round>-<n>."""
-        out = []
-        for n, h in enumerate(hs, 1):
-            h.id = h.id or f"h{rnd}-{n}"
-            if reason := core.ground_hypothesis(h, self.has_anchor, self.has_symbol):
-                log.warning("gate: dropped ungrounded hypothesis %s: %s", h.id, reason)
-                self.store.add_note(f"dropped ungrounded hypothesis {h.id}: {reason}", h.id)
-                continue
-            out.append(h)
-            if len(out) >= self.max_hyps:
-                break
-        return out
+        return gate_hypotheses(hs, rnd, self.store, self.has_anchor, self.has_symbol, self.max_hyps)
 
     @staticmethod
     def _verify_payloads(accepted: list[Hypothesis], routed: list[tuple[BaseAgent, str, str]]) -> list[dict]:
