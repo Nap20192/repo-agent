@@ -272,3 +272,24 @@ sibling using `Runner(node=node, ...)` (verbatim signature, `runners.py:222-228`
    specialist `LlmAgent`; specialists are now themselves invoked via `ctx.run_node`, one level deeper than
    before — confirm `AgentTool`'s own budget/branch bookkeeping is unaffected (nothing in the R&D report
    suggests it isn't, but it wasn't exercised under `ctx.run_node` in any sample).
+
+## Resolved (steps 1–4, 2026-09-12)
+
+- **Names**: the skeleton type is `ScanSkeleton` (`scanner/core/workflow.py`) — `Skeleton` is already the
+  DomainModeler's pre-pass in `scanner/core/domain.py`.
+- **Open question 2 (branch names)**: `parallel_worker` items run as `<parent>@<run_id>/<node>@<n>` paths
+  (observed: `drive@1/route_and_verify@b0/route_and_verify@1`); tests assert on outputs and the store, not on
+  branch strings. `event.node_info.path` is the idiomatic handle when a test needs the shape.
+- **Open question 3 (`state_schema` strictness)**: `Workflow._validate_state_schema` exempts the parameter
+  names `ctx`, `node_input`, `self`, so nodes written as `(ctx, node_input)` under the default `'state'`
+  binding coexist with `state_schema=WorkflowState`; `ctx.state["round"] = 1` inside a dynamic node persists
+  (spike under `Runner(node=Workflow(...))`).
+- **API facts that differed from §4**: every node run through `ctx.run_node` — the inner FunctionNode *and*
+  the `@node(parallel_worker=True)` wrapper — must be built with `rerun_on_resume=True`, or ADK refuses it
+  ("A node must have rerun_on_resume=True…"); a plain `BaseAgent` (our fakes) runs fine but `run_node`
+  returns `None` for it (no `message_as_output`), while an `LlmAgent` returns its text / validated schema —
+  `graph_nodes._model_json` accepts dict, str or None. A dynamic child's exception surfaces as
+  `DynamicNodeFailError("Dynamic node <name> failed")` with the original in `.error` (`graph_nodes._why`).
+  A root node's `node_input` is the user `Content` of the turn, so `tests/fakes._run_node` drives non-root
+  inputs through a driver node, the way the graph will.
+- **Extracted for both graphs**: `reconcile.build_queue`, `graph_nodes.report_direct`, `graph.pick_agent`.
