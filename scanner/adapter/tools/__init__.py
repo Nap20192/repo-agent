@@ -37,10 +37,13 @@ from scanner.adapter.tools.rosters import (
     TAINT_CRITIC_TOOLS,
     TAINT_TOOLS,
     architect_tools,
+    confirm_tools,
     critic_tools,
+    review_tools,
     subset,
     triage_tools,
     verifier_tools,
+    viability_tools,
 )
 
 # Kept for one existing importer (tests/test_lsp_callgraph.py); the public spelling `lsp_tools` is preferred.
@@ -65,6 +68,7 @@ __all__ = [
     "architect_tools",
     "code_tools",
     "common_tools",
+    "confirm_tools",
     "critic_tools",
     "default_index",
     "default_reader",
@@ -75,8 +79,10 @@ __all__ = [
     "lsp_tools",
     "quotes_in_target",
     "report_finding_tool",
+    "review_tools",
     "shell_quote",
     "subset",
     "triage_tools",
     "verifier_tools",
+    "viability_tools",
 ]

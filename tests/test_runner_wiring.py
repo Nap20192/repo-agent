@@ -55,7 +55,7 @@ def test_wiring_has_a_triage_agent_with_read_only_tools(tmp_path, monkeypatch):
     monkeypatch.setenv("SPECIALISTS", "0")
     kw = runner.wiring(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
     names = {getattr(t, "__name__", getattr(t, "name", "")) for t in kw["triage"].tools}
-    assert kw["triage"].name == "triage" and names == {"read_file", "grep", "lsp_symbols"}
+    assert kw["triage"].name == "triage_batch" and names == {"read_file", "grep", "lsp_symbols"}
     monkeypatch.setenv("TRIAGE", "0")
     assert runner.wiring(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")["triage"] is None
 
@@ -89,3 +89,19 @@ def test_session_service_survives_a_concurrent_writer(tmp_path):
         back = await ours.get_session(app_name="a", user_id="u", session_id="x")
         return [e.author for e in back.events]
     assert asyncio.run(go()) == ["user", "scan"]
+
+
+def test_wiring_has_the_verdict_ladder_agents_recon_and_knobs(tmp_path, monkeypatch):
+    """Card 45: review / viability critic / confirm agents with their rosters, the recon closure, the triage
+    batch agent, and the knobs the graph needs; switches turn agents into None without changing the graph shape."""
+    monkeypatch.setenv("SPECIALISTS", "0")
+    kw = runner.wiring(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
+    assert kw["review"].name == "review" and kw["confirm"].name == "confirm" and kw["critic"].name == "viability"
+    assert kw["triage"].name == "triage_batch"
+    assert {getattr(t, "__name__", "") for t in kw["confirm"].tools} >= {"report_finding", "read_file", "grep"}
+    assert callable(kw["recon_fn"]) and set(kw["recon_fn"]()) == {"sources", "sinks", "auth", "config_files"}
+    assert kw["triage_batch"] == 10 and kw["triage_parallel"] == 4 and kw["knowledge_cfg"] is None
+    monkeypatch.setenv("CRITIC", "0")
+    monkeypatch.setenv("RECON", "0")
+    kw = runner.wiring(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
+    assert kw["review"] is None and kw["critic"] is None and kw["confirm"] is None and kw["recon_fn"] is None

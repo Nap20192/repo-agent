@@ -17,22 +17,27 @@ from google.genai import types
 
 from scanner import core
 from scanner.adapter import entrypoints, fs, static
+from scanner.adapter import recon as recon_adapter
 from scanner.adapter.index import build_index
 from scanner.adapter.knowledge import KnowledgeConfig
 from scanner.adapter.store import Store
 from scanner.adapter.tools import (
     architect_tools,
-    critic_tools,
+    confirm_tools,
+    review_tools,
     subset,
     triage_tools,
     verifier_tools,
+    viability_tools,
 )
 from scanner.app.agents import (
     new_architect,
-    new_critic,
+    new_confirm,
+    new_review,
     new_threat_modeler,
-    new_triage,
+    new_triage_batch,
     new_verifier,
+    new_viability,
 )
 from scanner.app.domain import new_domain_modeler
 from scanner.app.knowledge_agent import make_consult_knowledge
@@ -126,8 +131,15 @@ def wiring(run, target: Path, entries: list[Candidate], model, index: Index | No
         "specialists": specialists,
         "router": route_name,
         "verifier": new_verifier(model, verifier_tools(run, target, index=index), s.verifier_max_calls),
-        "critic": new_critic(model, critic_tools(run, target, index=index), s.critic_max_calls) if s.critic else None,
-        "triage": new_triage(model, triage_tools(run, target, index=index), s.triage_max_calls) if s.triage else None,
+        # the verdict ladder (Shannon review → critic → confirm); CRITIC=0 turns all three off, the nodes stay
+        "review": new_review(model, review_tools(run, target, index=index), s.review_max_calls) if s.critic else None,
+        "critic": new_viability(model, viability_tools(run, target, index=index), s.viability_max_calls) if s.critic else None,
+        "confirm": new_confirm(model, confirm_tools(run, target, index=index), s.confirm_max_calls) if s.critic else None,
+        "triage": new_triage_batch(model, triage_tools(run, target, index=index), s.triage_max_calls) if s.triage else None,
+        "recon_fn": (lambda: recon_adapter.recon(target, entries, langs, index)) if s.recon else None,
+        "knowledge_cfg": getattr(run, "knowledge", None),
+        "triage_batch": s.triage_batch,
+        "triage_parallel": s.triage_parallel,
         "store": run,
         "target": str(target),
         "has_anchor": lambda i: run.anchor(i) is not None,
@@ -144,8 +156,7 @@ def wiring(run, target: Path, entries: list[Candidate], model, index: Index | No
 
 def build_agent(run, target: Path, entries: list[Candidate], model, index: Index | None = None,
                 settings: Settings | None = None, deps: bool = False):
-    """The ADK Workflow for one run: scan → build_skeleton → plan → investigate → finish (docs/adr/0007).
-    The static pre-pass runs inside the graph (the `scan` node) so `adk web` shows it and resume replays it."""
+    """The ADK Workflow for one run: the static Shannon graph (docs/adr/0008), scanners included as its first node."""
     return build_workflow(**wiring(run, target, entries, model, index, settings, deps=deps))
 
 
