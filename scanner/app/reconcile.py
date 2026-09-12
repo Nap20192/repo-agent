@@ -303,13 +303,14 @@ def hunt_classes(route: str = "", file: str = "", symbol: str = "") -> list[str]
     return list(dict.fromkeys(out)) or list(DEFAULT_HUNT)
 
 
-def _baseline(where: str, file: str, line: int, symbol: str, classes: list[str], claim: str, priority: int) -> tuple[Hypothesis, Anchor]:
+def _baseline(where: str, file: str, line: int, symbol: str, classes: list[str], claim: str, priority: int,
+              route: list[str] | None = None) -> tuple[Hypothesis, Anchor]:
     """A baseline hypothesis with its own entrypoint anchor: every baseline can report (and, via the discovery
     gate, report elsewhere) — a symbol-only baseline had nothing to pass as anchor_id (NodeGoat run 18)."""
     a = Anchor(id=new_anchor_id("entrypoint", where, file, line), tool="entrypoint", rule_id=where,
                severity="low", file=file, line=line, message=claim)
     h = Hypothesis(kind="entry", cwe=classes[0], symbol=symbol, anchor_id=a.id, reads=[file] if file else [],
-                   priority=priority, claim=claim, **_owasp_ids(classes[0]))
+                   priority=priority, claim=claim, route=list(route or []), **_owasp_ids(classes[0]))
     return h, a
 
 
@@ -333,7 +334,7 @@ def coverage(entry_points: list[Candidate], queue: list[Hypothesis], done: set[s
                  "a sink of one of these classes reached without the matching control")
         if c.symbol in sweep:
             claim += ". " + sweep[c.symbol]
-        h, a = _baseline(where, c.file, c.line, c.symbol, classes, claim, 10)
+        h, a = _baseline(where, c.file, c.line, c.symbol, classes, claim, 10, route=c.route)
         hyps.append(h)
         minted.append(a)
         if c.symbol:

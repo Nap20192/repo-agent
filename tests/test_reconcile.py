@@ -298,3 +298,4 @@ def test_coverage_one_handler_under_two_routes_is_one_baseline():
            Candidate(kind="entry", file="routes.js", line=15, symbol="handleThing", route=["POST /a"])]
     hyps, minted = coverage(eps, [], set())
     assert len(hyps) == 1 and len(minted) == 1 and hyps[0].symbol == "handleThing"
+    assert hyps[0].route == ["GET /a"]  # the route reaches triage (review LOW)
