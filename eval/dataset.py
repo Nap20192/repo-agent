@@ -69,14 +69,14 @@ def validate_case(case: dict) -> list[str]:
     if not target.is_dir():
         return [f"target missing: {target}"]
     problems = []
-    for e in case["expected"]:
-        f = target / e["file"]
+    for exp in case["expected"]:
+        f = target / exp["file"]
         if not f.is_file():
-            problems.append(f"{e['file']}: missing")
+            problems.append(f"{exp['file']}: missing")
             continue
         n = len(f.read_text(errors="replace").splitlines())
-        if e["line"] > n:
-            problems.append(f"{e['file']}:{e['line']} past EOF ({n} lines)")
+        if exp["line"] > n:
+            problems.append(f"{exp['file']}:{exp['line']} past EOF ({n} lines)")
     return problems
 
 

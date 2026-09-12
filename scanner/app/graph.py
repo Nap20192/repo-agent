@@ -142,7 +142,7 @@ class Graph(BaseAgent):
         # ParallelAgent stays by decision — see docs/adr/0001-parallel-fanout.md (Workflow cannot run inside a BaseAgent).
         par = ParallelAgent(name=name, sub_agents=agents)
         async for ev in par.run_async(ctx):
-            if ev.author in {a.name for a in agents} and (t := _text_of(ev)):
+            if ev.author in {a.name for a in agents} and (t := text_of(ev)):
                 out[ev.author] = t
             yield ev
 
@@ -153,7 +153,7 @@ class Graph(BaseAgent):
         texts[act.name]. Counted in session state `json_retries`; `json_retry=False` disables."""
         if not self.json_retry or parse_json(texts.get(act.name, "")) is not None:
             return
-        retry = _activation(agent, f"{act.name}_retry", act.label, act.payload,
+        retry = activation(agent, f"{act.name}_retry", act.label, act.payload,
                              suffix=f"{suffix}\n\n{JSON_NUDGE}" if suffix else JSON_NUDGE)
         async for ev in self._run_activations(ctx, f"{act.name}_retry_run", [retry], texts):
             yield ev
@@ -163,7 +163,7 @@ class Graph(BaseAgent):
         log.info("json retry #%d for %s", n, act.name)
         yield self._state_event(ctx, {STATE_JSON_RETRIES: n})
 
-    def _pick(self, item, role: str) -> tuple[BaseAgent, str, str]:
+    def _pick(self, item, role: str) -> tuple[BaseAgent | None, str, str]:
         """(agent, specialist name or "", instruction suffix): the router's choice, else the generic fallback."""
         fallback = self.verifier if role == "investigate" else self.critic
         if self.router is None:
@@ -199,15 +199,15 @@ class Graph(BaseAgent):
     def _verify_payloads(accepted: list[Hypothesis], routed: list[tuple[BaseAgent, str, str]]) -> list[dict]:
         """Hypothesis + its skill hints + the routed specialist name, one dict per accepted hypothesis."""
         return [{**h.model_dump(), "skill": skill_for(h.cwe, h.kind), "skills": skills_for(h.cwe, h.kind), "specialist": name}
-                for h, (_, name, _) in zip(accepted, routed)]
+                for h, (_, name, _) in zip(accepted, routed, strict=True)]
 
     @staticmethod
     def _verify_activations(
         rnd: int, accepted: list[Hypothesis], routed: list[tuple[BaseAgent, str, str]], payloads: list[dict]
     ) -> list[tuple[Hypothesis, BaseAgent]]:
         """One activation per hypothesis, named verify_r<round>_<n>, with the routed agent's overlay suffix."""
-        return [(h, _activation(agent, f"verify_r{rnd}_{i}", "Hypothesis", payloads[i], suffix=suffix))
-                for i, (h, (agent, _, suffix)) in enumerate(zip(accepted, routed))]
+        return [(h, activation(agent, f"verify_r{rnd}_{i}", "Hypothesis", payloads[i], suffix=suffix))
+                for i, (h, (agent, _, suffix)) in enumerate(zip(accepted, routed, strict=True))]
 
     def _assemble_dossiers(
         self, ctx: InvocationContext, acts: list[tuple[Hypothesis, BaseAgent]], routed: list[tuple[BaseAgent, str, str]],
@@ -276,7 +276,7 @@ class Graph(BaseAgent):
             agent, name, suffix = self._pick(f, "critique")
             payload = {"finding": f.model_dump(), "anchor": a.model_dump() if a else None, "specialist": name,
                        "skills": skills_for(f.cwe, "", "critique")}
-            acts.append(_activation(agent, f"critic_{i}", "Finding", payload, suffix=suffix))
+            acts.append(activation(agent, f"critic_{i}", "Finding", payload, suffix=suffix))
             if name:
                 self.store.add_note(f"critic:{name} reviewed {f.id}", f.id)
         step = self.max_parallel if self.max_parallel > 0 else len(acts)

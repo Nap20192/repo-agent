@@ -59,9 +59,9 @@ def from_threats(
     A threat with neither stays symbol-grounded and the dispatch gate decides its fate."""
     by_line = {(a.file, a.line, a.cwe): a for a in anchors if a.cwe}
     by_loc: dict[tuple[str, str], list[Anchor]] = {}
-    for a in anchors:
-        if a.cwe:
-            by_loc.setdefault((a.file, a.cwe), []).append(a)
+    for anchor in anchors:
+        if anchor.cwe:
+            by_loc.setdefault((anchor.file, anchor.cwe), []).append(anchor)
     hyps: list[Hypothesis] = []
     minted: list[Anchor] = []
     for t in threats:

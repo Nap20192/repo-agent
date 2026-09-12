@@ -133,9 +133,11 @@ class PipelineV2(Graph):
         caller re-reads them (`architecture_model`, `threat_model`) once this generator is exhausted."""
         async for ev in self._model_threats(ctx, anchors, [], timings):  # threats are rebuilt from the grounded artifact
             yield ev
-        grounded = lambda s: self.has_symbol(s) or bool(self.locate and self.locate(s))
+        def grounded(symbol: str) -> bool:
+            return self.has_symbol(symbol) or bool(self.locate and self.locate(symbol))
         arts = [self.store.artifact(st) for st in ("architecture_model", "domain_map", "threat_model")]
-        am, dm, tm, notes = ground_artifacts(*arts, grounded, KNOWN_WSTG)
+        am_raw, dm_raw, tm_raw = arts
+        am, dm, tm, notes = ground_artifacts(am_raw, dm_raw, tm_raw, grounded, KNOWN_WSTG)
         for st, art in zip(("architecture_model", "domain_map", "threat_model"), (am, dm, tm), strict=True):
             if art is not None:
                 self.store.put_artifact(st, art)
