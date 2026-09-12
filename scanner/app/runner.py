@@ -18,11 +18,11 @@ from scanner import core
 from scanner.adapter import entrypoints, fs, static
 from scanner.adapter.index import build_index
 from scanner.adapter.knowledge import KnowledgeConfig
-from scanner.adapter.owasp import consult_owasp
 from scanner.adapter.store import Store
 from scanner.adapter.tools import (
     architect_tools,
     critic_tools,
+    subset,
     triage_tools,
     verifier_tools,
 )
@@ -102,7 +102,8 @@ def wiring(run, target: Path, entries: list[Candidate], model, index: Index | No
                                 overlay=architect_overlay(langs)) if s.threat_model else None,
         "domain_modeler": new_domain_modeler(model, architect_tools(run, target, index=index), s.domain_modeler_max_calls)
         if s.threat_model and s.domain_model else None,
-        "threat_modeler": new_threat_modeler(model, [consult_owasp], s.threat_modeler_max_calls) if s.threat_model else None,
+        "threat_modeler": new_threat_modeler(model, subset(architect_tools(run, target, index=index), {"consult_owasp", "read_file", "grep"}),
+                                             s.threat_modeler_max_calls) if s.threat_model else None,
         "specialists": specialists,
         "router": route_name,
         "verifier": new_verifier(model, verifier_tools(run, target, index=index), s.verifier_max_calls),

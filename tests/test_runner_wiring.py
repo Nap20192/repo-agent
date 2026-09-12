@@ -58,3 +58,10 @@ def test_wiring_has_a_triage_agent_with_read_only_tools(tmp_path, monkeypatch):
     assert kw["triage"].name == "triage" and names == {"read_file", "grep", "lsp_symbols"}
     monkeypatch.setenv("TRIAGE", "0")
     assert runner.wiring(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")["triage"] is None
+
+
+def test_threat_modeler_gets_read_file_and_grep(tmp_path, monkeypatch):
+    monkeypatch.setenv("SPECIALISTS", "0")
+    kw = runner.wiring(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
+    names = {getattr(t, "__name__", "") for t in kw["threat_modeler"].tools}
+    assert names == {"consult_owasp", "read_file", "grep"}

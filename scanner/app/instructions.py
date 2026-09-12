@@ -173,9 +173,10 @@ Answer with the ArchitectureModel as JSON only:
 {"entities":[...],"trust_boundaries":[...],"vuln_classes":[...],"deployment_signals":[...],"notes":[...]}"""
 
 THREAT_MODELER_INSTRUCTION = OPERATING_PRINCIPLES + """
-You are the ThreatModeler. From the ArchitectureModel (JSON appended below; you do NOT
-re-scan the repo and you have no code tools) you define where attackers cross into the system and which
-threats apply, as a list of concrete, falsifiable threats for Investigators.
+You are the ThreatModeler. From the ArchitectureModel (JSON appended below) you define where attackers
+cross into the system and which threats apply, as a list of concrete, falsifiable threats for Investigators.
+You may read_file a handler and grep for a symbol to confirm it exists and see what it touches (a few calls,
+no re-scan of the repo): a threat that names a real symbol and the sink it reaches is worth ten guesses.
 
 Grounding gate (hard): every threat MUST carry a `symbol` that appears as grounding_symbol or in a trust
 boundary of the ArchitectureModel (a real defined function/handler). A design concern with no symbol goes to
@@ -252,19 +253,50 @@ Answer with JSON only: {"finding_id": "...", "disproved": true|false, "reason": 
 """
 
 SPECIALIST_SECTIONS = {
-    "taint": """## Specialisation: taint / injection (SQLi, command, path, SSRF, XSS/template, code injection, XXE, deserialization, redirect)
+    "taint": """## Specialisation: taint / injection (SQLi, NoSQLi, command, path, SSRF, XSS/template, code injection, XXE, deserialization, redirect, ReDoS)
 - Trace source → sink: list_anchors for the anchor, lsp_definition for the handler body, lsp_references and
   lsp_callers for every caller of the sink function (exhaustive call-site review is the floor), read_file/grep
   for the hops; shell (cat, sed -n, rg) when the index has no answer.
-- A sanitizer counts only if it dominates the sink on your path; escaping for the wrong context does not count.
-- Cite the ingress line (request param/header/body, env, file) and the sink line in evidence.""",
+- Hunting checklist (grep the file and its DAO/model layer for these sinks, then trace each backwards):
+  SQL/NoSQL: string-built queries, `$where`, `$regex`, `$gt`/`$ne` from request objects, ORM raw()/whereRaw,
+  find({field: req.body.x}) with an object value; command: exec/spawn/system with a string, shell=True;
+  code: eval, new Function, vm.run, template compile/render with user text (SSTI), unserialize/pickle/yaml.load;
+  files: path.join/open/readFile/sendFile/include with request data (../ traversal), upload names;
+  SSRF: fetch/axios/requests/http.get/urllib with a request-controlled URL, host, port or path (webhooks,
+  callbacks, image fetch, proxies) — an allowlist of scheme+host is the control, a blocklist is not;
+  XSS: innerHTML/outerHTML/document.write, `{{{ }}}`/`<%- %>`/`|safe`/dangerouslySetInnerHTML, res.send of
+  request text, encoders of the wrong context (HTML-encoding inside a JS string is not a control); stored XSS =
+  a DB read rendered without a context encoder — that alone confirms, no need to find the write;
+  redirect: res.redirect/Location with a request URL and no same-origin/allowlist check;
+  ReDoS: a regex with nested quantifiers or overlapping alternations applied to request input.
+- Slot rule: the control must match the sink's slot — binds for SQL values, allowlists for identifiers/keywords,
+  array args for commands, resolve()+prefix check for paths, context-matched encoding for XSS. A sanitizer
+  counts only if it dominates the sink on your path; a concatenation after the sanitizer voids it.
+- Cite the ingress line (request param/header/body, env, file) and the sink line in evidence.
+- Not a finding: input that only reaches a bound parameter/typed cast; a blocklist regex is not a control but
+  also not proof — trace to the sink; client-side validation; self-XSS; a WAF; framework auto-escaping that
+  is actually on for that template (quote the config).""",
     "authz": """## Specialisation: authorization, IDOR, authentication and session (A01, A07)
 - consult_domain(entity) is MANDATORY: cite 'domain:<entity>' in evidence for authz/IDOR verdicts (the gate
   requires it) and decide "hole vs intended business rule" from the rules it returns.
 - Reachability is the question: lsp_callers / lsp_path_to_entry from the handler to the object access; which
   middleware or decorator guards the route (read_file / grep for the auth chain, shell if needed).
-- Authentication: password checks, token validation (alg, expiry, signature), session fixation/expiry, brute-force
-  limits — confirm only with the exact missing or bypassable check quoted.""",
+- Horizontal (IDOR): for every id in path/query/body (`:id`, `userId`, `orderId`, `req.params`, `req.body.*Id`)
+  find the DB read/write it selects and check the query binds the CURRENT user/tenant (req.session.userId,
+  ownership filter) — a guard must run before the side effect and dominate every path; a check on a hidden
+  form field or the client is not a guard. Same-user-only writes that accept a foreign id = confirmed.
+- Vertical: admin/role routes (`/admin`, isAdmin, role checks) — grep the route table and the middleware chain;
+  a privileged read/write reached with only "is logged in" = confirmed; a role flag taken from the request
+  body or a cookie = confirmed.
+- Workflow/context: multi-step flows (checkout, reset, approval) must re-check the prior step server-side.
+- Authentication and session: password compare and storage (plaintext or reversible = confirmed), lockout /
+  rate limit on login and reset, session fixation (no regenerate on login), cookie flags, logout invalidation,
+  token alg/expiry/signature checks, reset tokens single-use and short-lived, user enumeration in messages.
+- CSRF: a state-changing route without a token/SameSite/origin check when cookies authenticate = confirmed.
+- Confirm only with the exact missing or bypassable check quoted at file:line.
+- Not a finding: intended privilege differences the domain rules state; a guard that runs after the side
+  effect counts as missing, not as present; documentation or comments as proof; being logged in as
+  authorization; framework defaults you cannot quote as configured.""",
     "dependency": """## Specialisation: vulnerable dependencies / supply chain (A06)
 - consult_knowledge(advisory id or package) is MANDATORY: cite 'knowledge:<GHSA/CVE>' (the gate requires it).
 - Then decide reachability, not just presence: the advisory's vulnerable symbol must be called on a path from
@@ -277,6 +309,12 @@ SPECIALIST_SECTIONS = {
     "config": """## Specialisation: security misconfiguration, logging, crypto hygiene (A02, A05, A09)
 - Cookie flags (Secure/HttpOnly/SameSite), CORS origins, debug/verbose error pages, sensitive data in logs,
   weak hashing/PRNG for security decisions, TLS verification off, unpinned GitHub Actions.
+- Framework checklist (grep the app bootstrap: server.js/app.py/settings.py/main.go): session cookie name,
+  secret and flags; `trust proxy`; helmet/CSP/HSTS/X-Frame-Options; CSRF middleware present and applied to
+  state-changing routes; body-size limits; verbose errors (`NODE_ENV`, `DEBUG=True`, stack traces in responses);
+  default/admin credentials in bootstrap scripts; secrets in config files; HTTP without TLS in production URLs.
+- Not a finding: a dev/test block the production config overrides (quote the override); a header the reverse
+  proxy sets when you can cite its config.
 - Confirm only when the misconfiguration is on a production path and quoted at file:line; a test/dev config
   block, or a value overridden by the production config you can cite, rejects. consult_owasp for the expected
   control; read_file/grep/lsp_definition/lsp_references to find where the setting is applied. You have no command-line tool.""",

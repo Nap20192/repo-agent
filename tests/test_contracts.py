@@ -8,7 +8,7 @@ from google.adk.workflow import FunctionNode
 
 from scanner import core
 from scanner.adapter.skills import SKILLS, skill_for
-from scanner.adapter.tools import architect_tools, critic_tools, verifier_tools
+from scanner.adapter.tools import architect_tools, critic_tools, subset, verifier_tools
 from scanner.app import instructions as ins
 from scanner.app.agents import (
     new_architect,
@@ -26,13 +26,12 @@ TOOL_RX = re.compile(r"\b(load_skill|list_skills|report_finding|disprove_finding
 
 def _agents(tmp_path):
     run = FakeRun()
-    from scanner.adapter.owasp import consult_owasp
 
     return {
         "verifier": new_verifier(MODEL, verifier_tools(run, tmp_path)),
         "critic": new_critic(MODEL, critic_tools(run, tmp_path)),
         "architect": new_architect(MODEL, architect_tools(run, tmp_path)),
-        "threat_modeler": new_threat_modeler(MODEL, [consult_owasp]),
+        "threat_modeler": new_threat_modeler(MODEL, subset(architect_tools(run, tmp_path), {"consult_owasp", "read_file", "grep"})),
     }
 
 
@@ -116,3 +115,20 @@ def test_every_specialist_instruction_names_only_its_tools_and_skills(tmp_path):
             assert keys <= set(Dossier.model_fields), spec.name
         else:
             assert "disprove_finding" in have and "report_finding" not in have
+
+
+def test_specialist_sections_are_hunting_checklists():
+    """Card 44/3: the taint/authz/config sections say what to grep for, what is proof and what is not."""
+    from scanner.app.instructions import SPECIALIST_SECTIONS as S
+    for name, anchors in {
+        "taint": ["$where", "innerHTML", "slot", "after", "Not a finding", "SSRF", "ReDoS"],
+        "authz": ["ownership", "before the side effect", "isAdmin", "CSRF", "fixation", "Not a finding"],
+        "config": ["SameSite", "trust proxy", "helmet", "Not a finding"],
+    }.items():
+        for a in anchors:
+            assert a in S[name], (name, a)
+
+
+def test_threat_modeler_may_read_code():
+    from scanner.app.instructions import THREAT_MODELER_INSTRUCTION as T
+    assert "read_file" in T and "grep" in T and "no code tools" not in T
