@@ -221,3 +221,11 @@ def test_helpers():
           Finding(id="f3", anchor_id="a_1", hypothesis_id="other", status=core.CONFIRMED)]
     assert dossier_from_store(fs, h).finding_id == "f2"
     assert dossier_from_store([], h).verdict == core.UNCERTAIN
+
+
+def test_verify_payload_carries_skill_lists():
+    """Investigators get the WSTG/class/analysis skill list; critics get the control skill first."""
+    from scanner.adapter.skills import skills_for
+    inv = skills_for("CWE-89", "sink")
+    crit = skills_for("CWE-89", "", "critique")
+    assert inv and inv[0].startswith("wstg-") and crit and crit[0].startswith("control-")

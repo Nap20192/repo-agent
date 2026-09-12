@@ -94,6 +94,7 @@ def ours() -> dict:
         "cheat_map": dict(owasp._CHEAT),
         "top10_map": {c: tid for tid, (_, cwes) in owasp._TOP10.items() for c in cwes},
         "skill_cwes": set(skills._BY_CWE),
+        "skill_wstg": {m.get("wstg", "") for m in getattr(skills, "META", {}).values() if m.get("wstg")},
         "skills": {n: d for n, (d, _) in skills.SKILLS.items()},
         "anchor_cwes": anchor_cwes,
     }
@@ -101,7 +102,7 @@ def ours() -> dict:
 
 def gaps(inv: dict, o: dict) -> dict:
     wstg_by_cwe = o["wstg_map"]
-    covered_wstg = {wstg_by_cwe[c] for c in o["skill_cwes"] if c in wstg_by_cwe}
+    covered_wstg = {wstg_by_cwe[c] for c in o["skill_cwes"] if c in wstg_by_cwe} | set(o.get("skill_wstg", ()))
     # ponytail: 4-char stems ("auth" ⊂ authentication/authorization) instead of a real ASVS↔CWE map; vendor one when needed
     skill_words = {w[:4] for n, d in o["skills"].items() for w in re.findall(r"[a-z]{4,}", (n + " " + d).lower())}
     asvs_chapters = sorted({r["chapter"] for r in inv["asvs"].values() if r["chapter"]})

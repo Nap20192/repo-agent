@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from scanner import core
 from scanner.adapter import static
-from scanner.adapter.skills import skill_for
+from scanner.adapter.skills import skill_for, skills_for
 from scanner.core import Candidate, Dossier, Finding, Hypothesis
 
 log = logging.getLogger("scanner.graph")
@@ -204,7 +204,8 @@ class _Graph(BaseAgent):
         texts: dict[str, str] = {}
         failed = ""
         routed = [self._pick(h, "investigate") for h in accepted]  # (agent, specialist name, suffix) per hypothesis
-        payloads = [{**h.model_dump(), "skill": skill_for(h.cwe, h.kind), "specialist": name} for h, (_, name, _) in zip(accepted, routed)]
+        payloads = [{**h.model_dump(), "skill": skill_for(h.cwe, h.kind), "skills": skills_for(h.cwe, h.kind), "specialist": name}
+                    for h, (_, name, _) in zip(accepted, routed)]
         acts = [(h, _activation(agent, f"verify_r{rnd}_{i}", "Hypothesis", payloads[i], suffix=suffix))
                 for i, (h, (agent, _, suffix)) in enumerate(zip(accepted, routed))]
         step = self.max_parallel if self.max_parallel > 0 else len(acts)
@@ -254,7 +255,8 @@ class _Graph(BaseAgent):
         for i, f in enumerate(confirmed):
             a = self.store.anchor(f.anchor_id)
             agent, name, suffix = self._pick(f, "critique")
-            payload = {"finding": f.model_dump(), "anchor": a.model_dump() if a else None, "specialist": name}
+            payload = {"finding": f.model_dump(), "anchor": a.model_dump() if a else None, "specialist": name,
+                       "skills": skills_for(f.cwe, "", "critique")}
             acts.append(_activation(agent, f"critic_{i}", "Finding", payload, suffix=suffix))
             if name:
                 self.store.add_note(f"critic:{name} reviewed {f.id}", f.id)
