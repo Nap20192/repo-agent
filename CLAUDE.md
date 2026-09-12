@@ -2,15 +2,18 @@
 
 Read `README.md` for the pipeline, `BOARD.md` for the cards/contract, `docs/rnd/` for ECC R&D reports.
 
-## Layers (keep the dependency rule)
+## Layers (keep the dependency rule — guarded by tests/test_layers.py)
 
 ```
-scanner/core      domain leaf: types, rules, calibrate, ports (Index)   — no ADK, no I/O
-scanner/adapter   static scanners, SQLite State, OWASP, skills, tools, index/ (LSP per language + grep)
-scanner/app       ADK agents, PipelineV2 graph, reconcile, callbacks, observe, runner
-scanner/main.py   CLI only            web/fullscan/agent.py   adk web entrypoint
+scanner/core      domain leaf: types (Literal vocabularies), rules, calibrate, settings, ports (Index parts, RunStore, Router)
+scanner/adapter   fs, entrypoints, static scanners, SQLite State, OWASP, skills, knowledge, domain, dominance, tools/ (package), index/ (LSP per language + grep)
+scanner/app       ADK agents (one `new_agent` factory), specialists registry + router, PipelineV2 graph, reconcile, callbacks, observe, runner (composition root)
+scanner/main.py   CLI only            eval/dataset.py  eval logic            web/fullscan/agent.py   adk web entrypoint (lazy)
 ```
-Arrows point inward: `core` imports nothing of ours; `adapter` never imports `app`.
+Arrows point inward: `core` imports nothing of ours; `adapter` never imports `app`; only `runner.py` wires adapter
+concretes. Env is read once in `core/settings.py` (`Settings.from_env`), never deep in modules. Shared test fakes live
+in `tests/fakes.py`; test modules never import each other. Architecture rationale and sources: docs/architecture.md,
+decisions: docs/adr/.
 
 ## Commands
 
