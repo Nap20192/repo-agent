@@ -15,15 +15,19 @@
 Архитектура, порты, инварианты гейтов и источники (SOLID, Clean/Hexagonal Architecture, PEP, ADK) —
 `docs/architecture.md`; решения — `docs/adr/`; аудиты — `docs/audits/`; план фазы качества — `docs/plans/quality.md`.
 
-- `scanner/core` — типы (`types.py`) и чистые правила (`rules.py`): доменный лист без ADK и I/O.
-- `scanner/adapter` — сканеры → якоря (`static.py`), SQLite State включая таблицу `artifacts`
-  для стадий v2 (`store.py`), OWASP-справочник (`owasp.py`), тулы агентов (`tools.py`).
-- `scanner/app` — инструкции агентов (`instructions.py`), колбэки бюджета/логов (`callbacks.py`),
-  фабрики агентов (`agents.py`), общий граф `_Graph` (`graph.py`),
-  граф v2 (`pipeline_v2.py`), Reconciler (`reconcile.py`), трассировка и сжатие сессии (`observe.py`),
-  сборка графа / прогон / CLI-обвязка (`runner.py`).
-- `scanner/main.py` — только CLI, вся логика прогона в `scanner/app/runner.py`.
-- `web/fullscan/agent.py` — точка входа для `adk web` (тот же граф, что и `scan full`).
+- `scanner/core` — типы (`types.py`), чистые правила (`rules.py`), calibrate (`calibrate.py`),
+  settings (`settings.py`), порты (`ports.py`), domain-карта (`domain.py`): доменный лист без ADK и I/O.
+- `scanner/adapter` — сканеры → якоря (`static.py`), SQLite State (`store.py`), OWASP (`owasp.py`),
+  domain-модель (`domain.py`), dominance (`dominance.py`), knowledge-кэш (`knowledge.py`),
+  entry points (`entrypoints.py`), файловая система (`fs.py`), скиллы (`skills.py`);
+  пакет `tools/` (агент-тулы: `common.py`, `code.py`, `lsp.py`, `gates.py`, `rosters.py`);
+  пакет `index/` (LSP-адаптеры и grep fallback: `lsp.py`, `grep.py`, `rpc.py`, `languages.py`, `callgraph.py`).
+- `scanner/app` — инструкции (`instructions.py`), колбэки (`callbacks.py`), агенты (`agents.py`),
+  специалисты и роутер (`specialists.py`), knowledge AgentTool (`knowledge_agent.py`),
+  граф v2 (`pipeline_v2.py`), Reconciler (`reconcile.py`), domain-модель (`domain.py`),
+  трассировка и сжатие (`observe.py`), сборка и прогон (`runner.py`), settings (`settings.py`).
+- `scanner/main.py` — только CLI, вся логика в `scanner/app/runner.py`.
+- `web/fullscan/agent.py` — точка входа `adk web` (тот же граф, установка via `uv sync`).
 
 ## Пайплайн
 
@@ -58,14 +62,14 @@ ThreatModeler бюджет per-branch, исчерпание не глушит в
 
 ## Индекс кода (LSP)
 
-Порт `scanner/core/ports.py:Index` (`find_symbol`, `definition_range`, `references`, `symbols`), адаптеры в
-`scanner/adapter/index/`: `LspIndex` на язык поверх stdlib JSON-RPC клиента (`rpc.py`) — gopls для Go,
-pyright для Python, typescript-language-server для TS и JS (две сессии), `GrepIndex` как fallback, `MultiIndex`
-маршрутизирует по языку файла; `build_index(target)` собирает всё лениво, сервер стартует при первом запросе.
-Агенты получают `lsp_symbols`, `lsp_definition` (только тело символа, ≤120 строк) и `lsp_references`
-(≤50 мест) вместо чтения файлов целиком; `has_symbol`/`locate` для гейта и синтетических якорей идут через
-индекс. `read_file` по умолчанию 60 строк, grep ≤4k. `tool_window_callback(keep=3)` заменяет старые результаты
-тулов в контексте активации однострочным дайджестом.
+Порт `scanner/core/ports.py:Index` расщепляется по потребителю (ISP): `SymbolLocator` (gate, synthetic anchors),
+`Definitions` (bodies: `symbols`, `definition_range`), `CallGraph` (reachability: `references`, `callers`, `callees`,
+`path_to_entry`), плюс `Closeable` и `Degradable`. Адаптеры в `scanner/adapter/index/`: `LspIndex` на язык поверх
+stdlib JSON-RPC (`rpc.py`) — gopls (Go), pyright (Python), typescript-language-server (TS/JS, две сессии);
+`GrepIndex` как fallback; `MultiIndex` маршрутизирует по языку файла; `build_index(target)` собирает лениво,
+сервер стартует при первом запросе. Агенты получают `lsp_symbols`, `lsp_definition` (≤120 строк) и `lsp_references`
+(≤50 мест); `has_symbol`/`locate` для гейта идут через индекс. `read_file` по умолчанию 60 строк, grep ≤4k.
+`tool_window_callback(keep=3)` заменяет старые результаты однострочным дайджестом.
 
 ## Специалисты и консультанты
 
@@ -79,7 +83,8 @@ pyright для Python, typescript-language-server для TS и JS (две сес
 правил (`scanner/adapter/domain.py`), `consult_domain` отвечает по карте (grep-эвристика как fallback;
 `DOMAIN_MODEL=0` выключает стадию); **Knowledge** — пре-пасс обогащает osv-якоря через OSV/GHSA/NVD/EPSS/KEV с
 SQLite-кэшем (`KNOWLEDGE_ENRICH=0` выключает, `GHSA_DIR` для офлайна, `GITHUB_TOKEN`/`NVD_API_KEY` снимают лимиты),
-а `knowledge` — AgentTool у `dependency` и `dependency_critic` (веб-поиск: `WEB_SEARCH=tavily` + `TAVILY_API_KEY`).
+плюс AgentTool `knowledge` (веб-поиск: `WEB_SEARCH=tavily` + `TAVILY_API_KEY`) инъектируется в `dependency` и
+`dependency_critic` через `specialists.build(knowledge_factory=)`.
 OWASP-карта (`scanner/adapter/owasp.py`) покрывает 58 CWE: WSTG, Top 10 2021 и 2025, ASVS 5.0 с уровнем, cheat
 sheet и remediation; SARIF несёт таксономии и `fixes[]`.
 
@@ -108,24 +113,51 @@ uv run pytest -q
 
 | Переменная | Назначение | По умолчанию |
 |---|---|---|
-| `VERIFIER_MAX_MODEL_CALLS` | бюджет вызовов модели одного Investigator'а на гипотезу | 30 |
-| `BUGFINDER_MAX_ROUNDS` / `BUGFINDER_MAX_HYPS` / `BUGFINDER_MAX_PARALLEL` | раунды, гипотез за раунд, Verifier'ов одновременно | 4 / 8 / 3 |
+| `GOOGLE_API_KEY` | ключ Google Gemini API | — |
+| `LLM_API_KEY` | ключ OpenAI-совместимого API (вместо GOOGLE_API_KEY) | — |
+| `LLM_BASE_URL` | базовый URL OpenAI-совместимого API | — |
+| `LLM_MODEL` | модель (gemini-flash-lite-latest для GOOGLE_API_KEY) | — |
+| `BUGFINDER_MAX_ROUNDS` | раунды investigation | 4 |
+| `BUGFINDER_MAX_HYPS` | гипотез за раунд | 8 |
+| `BUGFINDER_MAX_PARALLEL` | параллельных Investigator'ов | 3 |
+| `JSON_RETRY` | повторить JSON-парсинг ответа модели | on |
+| `STAGE_TIMEOUT` | таймаут стадии в секундах | 600 |
+| `SPECIALISTS` | использовать специалистов (0 = одиночные Verifier/Critic) | on |
+| `THREAT_MODEL` | включить Architect/ThreatModeler | on |
+| `DOMAIN_MODEL` | включить DomainModeler и `consult_domain` | on |
+| `CRITIC` | включить адверсариальный проход Critic | on |
+| `VERIFIER_MAX_MODEL_CALLS` | бюджет вызовов Investigator'а | 30 |
+| `CRITIC_MAX_MODEL_CALLS` | бюджет вызовов Critic'а | 20 |
+| `ARCHITECT_MAX_MODEL_CALLS` | бюджет вызовов Architect | 40 |
+| `DOMAIN_MODELER_MAX_MODEL_CALLS` | бюджет вызовов DomainModeler | 12 |
+| `THREAT_MODELER_MAX_MODEL_CALLS` | бюджет вызовов ThreatModeler | 6 |
+| `KNOWLEDGE_MAX_MODEL_CALLS` | бюджет вызовов Knowledge AgentTool | 10 |
+| `SPECIALIST_<NAME>_MAX_CALLS` | переопределить бюджет специалиста по имени | — |
 | `STATE_PATH` | SQLite State (якоря, гипотезы, досье, находки, artifacts) | `.state/state.db` |
 | `SESSIONS_PATH` | SQLite ADK-сессий (видны через `adk web`) | `.state/sessions.db` |
-| `CRITIC_MAX_MODEL_CALLS`, `CRITIC=0` | бюджет Critic на находку; `0` — отключить адверсариальный проход | 20 / on |
-| `LLM_MODEL` | модель Gemini (с `GOOGLE_API_KEY`) или модель за OpenAI-совместимым API (с `LLM_API_KEY`) | `gemini-flash-lite-latest` / `gpt-4.1` |
-| `SEMGREP_CONFIG`, `SKIP_DEPS=1` | конфиг semgrep (`auto` без `--metrics=off` — semgrep не даёт их сочетать); не запускать osv-scanner | `auto` / off |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` | OTLP-экспорт трассировки; имя сервиса | — / `scanner` |
-| `COMPACTION_INTERVAL`, `COMPACTION_OVERLAP` | сжатие событий ADK-сессии каждые N вызовов, последние `OVERLAP` — дословно | off / 2 |
+| `SKIP_DEPS` | пропустить osv-scanner (SKIP_DEPS=1) | off |
+| `KNOWLEDGE_CACHE` | SQLite кэш OSV/GHSA/NVD/EPSS | `.state/knowledge.db` |
+| `KNOWLEDGE_ENRICH` | обогащать osv-якоря из кэша и APIs | on |
+| `GHSA_DIR` | директория офлайн GHSA (вместо GitHub API) | — |
+| `GITHUB_TOKEN` | токен GitHub (снять лимит GHSA) | — |
+| `NVD_API_KEY` | ключ NVD API | — |
+| `WEB_SEARCH` | веб-поиск для Knowledge (`tavily`) | — |
+| `TAVILY_API_KEY` | ключ Tavily API | — |
+| `INDEX_MAX_FILES` | лимит файлов индекса | 3000 |
+| `INDEX_MAX_BYTES` | лимит памяти индекса в байтах | 30M |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP-экспорт трассировки (например, http://localhost:4318) | — |
+| `OTEL_SERVICE_NAME` | имя сервиса в OTLP | `scanner` |
+| `COMPACTION_INTERVAL` | сжатие ADK-сессии каждые N вызовов (0 = off) | 0 |
+| `COMPACTION_OVERLAP` | последние N событий — дословно | 2 |
 
 osv-scanner сканирует явные манифесты (`-L <manifest>` на каждый go.mod/package-lock.json/…) —
 git-aware обход osv-scanner ничего не находит в мелком клоне без `.git`.
 
-Модули: `scanner/core/{types,rules}.py` (типы и чистые правила), `scanner/adapter/static.py`
-(сканеры → якоря), `scanner/adapter/store.py` (SQLite, SARIF/summary, artifacts стадий v2),
-`scanner/adapter/tools.py` (тулы агентов с гейтами), `scanner/adapter/owasp.py` (consult_owasp),
-`scanner/app/reconcile.py` (Reconciler: якоря + threats → очередь), `scanner/app/agents.py`
-(фабрики Verifier, Critic, Architect, ThreatModeler), `scanner/app/graph.py` (общий `_Graph`),
-`scanner/app/pipeline_v2.py` (граф `PipelineV2`),
-`scanner/app/observe.py` (трассировка, сжатие сессии), `scanner/app/runner.py` (сборка графа,
-прогон в сессии, CLI-обвязка), `scanner/main.py` (CLI, eval), `web/fullscan/agent.py` (`adk web`).
+**Тесты:** `tests/fakes.py` — общие test doubles (FakeRun, fake agents); `tests/test_layers.py` — архитектурные гарды
+(core ← ничего, adapter ← core only, test модули не импортируют друг друга); маркер `tests/live` для live-eval.
+
+Модули: `scanner/core/{types,rules,calibrate,settings,ports,domain}.py` (доменный лист), `scanner/adapter/static.py`
+(сканеры → якоря), `scanner/adapter/{store,owasp,domain,dominance,knowledge,entrypoints,fs,skills}.py` (адаптеры),
+`scanner/adapter/tools/{common,code,lsp,gates,rosters}.py` (агент-тулы), `scanner/adapter/index/{lsp,grep,rpc,languages,callgraph}.py`
+(код индекс), `scanner/app/{agents,specialists,knowledge_agent,pipeline_v2,reconcile,domain}.py` (специалисты и граф),
+`scanner/app/{callbacks,observe,runner,settings}.py` (исполнение), `scanner/main.py` (CLI, eval), `web/fullscan/agent.py` (`adk web`).
