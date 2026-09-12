@@ -49,6 +49,7 @@ def build_workflow(
     has_anchor: Callable[[str], bool], has_symbol: Callable[[str], bool],
     locate: Callable[[str], tuple[str, int] | None] | None = None,
     entry_points_fn: Callable[[], list[Candidate]] | None = None, threats: list[Threat] | None = None,
+    source_files_fn: Callable[[], list[str]] | None = None,
     max_rounds: int = 4, max_hyps: int = 8, max_parallel: int = 3, stage_timeout: float = 600.0,
     index: Closeable | None = None,
 ) -> ScanWorkflow:
@@ -116,7 +117,7 @@ def build_workflow(
         if notes:
             log.info("grounding: %d items dropped or corrected", len(notes))
         ctx.state["grounding_dropped"] = len(notes)
-        queue, done = build_queue(store, anchors, threats, locate, entry_points_fn)
+        queue, done = build_queue(store, anchors, threats, locate, entry_points_fn, source_files_fn)
         return QueueState(queue=queue, done=sorted(done)).model_dump()
 
     async def investigate(ctx, node_input: dict) -> dict:

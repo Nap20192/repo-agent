@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import math
 import random
+import re
 from collections.abc import Callable
 
 from scanner import core
@@ -275,27 +276,73 @@ def reconcile(new: list[Hypothesis], queue: list[Hypothesis], done: set[str]) ->
     return sorted(merged.values(), key=lambda h: -h.priority)
 
 
-def coverage(entry_points: list[Candidate], queue: list[Hypothesis], done: set[str]) -> tuple[list[Hypothesis], list[Anchor]]:
-    """Plan-stage rule (Shannon): an entry point no item examines is never examined by anything downstream.
-    Every entry point not covered by a queued/done item (same symbol, or its file in `reads`) becomes a
-    low-priority baseline "entry" hypothesis: on its handler symbol, or — for inline handlers and plain
-    PHP pages that have no symbol — on a synthetic anchor (tool "entrypoint") minted at file:line so the
-    anchor-only gate still applies. Returns (hypotheses, minted anchors)."""
+# Planner (card 44, Shannon's per-class lanes decided in code): what to hunt at an entry point / in a file, from
+# the words of its route, path and handler name. ponytail: substring heuristic — a table, not NLP.
+HUNT = (
+    (("login", "signin", "auth", "password", "session", "token", "logout", "signup", "register"), ("CWE-287", "CWE-307", "CWE-522")),
+    (("profile", "update", "edit", "save", "settings", "comment", "post"), ("CWE-79", "CWE-639")),
+    (("admin",), ("CWE-862", "CWE-285")),
+    (("search", "filter", "query", "list", "find", "allocation", "benefit"), ("CWE-89", "CWE-943")),
+    (("file", "path", "download", "upload", "static", "attachment"), ("CWE-22",)),
+    (("redirect", "return", "next", "url", "callback", "learn"), ("CWE-601",)),
+    (("eval", "template", "render", "exec", "contribution"), ("CWE-95", "CWE-1336")),
+    (("regex", "validat", "match", "pattern"), ("CWE-1333",)),
+)
+_ID_PARAM = re.compile(r"[:{<][^/}>]*id[^/}>]*[}>]?|[?&][^=]*id=|/\d+\b", re.IGNORECASE)  # /:id {id} <int:id> ?userId= /42
+DEFAULT_HUNT = ("CWE-79", "CWE-89", "CWE-639")
+FILE_BASELINE_MAX = 60  # ponytail: rounds×hyps slots never reach more anyway; raise with the budget
+
+
+def hunt_classes(route: str = "", file: str = "", symbol: str = "") -> list[str]:
+    """Classes to hunt at an entry point, most specific first; DEFAULT_HUNT when nothing in the words says more."""
+    text = f"{route} {file} {symbol}".lower()
+    out: list[str] = ["CWE-639", "CWE-862"] if _ID_PARAM.search(f"{route} {symbol}") else []
+    for words, cwes in HUNT:
+        if any(w in text for w in words):
+            out += cwes
+    return list(dict.fromkeys(out)) or list(DEFAULT_HUNT)
+
+
+def _baseline(where: str, file: str, line: int, symbol: str, classes: list[str], claim: str, priority: int) -> tuple[Hypothesis, Anchor]:
+    """A baseline hypothesis with its own entrypoint anchor: every baseline can report (and, via the discovery
+    gate, report elsewhere) — a symbol-only baseline had nothing to pass as anchor_id (NodeGoat run 18)."""
+    a = Anchor(id=new_anchor_id("entrypoint", where, file, line), tool="entrypoint", rule_id=where,
+               severity="low", file=file, line=line, message=claim)
+    h = Hypothesis(kind="entry", cwe=classes[0], symbol=symbol, anchor_id=a.id, reads=[file] if file else [],
+                   priority=priority, claim=claim, **_owasp_ids(classes[0]))
+    return h, a
+
+
+def coverage(entry_points: list[Candidate], queue: list[Hypothesis], done: set[str], files: list[str] = (),
+             adversarial: float = 0.25, seed: int = 0) -> tuple[list[Hypothesis], list[Anchor]]:
+    """Plan-stage rule (Shannon): nothing stays unexamined. Every entry point not covered by a queued/done item
+    (same symbol) becomes a priority-10 baseline naming the classes to hunt (`hunt_classes`); a deterministic
+    `adversarial` share of them also gets the sweep wording. Every production `file` nobody reads becomes a
+    priority-8 file baseline (≤ FILE_BASELINE_MAX). Each baseline carries its own entrypoint anchor.
+    Returns (hypotheses, minted anchors)."""
     covered_syms = {h.symbol for h in queue if h.symbol} | {k.split("|", 1)[0] for k in done if "|" in k}
+    sweep = {h.symbol: h.claim for h in adversarial_sweep(entry_points, adversarial, seed)}
     hyps: list[Hypothesis] = []
     minted: list[Anchor] = []
     for c in entry_points:
-        if (c.symbol and c.symbol in covered_syms) or (not c.symbol and not c.file):  # a file's anchor covers no handler
+        if (c.symbol and c.symbol in covered_syms) or not c.file:  # a file's anchor covers no handler
             continue
         where = c.symbol or " ".join(c.route) or c.file
-        claim = f"Baseline: untrusted input entering {where} ({c.file}:{c.line}) reaches a dangerous sink unsanitized"
-        h = Hypothesis(kind="entry", symbol=c.symbol, reads=[c.file] if c.file else [], priority=10, claim=claim)
-        if not c.symbol:
-            a = Anchor(id=new_anchor_id("entrypoint", where, c.file, c.line), tool="entrypoint", rule_id=where,
-                       severity="low", file=c.file, line=c.line, message=claim)
-            minted.append(a)
-            h.anchor_id = a.id
+        classes = hunt_classes(" ".join(c.route), c.file, c.symbol)
+        claim = (f"Baseline: untrusted input entering {where} ({c.file}:{c.line}) — hunt {', '.join(classes)}: "
+                 "a sink of one of these classes reached without the matching control")
+        if c.symbol in sweep:
+            claim += ". " + sweep[c.symbol]
+        h, a = _baseline(where, c.file, c.line, c.symbol, classes, claim, 10)
         hyps.append(h)
+        minted.append(a)
+    read = {f for h in [*queue, *hyps] for f in h.reads}
+    for f in [f for f in files if f not in read][:FILE_BASELINE_MAX]:
+        classes = hunt_classes("", f, "")
+        claim = f"Baseline file: read {f} for {', '.join(classes)} — no queued item examines it"
+        h, a = _baseline(f, f, 1, "", classes, claim, 8)
+        hyps.append(h)
+        minted.append(a)
     return hyps, minted
 
 
@@ -317,6 +364,7 @@ def build_queue(
     store: RunStore, anchors: list[Anchor], threats: list[Threat] | None = None,
     locate: Callable[[str], tuple[str, int] | None] | None = None,
     entry_points_fn: Callable[[], list[Candidate]] | None = None,
+    source_files_fn: Callable[[], list[str]] | None = None,
 ) -> tuple[list[Hypothesis], set[str]]:
     """One prioritized queue from the grounded threat model (store artifacts), the scanner anchors and
     entry-point coverage; synthetic anchors minted on the way are saved to the store. Shared by the tests
@@ -336,9 +384,10 @@ def build_queue(
         log.info("reconcile: %d synthetic anchors for grounded threats", len(minted))
     done: set[str] = set()
     queue = reconcile(from_anchors(anchors) + hyps, [], done)
-    if entry_points_fn is not None:  # plan-stage rule: no entry point stays unexamined
-        baseline, minted_entries = coverage(entry_points_fn(), queue, done)
+    if entry_points_fn is not None or source_files_fn is not None:  # plan-stage rule: nothing stays unexamined
+        baseline, minted_entries = coverage(entry_points_fn() if entry_points_fn else [], queue, done,
+                                            files=source_files_fn() if source_files_fn else [])
         if minted_entries:
-            store.save_anchors(minted_entries)  # inline handlers / PHP pages: anchors at file:line
+            store.save_anchors(minted_entries)  # every baseline reports from its own entrypoint anchor
         queue = reconcile(baseline, queue, done)
     return queue, done

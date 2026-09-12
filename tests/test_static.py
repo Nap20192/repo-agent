@@ -178,3 +178,12 @@ def test_gosec_without_go_mod_runs_at_the_root(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(st, "_run", lambda cmd, cwd, timeout=600: calls.append(cwd) or "{}")
     assert st._gosec(tmp_path) == [] and calls == [tmp_path]
+
+
+def test_source_files_skip_tests_fixtures_and_unknown_languages(tmp_path):
+    from scanner.adapter import fs
+    for f in ["app/a.py", "app/test_a.py", "app/a_test.go", "web/b.spec.ts", "web/c.test.js", "tests/x.py",
+              "__tests__/y.js", "fixtures/z.py", "docs/r.md", "node_modules/m.js", "app/ok.js"]:
+        (tmp_path / f).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / f).write_text("x\n")
+    assert fs.source_files(tmp_path) == ["app/a.py", "app/ok.js"]

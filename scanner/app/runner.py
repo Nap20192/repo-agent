@@ -111,6 +111,7 @@ def wiring(run, target: Path, entries: list[Candidate], model, index: Index | No
         "has_symbol": has_symbol,
         "locate": index.find_symbol,
         "entry_points_fn": lambda: entries,
+        "source_files_fn": lambda: fs.source_files(target),  # planner: file baselines for what nobody reads
         "max_rounds": s.max_rounds,
         "max_hyps": s.max_hyps,
         "max_parallel": s.max_parallel,

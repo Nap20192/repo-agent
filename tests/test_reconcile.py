@@ -70,10 +70,12 @@ def test_coverage_baselines_uncovered_entry_points():
            Candidate(kind="entry", symbol="", file="x.go", line=1)]
     queue = [Hypothesis(kind="sink", cwe="CWE-89", claim="x", anchor_id="a_sql", reads=["main.go"])]
     out, minted = coverage(eps, queue, done={"pingHandler|CWE-78"})
-    # ping done; searchHandler is NOT covered by an anchor merely living in main.go (symbol rule); x.go minted
-    assert [h.symbol for h in out] == ["searchHandler", "adminHandler", ""] and len(minted) == 1
+    # ping done; searchHandler is NOT covered by an anchor merely living in main.go (symbol rule); every
+    # baseline gets an entrypoint anchor (NodeGoat run 18: symbol-only baselines had nothing to report from)
+    assert [h.symbol for h in out] == ["searchHandler", "adminHandler", ""] and len(minted) == 3
+    assert all(h.anchor_id and h.anchor_id == a.id for h, a in zip(out, minted, strict=True))
     assert out[1].kind == "entry" and out[1].priority == 10 and out[1].reads == ["admin.go"] and "adminHandler" in out[1].claim
-    assert core.ground_hypothesis(out[1], lambda i: False, lambda s: s == "adminHandler") is None  # gate accepts a real symbol
+    assert core.ground_hypothesis(out[1], lambda i: i == out[1].anchor_id, lambda s: False) is None  # grounded on its own anchor
 
 
 def test_adversarial_sweep_is_deterministic_fraction():
@@ -91,10 +93,10 @@ def test_coverage_mints_anchor_for_symbol_less_entry():
     eps = [Candidate(kind="entry", file="s.ts", line=1, symbol="", route=["GET /x"]),
            Candidate(kind="entry", file="h.go", line=9, symbol="named")]
     hyps, minted = coverage(eps, [], set())
-    assert len(minted) == 1 and (minted[0].tool, minted[0].file, minted[0].line, minted[0].cwe) == ("entrypoint", "s.ts", 1, "")
+    assert len(minted) == 2 and (minted[0].tool, minted[0].file, minted[0].line, minted[0].cwe) == ("entrypoint", "s.ts", 1, "")
     inline = next(h for h in hyps if h.anchor_id)
     assert inline.anchor_id == minted[0].id and inline.kind == "entry" and "GET /x" in inline.claim
-    assert next(h for h in hyps if h.symbol == "named").anchor_id == ""
+    assert next(h for h in hyps if h.symbol == "named").anchor_id == minted[1].id  # symbol handlers are anchored too (card 44)
 
 
 def test_coverage_examines_every_route_of_a_file_with_an_anchor():
@@ -105,8 +107,8 @@ def test_coverage_examines_every_route_of_a_file_with_an_anchor():
            Candidate(kind="entry", file="server.js", line=20, route=["GET /ping"]),
            Candidate(kind="entry", file="server.js", line=30, route=["GET /file"])]
     hyps, minted = coverage(eps, reconcile(from_anchors(anchors), [], set()), set())
-    assert [h.reads for h in hyps] == [["server.js"]] * 3 and len(minted) == 2  # the handler and both inline routes examined
-    assert {a.line for a in minted} == {20, 30}
+    assert [h.reads for h in hyps] == [["server.js"]] * 3 and len(minted) == 3  # the handler and both inline routes examined
+    assert {a.line for a in minted} == {13, 20, 30}
 
 
 def test_from_anchors_and_threats_carry_owasp_ids():
@@ -241,3 +243,49 @@ def test_bare_quote_strips_location_prefix_and_html_entities():
     assert bare_quote("app/routes/c.js:33:        const afterTax = eval(req.body.afterTax);") == "const afterTax = eval(req.body.afterTax);"
     assert bare_quote("    app.get(\"/learn\", isLoggedIn, (req, res) =&gt; {") == 'app.get("/learn", isLoggedIn, (req, res) => {'
     assert bare_quote("owasp:WSTG-INJT-11") == "owasp:WSTG-INJT-11"
+
+
+# --- card 44: planner ---------------------------------------------------------------------------------------
+
+def test_hunt_classes_by_route_file_and_symbol():
+    from scanner.app.reconcile import DEFAULT_HUNT, hunt_classes
+    assert hunt_classes("POST /login", "session.js", "handleLoginRequest")[:3] == ["CWE-287", "CWE-307", "CWE-522"]
+    assert hunt_classes("POST /profile", "profile.js", "handleProfileUpdate")[:2] == ["CWE-79", "CWE-639"]
+    assert hunt_classes("GET /allocations/:userId", "allocations.js", "")[:2] == ["CWE-639", "CWE-862"]
+    assert hunt_classes("GET /admin", "", "")[:2] == ["CWE-862", "CWE-285"]
+    assert hunt_classes("GET /search", "", "")[:2] == ["CWE-89", "CWE-943"]
+    assert hunt_classes("GET /download", "", "")[0] == "CWE-22"
+    assert hunt_classes("GET /learn?url=", "", "displayLearn") == ["CWE-601"]
+    assert hunt_classes("", "", "renderTemplate")[:2] == ["CWE-95", "CWE-1336"]
+    assert hunt_classes("", "validators.js", "")[0] == "CWE-1333"
+    assert hunt_classes("GET /", "index.js", "displayWelcomePage") == list(DEFAULT_HUNT)
+
+
+def test_baselines_name_classes_route_to_a_specialist_and_carry_the_adversarial_share():
+    eps = [Candidate(kind="entry", file="s.js", line=53, symbol="handleLoginRequest", route=["POST /login"]),
+           Candidate(kind="entry", file="p.js", line=40, symbol="handleProfileUpdate", route=["POST /profile"]),
+           Candidate(kind="entry", file="a.js", line=8, symbol="displayAllocations", route=["GET /allocations/:userId"]),
+           Candidate(kind="entry", file="i.js", line=30, symbol="displayWelcomePage", route=["GET /"])]
+    hyps, _ = coverage(eps, [], set(), adversarial=0.25, seed=1)
+    login = next(h for h in hyps if h.symbol == "handleLoginRequest")
+    assert login.cwe == "CWE-287" and "CWE-307" in login.claim and login.kind == "entry" and login.priority == 10
+    assert next(h for h in hyps if h.symbol == "handleProfileUpdate").cwe == "CWE-79"
+    assert sum("Adversarial sweep" in h.claim for h in hyps) == 1  # ceil(4 * 0.25), deterministic
+    assert coverage(eps, [], set(), adversarial=0.25, seed=1)[0][0].claim == hyps[0].claim
+
+
+def test_file_baselines_cover_source_files_nobody_reads():
+    eps = [Candidate(kind="entry", file="routes/index.js", line=3, symbol="h")]
+    queue = [Hypothesis(kind="sink", cwe="CWE-89", claim="x", anchor_id="a", reads=["dao/user.js"])]
+    hyps, minted = coverage(eps, queue, set(), files=["routes/index.js", "dao/user.js", "dao/allocations.js", "lib/validators.js"])
+    files = [h for h in hyps if not h.symbol]
+    assert [h.reads for h in files] == [["dao/allocations.js"], ["lib/validators.js"]]
+    assert files[0].priority == 8 and files[0].kind == "entry" and "dao/allocations.js" in files[0].claim
+    assert files[1].cwe == "CWE-1333" and {a.file for a in minted} >= {"dao/allocations.js", "lib/validators.js"}
+    assert files[0].anchor_id in {a.id for a in minted}
+
+
+def test_file_baselines_are_capped():
+    from scanner.app.reconcile import FILE_BASELINE_MAX
+    hyps, _ = coverage([], [], set(), files=[f"f{i}.py" for i in range(FILE_BASELINE_MAX + 5)])
+    assert len(hyps) == FILE_BASELINE_MAX

@@ -6,6 +6,7 @@ Every adapter that touches the target goes through here (one confinement rule, o
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -42,6 +43,25 @@ def rel(target: Path, file: str) -> str:
         return str(Path(file).resolve().relative_to(Path(target).resolve())) if os.path.isabs(file) else file
     except ValueError:
         return file
+
+
+_TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs", "fixtures", "testdata", "mocks", "__mocks__"}
+_TEST_NAMES = re.compile(r"(^test_.*|.*_test|.*\.test|.*\.spec)\.\w+$")
+
+
+def source_files(target: Path) -> list[str]:
+    """Production source files (known languages) as sorted relative paths — no tests, specs or fixtures
+    (Shannon's plan rule: coverage is over production code). The planner's file baselines come from here."""
+    root = Path(target)
+    out = []
+    for p in files(root):
+        if p.suffix not in LANG_EXT or _TEST_NAMES.match(p.name):
+            continue
+        rel_p = p.relative_to(root)
+        if _TEST_DIRS & set(rel_p.parts[:-1]):
+            continue
+        out.append(rel_p.as_posix())
+    return sorted(out)
 
 
 def detect_langs(target: Path) -> set[str]:
