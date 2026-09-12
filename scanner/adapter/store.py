@@ -19,6 +19,7 @@ from scanner.core import (
     Finding,
     Hypothesis,
     calibrate,
+    exposure_for,
 )
 
 _SCHEMA = """
@@ -161,6 +162,10 @@ class Run:
         with self.db:
             self.db.execute("UPDATE runs SET status=?, reason=?, finished=? WHERE id=?", (status, reason, time.time(), self.id))
 
+    def _calibrate(self, f: Finding, intent: str) -> dict:
+        exp, rules = exposure_for(f, self.artifact("architecture_model"))
+        return calibrate(f, intent, exposure=exp, knowledge=enrichment_for(f.anchor_id), extra_rules=rules)
+
     def write_report(self, out_dir: Path) -> Path:
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -170,7 +175,7 @@ class Run:
             "message": {"text": f.title + ("\n" + "\n".join(f.evidence) if f.evidence else "")},
             "locations": [{"physicalLocation": {"artifactLocation": {"uri": f.file}, "region": {"startLine": f.line}}}],
             "properties": {"finding_id": f.id, "anchor_id": f.anchor_id, "confidence": f.confidence,
-                           "calibration": calibrate(f, intent, knowledge=enrichment_for(f.anchor_id))},
+                           "calibration": self._calibrate(f, intent)},
             "taxa": _taxa(f),
             **({"fixes": [{"description": {"text": f.remediation}, "properties": {"url": f.remediation_url}}]}
                if f.remediation else {}),
@@ -196,7 +201,7 @@ class Run:
         intent = (self.artifact("threat_model") or {}).get("intent", "production")
         summary = {"run_id": self.id, "target": self.target,
                    **{s: sum(f.status == s for f in fs) for s in (CONFIRMED, REJECTED, UNCERTAIN)},
-                   "findings": [{**f.model_dump(), "calibration": calibrate(f, intent, knowledge=enrichment_for(f.anchor_id))} for f in fs], "gate_refusals": gate,
+                   "findings": [{**f.model_dump(), "calibration": self._calibrate(f, intent)} for f in fs], "gate_refusals": gate,
                    "intent": intent}
         if (timings := self.artifact("timings")) is not None:
             summary["timings"] = timings

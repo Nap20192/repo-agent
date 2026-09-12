@@ -133,6 +133,7 @@ def test_ground_artifacts_drops_fabrications():
     am2, dm2, tm2, notes = ground_artifacts(am, dm, tm, _has, {"WSTG-INJT-05"})
     assert [e["name"] for e in am2["entities"]] == ["H"] and any("ungrounded entity Server" in n for n in am2["notes"])
     assert am2["vuln_classes"][0]["wstg_id"] == "WSTG-INJT-05" and am2["vuln_classes"][1]["wstg_id"] == ""  # fabricated → owasp map / cleared
+    assert ground_artifacts({"vuln_classes": [{"cwe": "CWE-89"}]}, None, None, _has, {"WSTG-INJT-05"})[0] == {"vuln_classes": [{"cwe": "CWE-89"}]}  # shape-preserving
     assert [r["id"] for r in dm2["rules"]] == ["r2"] and any("r1" in g and "Server.login" in g for g in dm2["gaps"])
     assert [t["symbol"] for t in tm2["threats"]] == ["searchHandler"] and tm2["threats"][0]["wstg_id"] == "WSTG-INJT-05"
     assert any("ghost" in n or "nowhere" in n for n in tm2["notes"]) and len(notes) >= 4

@@ -48,7 +48,8 @@ def from_anchors(anchors: list[Anchor]) -> list[Hypothesis]:
 
 
 def from_threats(
-    threats: list[Threat], anchors: list[Anchor], locate: Callable[[str], tuple[str, int] | None] | None = None
+    threats: list[Threat], anchors: list[Anchor], locate: Callable[[str], tuple[str, int] | None] | None = None,
+    criticality: dict[str, str] | None = None,
 ) -> tuple[list[Hypothesis], list[Anchor]]:
     """Threats → hypotheses, plus the synthetic anchors minted for them.
 
@@ -79,9 +80,87 @@ def from_threats(
         hyps.append(Hypothesis(
             kind=kind, cwe=t.cwe, claim=t.claim, wstg_id=t.wstg_id or ids["wstg_id"], asvs_id=ids["asvs_id"], anchor_id=a.id if a else "", symbol="" if a else t.symbol,
             consult=_KIND_CONSULT.get(kind, ""), reads=t.reads or ([a.file] if a else [t.file] if t.file else []),
-            priority=t.priority + (10 if a and a.tool != "threatmodel" else 0),
+            priority=t.priority + (10 if a and a.tool != "threatmodel" else 0)
+            + (10 if (criticality or {}).get(t.symbol.split(".")[-1]) == "CRITICAL" else 0),
         ))
     return hyps, minted
+
+
+KNOWN_WSTG = {wid for wid, _ in owasp._WSTG.values()}
+
+
+def _wstg_or_map(wid: str, cwe: str, known: set[str]) -> tuple[str, bool]:
+    """(id, fabricated): an absent id stays absent; a known id stays; a fabricated one → the CWE's mapped id or ""."""
+    if not wid or wid in known:
+        return wid, False
+    return (owasp.consult(cwe).get("wstg_id", "") if cwe else ""), True
+
+
+def ground_artifacts(am: dict | None, dm: dict | None, tm: dict | None, has_symbol, known_wstg: set[str]):
+    """Enforce in code what the prompts ask for: symbols must exist, WSTG ids must be real.
+
+    Ungrounded entities/threats → `notes`; ungrounded domain rules → `gaps`; fabricated `wstg_id` → the CWE's
+    mapped id (or cleared). Returns (am, dm, tm, notes) as new dicts, shape-preserving: keys are only added
+    when something was dropped or corrected. None artifacts pass through."""
+    notes: list[str] = []
+
+    def sym_ok(sym: str) -> bool:
+        return bool(sym) and (has_symbol(sym) or has_symbol(sym.split(".")[-1]))
+
+    def noted(art: dict, key: str, msgs: list[str]) -> None:
+        if msgs:
+            art[key] = [*(art.get(key) or []), *msgs]
+
+    if am is not None:
+        am, mine = dict(am), []
+        kept = []
+        for e in am.get("entities") or []:
+            if e.get("grounding_symbol") and not sym_ok(e["grounding_symbol"]):
+                mine.append(f"ungrounded entity {e.get('name', '?')}: symbol {e['grounding_symbol']!r} not in the index")
+            else:
+                kept.append(e)
+        if "entities" in am:
+            am["entities"] = kept
+        vcs = []
+        for v in am.get("vuln_classes") or []:
+            wid, fake = _wstg_or_map(v.get("wstg_id", ""), v.get("cwe", ""), known_wstg)
+            if fake:
+                mine.append(f"fabricated wstg id {v.get('wstg_id')!r} for {v.get('cwe')} → {wid or 'none'}")
+                v = {**v, "wstg_id": wid}
+            vcs.append(v)
+        if "vuln_classes" in am:
+            am["vuln_classes"] = vcs
+        noted(am, "notes", mine)
+        notes += mine
+    if dm is not None:
+        dm, mine = dict(dm), []
+        rules = []
+        for r in dm.get("rules") or []:
+            if not sym_ok(r.get("symbol", "")):
+                mine.append(f"rule {r.get('id', '?')} ungrounded: symbol {r.get('symbol')!r} not in the index — {r.get('statement', '')}")
+            else:
+                rules.append(r)
+        if "rules" in dm:
+            dm["rules"] = rules
+        noted(dm, "gaps", mine)
+        notes += mine
+    if tm is not None:
+        tm, mine = dict(tm), []
+        threats = []
+        for t in tm.get("threats") or []:
+            if not sym_ok(t.get("symbol", "")) and not (t.get("file") and t.get("line")):
+                mine.append(f"ungrounded threat dropped: {t.get('claim', '')[:80]} (symbol {t.get('symbol')!r})")
+                continue
+            wid, fake = _wstg_or_map(t.get("wstg_id", ""), t.get("cwe", ""), known_wstg)
+            if fake:
+                mine.append(f"fabricated wstg id {t.get('wstg_id')!r} on threat {t.get('claim', '')[:40]!r} → {wid or 'none'}")
+                t = {**t, "wstg_id": wid}
+            threats.append(t)
+        if "threats" in tm:
+            tm["threats"] = threats
+        noted(tm, "notes", mine)
+        notes += mine
+    return am, dm, tm, notes
 
 
 def reconcile(new: list[Hypothesis], queue: list[Hypothesis], done: set[str]) -> list[Hypothesis]:

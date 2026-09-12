@@ -39,6 +39,7 @@ from scanner.app.agents import (
 )
 from scanner.app.domain import make_consult_domain
 from scanner.app.graph import _activation, _text_of, parse_json
+from scanner.app.reconcile import KNOWN_WSTG
 from scanner.core import (
     Anchor,
     ArchitectureModel,
@@ -142,7 +143,47 @@ async def trial_architect(model, tmp, index, budget, probe):
     except ValueError as e:
         return False, f"not an ArchitectureModel: {str(e)[:80]}"
     grounded = [e for e in am.entities if e.grounding_symbol and index.has_symbol(e.grounding_symbol)]
-    return (True, "") if grounded else (False, f"no entity grounded on a real symbol ({[e.grounding_symbol for e in am.entities]})")
+    if not grounded:
+        return False, f"no entity grounded on a real symbol ({[e.grounding_symbol for e in am.entities]})"
+    ghosts = [e.grounding_symbol for e in am.entities if e.grounding_symbol and not index.has_symbol(e.grounding_symbol)]
+    if ghosts:
+        return False, f"entities grounded on symbols that do not exist: {ghosts}"
+    fake = [v.wstg_id for v in am.vuln_classes if v.wstg_id and v.wstg_id not in KNOWN_WSTG]
+    if fake:
+        return False, f"fabricated WSTG ids: {fake} (consult_owasp was not used)"
+    return True, ""
+
+
+async def trial_domain_modeler(model, tmp, index, budget, probe):
+    """08-idor-go: every rule must be grounded on a real symbol; getOrder's missing owner check must surface."""
+    from scanner.adapter.domain import extract
+    from scanner.adapter.index import build_index
+    from scanner.app.domain import new_domain_modeler
+    from scanner.core.domain import DomainMap
+
+    idor = SAMPLE.parent / "08-idor-go"
+    idx = build_index(idor)
+    try:
+        store, run = _store(tmp, [])
+        skeleton = extract(idor, idx).model_dump()
+        text, _ = await _activate(new_domain_modeler(model, architect_tools(run, idor, index=idx), budget), "DomainInput",
+                                  {"architecture_model": {}, "skeleton": skeleton}, probe)
+        store.close()
+        parsed = parse_json(text)
+        if parsed is None:
+            return False, "final text is not JSON"
+        try:
+            dm = DomainMap.model_validate(parsed)
+        except ValueError as e:
+            return False, f"not a DomainMap: {str(e)[:80]}"
+        ghosts = [r.symbol for r in dm.rules if r.symbol and not idx.has_symbol(r.symbol.split(".")[-1])]
+        if ghosts:
+            return False, f"rules grounded on symbols that do not exist: {ghosts}"
+        if not any("getOrder" in (r.symbol + r.statement) for r in dm.rules) and not any("getOrder" in g for g in dm.gaps):
+            return False, "getOrder without an owner check was not surfaced as a rule or gap"
+        return True, ""
+    finally:
+        idx.close()
 
 
 async def trial_threat_modeler(model, tmp, index, budget, probe):
@@ -434,7 +475,7 @@ async def trial_dependency_critic(model, tmp, index, budget, probe):
 
 
 TRIALS = {
-    "architect": trial_architect, "threat_modeler": trial_threat_modeler, "investigator": trial_verifier, "critic": trial_critic,
+    "architect": trial_architect, "domain_modeler": trial_domain_modeler, "threat_modeler": trial_threat_modeler, "investigator": trial_verifier, "critic": trial_critic,
     "taint": trial_taint, "authz": trial_authz, "dependency": trial_dependency, "secrets": trial_secrets, "config": trial_config,
     "taint_critic": trial_taint_critic, "authz_critic": trial_authz_critic, "dependency_critic": trial_dependency_critic,
 }

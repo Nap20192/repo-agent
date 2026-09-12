@@ -1,6 +1,6 @@
 """Domain leaf: types + pure rules. `from scanner.core import Anchor, ground_hypothesis` keeps working."""
 
-from scanner.core.calibrate import calibrate, priority
+from scanner.core.calibrate import calibrate, exposure_for, priority
 from scanner.core.rules import (
     check_consulted,
     ground_hypothesis,
@@ -67,6 +67,7 @@ __all__ = [
     "VulnClass",
     "calibrate",
     "check_consulted",
+    "exposure_for",
     "ground_hypothesis",
     "is_consult_ref",
     "merge_duplicates",

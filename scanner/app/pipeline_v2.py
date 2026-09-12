@@ -16,7 +16,15 @@ from pydantic import Field
 
 from scanner import core
 from scanner.app.graph import _activation, _Graph, _with_deadline, parse_json
-from scanner.app.reconcile import coverage, from_anchors, from_threats, key, reconcile
+from scanner.app.reconcile import (
+    KNOWN_WSTG,
+    coverage,
+    from_anchors,
+    from_threats,
+    ground_artifacts,
+    key,
+    reconcile,
+)
 from scanner.core import ArchitectureModel, Candidate, Threat, ThreatModel
 
 log = logging.getLogger("scanner.pipeline_v2")
@@ -103,11 +111,29 @@ class PipelineV2(_Graph):
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         anchors = self.store.anchors()
-        threats = list(self.threats)
         timings: dict[str, float] = {}
-        async for ev in self._model_threats(ctx, anchors, threats, timings):
+        async for ev in self._model_threats(ctx, anchors, [], timings):  # threats are rebuilt from the grounded artifact
             yield ev
-        hyps, minted = from_threats(threats, anchors, self.locate)
+        # grounding is a property of the code: symbols must exist (index or locate), WSTG ids must be real
+        grounded = lambda s: self.has_symbol(s) or bool(self.locate and self.locate(s))
+        arts = [self.store.artifact(st) for st in ("architecture_model", "domain_map", "threat_model")]
+        am, dm, tm, notes = ground_artifacts(*arts, grounded, KNOWN_WSTG)
+        for st, art in zip(("architecture_model", "domain_map", "threat_model"), (am, dm, tm), strict=True):
+            if art is not None:
+                self.store.put_artifact(st, art)
+        for n in notes:
+            self.store.add_note(n)
+        if notes:
+            log.info("grounding: %d items dropped or corrected", len(notes))
+        yield self._state_event(ctx, {"grounding_dropped": len(notes)})
+        threats = list(self.threats)
+        if tm:
+            try:
+                threats += ThreatModel.model_validate(tm).threats
+            except ValueError as e:
+                log.warning("threat_model: invalid after grounding: %s", e)
+        criticality = {e.get("grounding_symbol", ""): e.get("criticality", "") for e in (am or {}).get("entities", [])}
+        hyps, minted = from_threats(threats, anchors, self.locate, criticality)
         if minted:
             self.store.save_anchors(minted)  # synthetic anchors keep the single anchor-only gate
             log.info("reconcile: %d synthetic anchors for grounded threats", len(minted))

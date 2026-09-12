@@ -23,6 +23,8 @@ Caps: third_party_reachability (dependency advisory, no proven path) → LOW 2.0
 
 from __future__ import annotations
 
+import re
+
 from scanner.core.types import CONFIRMED, Finding
 
 _IMPACT = {
@@ -43,7 +45,8 @@ def priority(score: float) -> str:
     return "CRITICAL" if score >= 8 else "HIGH" if score >= 6 else "MEDIUM" if score >= 3 else "LOW"
 
 
-def calibrate(finding: Finding, intent: str = "production", exposure: str = "internal", knowledge: dict | None = None) -> dict:
+def calibrate(finding: Finding, intent: str = "production", exposure: str = "internal", knowledge: dict | None = None,
+              extra_rules: list[str] | None = None) -> dict:
     """Report-only hazard score for one finding. Pure; see the module docstring for the tables.
     `knowledge` = the anchor's enrichment (scanner.adapter.knowledge.enrichment_for): KEV or EPSS ≥ 0.5 → likelihood +1."""
     cwe = finding.cwe.upper()
@@ -52,6 +55,10 @@ def calibrate(finding: Finding, intent: str = "production", exposure: str = "int
         impact = min(impact, 2)
     likelihood = 1 if finding.status != CONFIRMED else 2 if finding.confidence < 0.5 else 3
     rules = ["static_confirmation"]  # no sandbox: never empirically reproduced → likelihood ≤ 3, ×0.8, not CRITICAL
+    if extra_rules:  # from the ArchitectureModel (exposure_for): a CRITICAL entity raises impact by one
+        rules += list(extra_rules)
+        if "critical_entity" in extra_rules:
+            impact = min(5, impact + 1)
     if knowledge and knowledge.get("kev"):
         likelihood, rules = min(5, likelihood + 1), [*rules, "exploited_in_the_wild"]
     elif knowledge and (knowledge.get("epss") or 0) >= 0.5:
@@ -80,3 +87,28 @@ def calibrate(finding: Finding, intent: str = "production", exposure: str = "int
     score = round(min(score, cap), 1)
     return {"score": score, "impact": impact, "likelihood": likelihood, "multiplier": round(mult, 3),
             "priority": priority(score), "rules_applied": rules}
+
+
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
+
+
+def exposure_for(finding: Finding, am: dict | None) -> tuple[str, list[str]]:
+    """Exposure and extra calibration rules derived from the ArchitectureModel artifact (pure).
+
+    "exposed" when a trust-boundary entry names a symbol found in the finding's title/evidence (or its file);
+    "critical_entity" when the finding sits in an entity marked CRITICAL (by grounding symbol or file)."""
+    if not am:
+        return "internal", []
+    text = " ".join([finding.title, *finding.evidence])
+    base = finding.file.rsplit("/", 1)[-1]
+    exposed = any(
+        (w in text and w != base) for b in am.get("trust_boundaries") or [] for w in _IDENT.findall(b)
+    ) or any(base and base in b for b in am.get("trust_boundaries") or [])
+    rules = []
+    for e in am.get("entities") or []:
+        if str(e.get("criticality", "")).upper() == "CRITICAL" and (
+            (e.get("grounding_symbol") and e["grounding_symbol"] in text) or finding.file in (e.get("files") or [])
+        ):
+            rules.append("critical_entity")
+            break
+    return ("exposed" if exposed else "internal"), rules
