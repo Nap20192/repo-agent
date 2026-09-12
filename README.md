@@ -64,6 +64,22 @@ pyright для Python, typescript-language-server для TS и JS (две сес
 индекс. `read_file` по умолчанию 60 строк, grep ≤4k. `tool_window_callback(keep=3)` заменяет старые результаты
 тулов в контексте активации однострочным дайджестом.
 
+## Специалисты и консультанты
+
+Один Investigator и один Critic заменены реестром специалистов (`scanner/app/specialists.py`): investigators
+`taint` (A03/A08/A10), `authz` (A01/A07), `dependency` (A06/A08), `secrets` (A02), `config` (A02/A05/A09) и критики
+`taint_critic`, `authz_critic`, `dependency_critic`; `TOP10_COVERAGE` закрывает OWASP Top 10 2021 целиком (A04 —
+через Domain-карту и ThreatModeler). Роутер детерминированный: CWE → kind → generic fallback; языковой оверлей
+(Go / Node / Python) — суффикс инструкции по расширению файла. У каждого свой набор тулов (`subset()`),
+скиллы и бюджет `SPECIALIST_<NAME>_MAX_CALLS`; `SPECIALISTS=0` возвращает одиночных Verifier/Critic.
+Консультанты: **Domain** — стадия DomainModeler (после Architect) строит `domain_map` из схем, guard'ов и
+правил (`scanner/adapter/domain.py`), `consult_domain` отвечает по карте (grep-эвристика как fallback;
+`DOMAIN_MODEL=0` выключает стадию); **Knowledge** — пре-пасс обогащает osv-якоря через OSV/GHSA/NVD/EPSS/KEV с
+SQLite-кэшем (`KNOWLEDGE_ENRICH=0` выключает, `GHSA_DIR` для офлайна, `GITHUB_TOKEN`/`NVD_API_KEY` снимают лимиты),
+а `knowledge` — AgentTool у `dependency` и `dependency_critic` (веб-поиск: `WEB_SEARCH=tavily` + `TAVILY_API_KEY`).
+OWASP-карта (`scanner/adapter/owasp.py`) покрывает 58 CWE: WSTG, Top 10 2021 и 2025, ASVS 5.0 с уровнем, cheat
+sheet и remediation; SARIF несёт таксономии и `fixes[]`.
+
 ## Скиллы, калибровка, покрытие
 
 - `scanner/skills/*.md` — 34 скилла (Strix через адаптацию git-agent3): per-CWE (sql-injection, xss, ssrf, idor…),

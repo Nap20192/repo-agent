@@ -3,8 +3,10 @@ with deterministic code graders; report pass@k (any of k passed) and pass^k (all
 
     uv run python -m eval.agents --model openai/qwen3:1.7b --k 3 --out eval/scorecard.json
 
-Agents under test: Architect, ThreatModeler, Investigator (Verifier), Critic, plus the tool-window callback
-(graded from the Investigator's model requests). Target fixture: samples/02-vulnshop (Go, 3 handlers).
+Agents under test: Architect, ThreatModeler, Investigator (Verifier), Critic, the tool-window callback (graded from the
+Investigator's model requests) and every specialist of scanner/app/specialists.py (taint, authz, dependency, secrets,
+config, taint_critic, authz_critic, dependency_critic), each on its own fixture and routed like the graph does.
+`--only taint,authz` selects a subset. Target fixtures: samples/02-vulnshop, 08-idor-go, 11-expressshop, temp files.
 The model comes from --model: an `openai/<name>` LiteLLM spec (default ollama at localhost:11434) or a Gemini
 model string when GOOGLE_API_KEY is set. Findings/anchors live in a throwaway Store under a temp dir.
 """
@@ -28,12 +30,14 @@ from scanner.adapter.index import build_index
 from scanner.adapter.owasp import consult_owasp
 from scanner.adapter.store import Store
 from scanner.adapter.tools import architect_tools, critic_tools, verifier_tools
+from scanner.app import specialists as sp
 from scanner.app.agents import (
     new_architect,
     new_critic,
     new_threat_modeler,
     new_verifier,
 )
+from scanner.app.domain import make_consult_domain
 from scanner.app.graph import _activation, _text_of, parse_json
 from scanner.core import (
     Anchor,
@@ -43,6 +47,7 @@ from scanner.core import (
     ThreatModel,
     new_anchor_id,
 )
+from scanner.core.domain import DomainMap
 
 SAMPLE = Path(__file__).resolve().parent.parent / "samples" / "02-vulnshop"
 TRIAL_TIMEOUT = 300  # seconds per activation
@@ -96,11 +101,11 @@ class Probe:
         self.windows.append((len(rs), verbatim))
 
 
-async def _activate(agent, label: str, payload: dict, probe: Probe) -> tuple[str, list[str]]:
+async def _activate(agent, label: str, payload: dict, probe: Probe, suffix: str = "") -> tuple[str, list[str]]:
     """Run one activation like the graph does; returns (final text, tool call names)."""
     cbs = agent.before_model_callback
     agent.before_model_callback = [*(cbs if isinstance(cbs, list) else [cbs] if cbs else []), probe]
-    act = _activation(agent, f"eval_{agent.name}", label, payload)
+    act = _activation(agent, f"eval_{agent.name}", label, payload, suffix=suffix)
     svc = Runner(app_name="eval", agent=act, session_service=InMemorySessionService())
     await svc.session_service.create_session(app_name="eval", user_id="u", session_id="s")
     text, tools = "", []
@@ -198,7 +203,241 @@ def grade_window(probe: Probe, keep: int = 3):
     return (worst <= keep, "" if worst <= keep else f"{worst} verbatim tool responses kept, expected ≤{keep}")
 
 
-TRIALS = {"architect": trial_architect, "threat_modeler": trial_threat_modeler, "investigator": trial_verifier, "critic": trial_critic}
+# --- specialists (scanner/app/specialists.py): one trial each, routed like the graph does ------------------
+
+IDOR = Path(__file__).resolve().parent.parent / "samples" / "08-idor-go"
+IDOR_ANCHOR = Anchor(id=new_anchor_id("threatmodel", "WSTG-ATHZ-04", "main.go", 30), tool="threatmodel", rule_id="WSTG-ATHZ-04",
+                     cwe="CWE-639", severity="high", file="main.go", line=30, message="getOrder returns any order by id without an owner check")
+DOMAIN_MAP = DomainMap(
+    entities=[{"name": "Order", "fields": ["ID", "UserID"], "owner_field": "UserID", "symbol": "Order", "file": "main.go", "line": 9}],
+    rules=[{"id": "r1", "statement": "An Order is returned only to the user whose UserID equals the session user (currentUser)",
+            "entity": "Order", "symbol": "getMyOrder", "evidence": ["main.go:46"]}],
+).model_dump()
+EXPRESS_DEP = Anchor(id=new_anchor_id("osv", "express@4.17.1", "package.json", 1), tool="osv", rule_id="GHSA-rv95-896h-c2vc",
+                     rule_ids=["GHSA-rv95-896h-c2vc", "CVE-2024-29041"], severity="high", file="package.json", line=1,
+                     message="express@4.17.1: 1 advisories (GHSA-rv95-896h-c2vc) — open redirect in res.location / res.redirect with malformed URLs",
+                     snippet="express 4.17.1")
+FAKE_TOKEN = "ghp_9Q3xL2mV8nB4kT7pW1rY6sD0fH5jZ2aC3eG9"
+
+
+def _fixture(tmp: Path, name: str, files: dict[str, str]) -> Path:
+    t = tmp / name
+    t.mkdir(exist_ok=True)
+    for f, body in files.items():
+        (t / f).write_text(body)
+    return t
+
+
+def _pick(spec_name: str, run, target: Path, index, item, model, lang: str = "go", role: str = "investigate", kind: str = ""):
+    """Build the roster for this run and return (agent, overlay suffix) the graph's router would use."""
+    agent = sp.build(model, run, target, index)[spec_name]
+    spec, suffix = sp.route(item, lang, role, kind)
+    assert spec.name == spec_name, f"router picked {spec.name} for the {spec_name} trial"
+    return agent, suffix
+
+
+def _swap_tool(agent, fn) -> None:
+    agent.tools = [fn if getattr(t, "__name__", "") == fn.__name__ else t for t in agent.tools]
+
+
+async def trial_taint(model, tmp, index, budget, probe):
+    store, run = _store(tmp, [SQLI, CMDI])
+    agent, suffix = _pick("taint", run, SAMPLE, index, HYP, model)
+    if suffix != sp.LANG_OVERLAYS["go"] or not suffix:
+        return False, "go overlay missing from the routed activation"
+    _, tools = await _activate(agent, "Hypothesis", {**HYP.model_dump(), "skill": "sql-injection", "specialist": "taint"}, probe, suffix)
+    fs, refusals = run.findings(), _refusals(run)
+    store.close()
+    ok = [f for f in fs if f.anchor_id == SQLI.id and f.status == core.CONFIRMED and any("db.Query" in e for e in f.evidence)]
+    if not ok:
+        return False, f"no confirmed finding quoting db.Query (findings: {[(f.status, f.anchor_id[:8]) for f in fs]}; refused: {refusals}; tools: {tools})"
+    return True, ""
+
+
+async def trial_authz(model, tmp, index, budget, probe):
+    idx = build_index(IDOR)
+    store = Store(str(tmp / f"state-{time.time_ns()}.db"))
+    run = store.start_run(str(IDOR))
+    run.save_anchors([IDOR_ANCHOR])
+    run.put_artifact("domain_map", DOMAIN_MAP)
+    hyp = Hypothesis(id="h0-1", kind="authz", cwe="CWE-639", consult="domain", anchor_id=IDOR_ANCHOR.id, reads=["main.go"], priority=80,
+                     claim="getOrder returns the Order for any id from the query without comparing Order.UserID to currentUser(r)")
+    agent, suffix = _pick("authz", run, IDOR, idx, hyp, model)
+    _swap_tool(agent, make_consult_domain(run, idx))  # the map-backed consultant (the runner wires it the same way)
+    _, tools = await _activate(agent, "Hypothesis", {**hyp.model_dump(), "skill": "authz-idor", "specialist": "authz"}, probe, suffix)
+    fs, refusals = run.findings(), _refusals(run)
+    store.close(); idx.close()
+    if "consult_domain" not in tools:
+        return False, f"never consulted the domain map (tools: {tools})"
+    ok = [f for f in fs if f.anchor_id == IDOR_ANCHOR.id and f.status == core.CONFIRMED and any(e.lower().startswith("domain:") for e in f.evidence)]
+    return (True, "") if ok else (False, f"no confirmed IDOR with a domain: ref (findings: {[(f.status, f.evidence[:1]) for f in fs]}; refused: {refusals})")
+
+
+async def trial_dependency(model, tmp, index, budget, probe):
+    target = Path(__file__).resolve().parent.parent / "samples" / "11-expressshop"
+    idx = build_index(target)
+    store = Store(str(tmp / f"state-{time.time_ns()}.db"))
+    run = store.start_run(str(target))
+    run.save_anchors([EXPRESS_DEP])
+    hyp = Hypothesis(id="h0-1", kind="dependency", consult="knowledge", anchor_id=EXPRESS_DEP.id, reads=["package.json", "server.js"], priority=70,
+                     claim="express@4.17.1 is affected by GHSA-rv95-896h-c2vc and the app calls res.redirect with user input")
+    agent, suffix = _pick("dependency", run, target, idx, hyp, model, lang="node")
+    _, tools = await _activate(agent, "Hypothesis", {**hyp.model_dump(), "skill": "dependency-advisory", "specialist": "dependency"}, probe, suffix)
+    fs = run.findings()
+    store.close(); idx.close()
+    if "shell" in tools:
+        return False, "dependency specialist must not have/use shell"
+    if not ({"consult_knowledge", "knowledge"} & set(tools)):
+        return False, f"never consulted knowledge (tools: {tools})"
+    ok = [f for f in fs if f.anchor_id == EXPRESS_DEP.id and any(e.lower().startswith("knowledge:") for e in f.evidence)]
+    return (True, "") if ok else (False, f"no verdict citing knowledge: (findings: {[(f.status, f.evidence[:1]) for f in fs]}; tools: {tools})")
+
+
+async def trial_secrets(model, tmp, index, budget, probe):
+    target = _fixture(tmp, "secrets", {"config.js": f'const GITHUB_TOKEN = "{FAKE_TOKEN}"; // used by deploy.js\nmodule.exports = {{ GITHUB_TOKEN }};\n'})
+    idx = build_index(target)
+    store = Store(str(tmp / f"state-{time.time_ns()}.db"))
+    run = store.start_run(str(target))
+    sec = Anchor(id=new_anchor_id("gitleaks", "github-pat", "config.js", 1), tool="gitleaks", rule_id="github-pat", cwe="CWE-798", severity="high",
+                 file="config.js", line=1, message="GitHub personal access token", snippet=core.redact_secrets(f'const GITHUB_TOKEN = "{FAKE_TOKEN}"'))
+    run.save_anchors([sec])
+    hyp = Hypothesis(id="h0-1", kind="secret", cwe="CWE-798", anchor_id=sec.id, reads=["config.js"], priority=60,
+                     claim="config.js commits a live GitHub token that the code uses")
+    agent, suffix = _pick("secrets", run, target, idx, hyp, model, lang="node")
+    _, tools = await _activate(agent, "Hypothesis", {**hyp.model_dump(), "skill": "information-disclosure", "specialist": "secrets"}, probe, suffix)
+    fs = run.findings()
+    store.close(); idx.close()
+    if "shell" in tools:
+        return False, "secrets specialist must not use shell"
+    mine = [f for f in fs if f.anchor_id == sec.id]
+    if not mine:
+        return False, f"no verdict recorded (tools: {tools})"
+    leaked = [e for f in mine for e in f.evidence if FAKE_TOKEN in e]
+    return (False, "raw token in evidence") if leaked else (True, "")
+
+
+async def trial_config(model, tmp, index, budget, probe):
+    target = _fixture(tmp, "config", {"server.js": 'const express = require("express");\nconst app = express();\n'
+                                       'app.post("/login", (req, res) => {\n  const sid = newSession(req.body.user);\n'
+                                       '  res.cookie("sid", sid);\n  res.send("ok");\n});\n'})
+    idx = build_index(target)
+    store = Store(str(tmp / f"state-{time.time_ns()}.db"))
+    run = store.start_run(str(target))
+    a = Anchor(id=new_anchor_id("semgrep", "express-cookie-session-no-httponly", "server.js", 5), tool="semgrep", rule_id="express-cookie-session-no-httponly",
+               cwe="CWE-614", severity="medium", file="server.js", line=5, message="Session cookie set without httpOnly/secure/sameSite", snippet='res.cookie("sid", sid);')
+    run.save_anchors([a])
+    hyp = Hypothesis(id="h0-1", kind="sink", cwe="CWE-614", anchor_id=a.id, reads=["server.js"], priority=40,
+                     claim="the session cookie is set without HttpOnly/Secure/SameSite")
+    agent, suffix = _pick("config", run, target, idx, hyp, model, lang="node")
+    _, tools = await _activate(agent, "Hypothesis", {**hyp.model_dump(), "skill": "information-disclosure", "specialist": "config"}, probe, suffix)
+    fs = run.findings()
+    store.close(); idx.close()
+    mine = [f for f in fs if f.anchor_id == a.id]
+    return (True, "") if mine else (False, f"no verdict recorded (tools: {tools})")
+
+
+async def trial_taint_critic(model, tmp, index, budget, probe):
+    store, run = _store(tmp, [SQLI, SAFE])
+    fp = run.report(Finding(anchor_id=SAFE.id, cwe="CWE-89", file="main.go", line=37, title="SQL injection in safeHandler",
+                            status=core.CONFIRMED, evidence=['rows, _ := db.Query("SELECT id FROM users WHERE name = $1", name)'], confidence=0.9))
+    tp = run.report(Finding(anchor_id=SQLI.id, cwe="CWE-89", file="main.go", line=22, title="SQL injection in searchHandler",
+                            status=core.CONFIRMED, evidence=['rows, _ := db.Query("SELECT id FROM users WHERE name = \'" + name + "\'")'], confidence=0.95))
+    agent, suffix = _pick("taint_critic", run, SAMPLE, index, fp, model, role="critique")
+    tools_all = []
+    for f in (fp, tp):
+        _, tools = await _activate(agent, "Finding", {"finding": f.model_dump(), "anchor": run.anchor(f.anchor_id).model_dump(), "specialist": "taint_critic"}, probe, suffix)
+        tools_all += tools
+    st = {f.id: f for f in run.findings()}
+    store.close()
+    if st[tp.id].status != core.CONFIRMED:
+        return False, f"real SQLi did not survive (status {st[tp.id].status})"
+    if st[fp.id].status == core.CONFIRMED:
+        return False, f"parameterized /safe query still confirmed (tools: {tools_all})"
+    if "check_dominance" not in tools_all:
+        return False, "disproved without calling check_dominance"
+    return True, ""
+
+
+ELSE_BRANCH_GO = """package main
+
+import (
+	"encoding/json"
+	"net/http"
+)
+
+type Order struct {
+	ID     string
+	UserID string
+}
+
+var orders = map[string]Order{}
+
+func currentUser(r *http.Request) string { return r.Header.Get("X-User") }
+
+func getOrder(w http.ResponseWriter, r *http.Request) {
+	order := orders[r.URL.Query().Get("id")]
+	if r.Header.Get("X-Admin") == "1" {
+		json.NewEncoder(w).Encode(order)
+	} else {
+		if order.UserID != currentUser(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		json.NewEncoder(w).Encode(order)
+	}
+}
+
+func main() { http.HandleFunc("/order", getOrder) }
+"""
+
+
+async def trial_authz_critic(model, tmp, index, budget, probe):
+    target = _fixture(tmp, "authz_critic", {"main.go": ELSE_BRANCH_GO, "go.mod": "module fixture\n\ngo 1.22\n"})
+    idx = build_index(target)
+    store = Store(str(tmp / f"state-{time.time_ns()}.db"))
+    run = store.start_run(str(target))
+    a = Anchor(id=new_anchor_id("threatmodel", "WSTG-ATHZ-04", "main.go", 20), tool="threatmodel", rule_id="WSTG-ATHZ-04", cwe="CWE-639",
+               severity="high", file="main.go", line=20, message="admin header bypasses the owner check")
+    run.save_anchors([a])
+    run.put_artifact("domain_map", DOMAIN_MAP)
+    f = run.report(Finding(anchor_id=a.id, cwe="CWE-639", file="main.go", line=20, title="IDOR: X-Admin header skips the owner check",
+                           status=core.CONFIRMED, evidence=["domain:r1", 'if r.Header.Get("X-Admin") == "1" {', "json.NewEncoder(w).Encode(order)"], confidence=0.9))
+    agent, suffix = _pick("authz_critic", run, target, idx, f, model, role="critique")
+    _swap_tool(agent, make_consult_domain(run, idx))
+    _, tools = await _activate(agent, "Finding", {"finding": f.model_dump(), "anchor": a.model_dump(), "specialist": "authz_critic"}, probe, suffix)
+    st = {x.id: x for x in run.findings()}
+    store.close(); idx.close()
+    if st[f.id].status != core.CONFIRMED:
+        return False, f"finding wrongly disproved: the owner check sits in the else branch (tools: {tools}; evidence: {st[f.id].evidence[-2:]})"
+    return True, ""
+
+
+async def trial_dependency_critic(model, tmp, index, budget, probe):
+    target = _fixture(tmp, "dep_critic", {"package.json": '{"name": "x", "dependencies": {"express": "4.17.1"}}\n',
+                                          "server.js": 'const express = require("express");\nconst app = express();\n'
+                                                       'app.get("/", (req, res) => res.send("hi"));\napp.listen(3000);\n'})
+    idx = build_index(target)
+    store = Store(str(tmp / f"state-{time.time_ns()}.db"))
+    run = store.start_run(str(target))
+    run.save_anchors([EXPRESS_DEP])
+    f = run.report(Finding(anchor_id=EXPRESS_DEP.id, cwe="", file="package.json", line=1, title="express open redirect GHSA-rv95-896h-c2vc reachable",
+                           status=core.CONFIRMED, evidence=["knowledge:GHSA-rv95-896h-c2vc", '"express": "4.17.1"'], confidence=0.8))
+    agent, suffix = _pick("dependency_critic", run, target, idx, f, model, lang="node", role="critique", kind="dependency")
+    _, tools = await _activate(agent, "Finding", {"finding": f.model_dump(), "anchor": EXPRESS_DEP.model_dump(), "specialist": "dependency_critic"}, probe, suffix)
+    st = {x.id: x for x in run.findings()}
+    store.close(); idx.close()
+    if st[f.id].status == core.CONFIRMED:
+        return False, f"still confirmed although res.redirect/res.location is never called (tools: {tools})"
+    if not ({"lsp_path_to_entry", "lsp_references", "grep"} & set(tools)):
+        return False, f"disproved without checking reachability (tools: {tools})"
+    return True, ""
+
+
+TRIALS = {
+    "architect": trial_architect, "threat_modeler": trial_threat_modeler, "investigator": trial_verifier, "critic": trial_critic,
+    "taint": trial_taint, "authz": trial_authz, "dependency": trial_dependency, "secrets": trial_secrets, "config": trial_config,
+    "taint_critic": trial_taint_critic, "authz_critic": trial_authz_critic, "dependency_critic": trial_dependency_critic,
+}
 
 
 async def run_all(model_spec: str, k: int, budget: int, only: set[str] | None = None) -> dict:

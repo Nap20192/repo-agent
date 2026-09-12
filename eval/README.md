@@ -41,3 +41,29 @@ uv run pytest -q tests/test_eval_dataset.py    # local cases: files, lines and s
 ## Licenses
 
 Samples 10 and 11 are original. NodeGoat is OWASP's, Apache-2.0 — cloned at eval time, not vendored.
+
+## Live per-agent eval (`eval/agents.py`)
+
+```
+uv run python -m eval.agents --model openai/qwen3:1.7b --k 3 --budget 12 --out eval/scorecard.json
+uv run python -m eval.agents --only taint,authz_critic --k 1          # a subset
+LIVE_EVAL=1 EVAL_ONLY=taint uv run pytest -m live tests/live           # same via pytest
+```
+
+One trial per agent, graded by code, reported as pass@k / pass^k with model calls and seconds. Beyond the
+four stage agents and the tool window, every specialist of `scanner/app/specialists.py` gets its own fixture,
+routed exactly like the graph (`route()` picks it and the language overlay suffix):
+
+| trial | fixture | pass when |
+|---|---|---|
+| taint | 02-vulnshop CWE-89 anchor, go overlay | confirmed finding quoting `db.Query` |
+| authz | 08-idor-go `getOrder`, canned `domain_map` artifact | `consult_domain` called, confirmed with a `domain:` ref |
+| dependency | 11-expressshop, osv anchor GHSA-rv95-896h-c2vc | verdict cites `knowledge:`, knowledge consulted, no shell |
+| secrets | temp `config.js` with a fake GitHub token | verdict recorded, evidence never contains the raw token, no shell |
+| config | temp Express `res.cookie` without flags (CWE-614) | verdict recorded |
+| taint_critic | confirmed `/safe` `$1` query + real SQLi | `/safe` disproved after `check_dominance`, real SQLi survives |
+| authz_critic | owner check in the `else` branch, admin branch unchecked | finding survives |
+| dependency_critic | express 4.17.1 declared, `res.redirect` never called | finding disproved after a reachability tool |
+
+Model: ollama only for our own runs (`LLM_BASE_URL`, key `ollama`); a Gemini spec needs `GOOGLE_API_KEY`.
+The dependency trial consults osv.dev over the network; `KNOWLEDGE_ENRICH=0` keeps the pre-pass offline.
