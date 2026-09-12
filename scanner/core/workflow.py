@@ -34,14 +34,3 @@ class Report(_Model):
     rounds: int = 0
     stop_reason: str = ""
     timings: dict[str, float] = Field(default_factory=dict)
-
-
-class WorkflowState(BaseModel):
-    """`state_schema` of the Workflow: typed keys the nodes share, plus tool/consultant scratch keys."""
-
-    model_config = ConfigDict(extra="allow")
-    round: int = 0  # core.STATE_ROUND
-    queue_len: int = 0
-    stop_reason: str = ""  # core.STATE_STOP_REASON
-    budget_exhausted: bool = False  # core.STATE_BUDGET_EXHAUSTED
-    grounding_dropped: int = 0

@@ -1,7 +1,7 @@
 """Card 43 step 1: the payloads that travel between Workflow nodes (core, no ADK) round-trip as JSON."""
 
 from scanner.core import Candidate, Hypothesis
-from scanner.core.workflow import InvestigateResult, QueueState, Report, ScanSkeleton, WorkflowState
+from scanner.core.workflow import InvestigateResult, QueueState, Report, ScanSkeleton
 
 
 def test_skeleton_round_trip():
@@ -21,9 +21,3 @@ def test_result_and_report_defaults():
     assert InvestigateResult().rounds == 0 and InvestigateResult().stop == ""
     r = Report(rounds=2, stop_reason="round limit", timings={"verify_0": 1.5})
     assert Report.model_validate(r.model_dump()) == r
-
-
-def test_workflow_state_allows_scratch_keys():
-    st = WorkflowState.model_validate({"round": 1, "budget_exhausted:verify_r0_1": True})
-    assert st.round == 1 and st.model_dump()["budget_exhausted:verify_r0_1"] is True
-    assert WorkflowState().stop_reason == "" and WorkflowState().budget_exhausted is False
