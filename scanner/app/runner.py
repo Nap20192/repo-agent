@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from google.adk.apps import App
+from google.adk.errors._stale_session_error import StaleSessionError
 from google.adk.runners import Runner
 from google.adk.sessions.sqlite_session_service import SqliteSessionService
 from google.genai import types
@@ -69,10 +70,27 @@ def model_from_env(settings: Settings | None = None):
     raise SystemExit("no model: set GOOGLE_API_KEY or LLM_API_KEY (+LLM_BASE_URL)")
 
 
+class ScanSessionService(SqliteSessionService):
+    """SqliteSessionService that tolerates one concurrent writer: `adk web` lets a person post into the session
+    of a running CLI scan, which bumps `update_time` and makes the CLI's session object stale (ADK then refuses
+    every later append). We re-sync the timestamp from storage and retry once; the foreign event stays."""
+
+    async def append_event(self, session, event):
+        try:
+            return await super().append_event(session=session, event=event)
+        except StaleSessionError:
+            fresh = await self.get_session(app_name=session.app_name, user_id=session.user_id, session_id=session.id)
+            if fresh is None:
+                raise
+            log.warning("session %s was updated elsewhere (adk web?) — re-synced, continuing", session.id)
+            session.last_update_time = fresh.last_update_time
+            return await super().append_event(session=session, event=event)
+
+
 async def run_session(agent, target: str, run_id: int, settings: Settings | None = None) -> dict:
     """Run the graph in a persistent ADK session (the file `adk web` reads) so the run shows in the UI."""
     s = settings or Settings.from_env()
-    svc = SqliteSessionService(s.sessions_path)
+    svc = ScanSessionService(s.sessions_path)
     sid = f"run-{run_id}-{Path(target).name}"
     app = App(name=APP_NAME, root_agent=agent, events_compaction_config=compaction_config(model_from_env(s), s))
     runner = Runner(app=app, session_service=svc)
