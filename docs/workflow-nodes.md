@@ -429,10 +429,16 @@ mechanical checklist», пять проверок).
   очищается (`_fix_wstg`, `_wstg_or_map`, строки 164-191); заметки дописываются в `am.notes`.
 - DomainMap: правила без символа в индексе удаляются — в `dm.gaps` (`_ground_rules`, строки 194-202).
 - ThreatModel: угроза без символа **и** без `(file, line)` удаляется; у выживших чинится `wstg_id`
-  (`_ground_threats`, строки 205-217).
+  (`_ground_threats`, строки 205-217); замечания об угрозах дописываются в `threat_model.notes` (`reconcile.py:261`),
+  а не только в `am.notes`/`dm.gaps`.
+- Правила gate по пустым символам: сущность с пустым `grounding_symbol` сохраняется (удаляется только непустой символ
+  вне индекса, `reconcile.py:175`); угроза с пустым `symbol` живёт при наличии `file` и `line` (`reconcile.py:209`);
+  правило с пустым `symbol` удаляется всегда (`sym_ok` требует непустую строку, `reconcile.py:228-229`).
 - Форма сохраняется: ключи добавляются только при изменениях; `None`-артефакт проходит насквозь.
 
-**Инструменты / бюджет:** 0. **Отказ:** чистая функция. **Завершение:** всегда.
+**Инструменты / бюджет:** 0. **Отказ:** чистая функция. **Завершение:** всегда. `ctx.state["grounding_dropped"]` =
+`len(notes)`, то есть считает и поправки `wstg_id`, а не только удаления (в run 18 — 2 при нуле удалений,
+`pipeline.py:147`).
 
 **Пример на NodeGoat (run 18):** две поправки в `architecture_model.notes` — `WSTG-INJST-01 → WSTG-INJT-11` для
 CWE-95 и `WSTG-CLNT-02 → WSTG-CLNT-04` для CWE-601; ни одна сущность и угроза не удалена.
@@ -442,7 +448,7 @@ CWE-95 и `WSTG-CLNT-02 → WSTG-CLNT-04` для CWE-601; ни одна сущн
 ### 3.9 `plan`
 
 **Тип ADK (план):** `FunctionNode` (`build_queue` + `coverage` + новый `batch_files`). **Статус:** частично — очередь
-есть (`reconcile.py:363-393`, вызов `pipeline.py:148-149`); батчи файлов, артефакт `plan` и схема
+есть (`reconcile.py:366-396`, вызов `pipeline.py:148`); батчи файлов, артефакт `plan` и схема
 `PlanState(QueueState){batches[[file]]}` — план (§3, строки 100,121).
 
 **Вход**
@@ -450,45 +456,66 @@ CWE-95 и `WSTG-CLNT-02 → WSTG-CLNT-04` для CWE-601; ни одна сущн
 | Имя | Откуда | Схема |
 |---|---|---|
 | `anchors` | `remaining` из `direct_findings` (`pipeline.py:116`) | `list[Anchor]` |
-| `threats` | `build_workflow(threats=…)` + угрозы из артефакта `threat_model` (`reconcile.py:374-379`) | `list[Threat]` |
-| `architecture_model.entities[].criticality` | артефакт (`reconcile.py:380`) | `dict[symbol→criticality]` |
+| `threats` | угрозы из артефакта `threat_model` после `ground` (`reconcile.py:375-382`; невалидный артефакт → warning, угрозы пропущены); параметр `build_workflow(threats=…)` в `runner.wiring` не передаётся (только тесты) | `list[Threat]` |
+| `architecture_model.entities[].criticality` | артефакт (`reconcile.py:383`) | `dict[grounding_symbol→criticality]`, поиск по `t.symbol.split('.')[-1]` (строка 156) |
 | `entry_points_fn`, `source_files_fn` | `runner.wiring` (`runner.py:117-118`: `entries`, `fs.source_files(target)`) | `list[Candidate]`, `list[str]` |
 | `locate` | `index.find_symbol` (`runner.py:116`) | `symbol → (file, line) \| None` |
 
-**Выход:** `QueueState{queue[Hypothesis], done[str]}` (`core/workflow.py:23-25`); синтетические якоря сохраняются в
-стор (`reconcile.py:382-384,390-391`). План: `PlanState` с батчами по `TRIAGE_BATCH=10` файлов, артефакт `plan`.
+Узел читает артефакты `architecture_model` и `threat_model` из стора уже после `ground` (`store.artifact`,
+`reconcile.py:375-376`); `architecture_model` отсутствует → `{}` (критичность пуста), невалидный `threat_model` →
+warning без заметки, угрозы модели теряются (`reconcile.py:378-382`).
+
+**Выход:** `QueueState{queue[Hypothesis], done[str]}` (`core/workflow.py:23-25`); синтетические якоря (`threatmodel`,
+`entrypoint`) сохраняются в таблицу `anchors` стора (`reconcile.py:385-387,393-394`; `store.save_anchors`,
+`store.py:83-86`). `done` в выходе всегда пуст (`reconcile.py:388`); в `investigate` в него попадают и отброшенные
+гейтом элементы батча (`pipeline.py:162`), поэтому повторно они не планируются. План: `PlanState` с батчами по
+`TRIAGE_BATCH=10` файлов, артефакт `plan`.
 
 **Алгоритм (порт Shannon `plan.prompt.hbs`, сделанный кодом).**
 1. `from_threats` (`reconcile.py:122-158`): угроза привязывается к якорю сканера по точному `(file, line, cwe)`,
-   иначе по `(file, cwe)` только если совпадение единственное («never guess between two sinks», строка 140); иначе,
-   если `locate(symbol)` нашёл определение, чеканится синтетический якорь `tool="threatmodel"` с severity по
-   приоритету (≥70 high, ≥40 medium); иначе гипотеза остаётся на символе и её судьбу решит гейт диспетчеризации.
+   иначе, только если у угрозы `line == 0`, по `(file, cwe)` и только если совпадение единственное («never guess
+   between two sinks», строка 140); иначе, если `locate(symbol)` нашёл определение, чеканится синтетический якорь
+   `tool="threatmodel"` с severity по приоритету (≥70 high, ≥40 medium); иначе (или при пустом `t.symbol`) гипотеза
+   остаётся на символе; при отправке батча `gate_hypotheses` (`graph.py:60-74`, `core.ground_hypothesis`,
+   `rules.py:99-105`) отбросит её с заметкой, если `has_symbol(symbol)` ложен.
    Приоритет = `t.priority` +10 за реальный якорь сканера +10 за CRITICAL-сущность.
 2. `from_anchors` (`reconcile.py:109-119`): каждый оставшийся якорь — задача; `kind` по классу
    (`anchor_kind`: osv/CVE/GHSA → `dependency`, CWE-798 → `secret`, `AUTHZ_CWES` → `authz`, иначе `sink`),
-   `consult` по kind (`dependency→knowledge`, `authz→domain`), приоритет `SEVERITY_RANK×20`.
+   `consult` по kind (`dependency→knowledge`, `authz→domain`), приоритет `SEVERITY_RANK×20`. Каждая гипотеза (и из
+   угроз, и из якорей) получает `wstg_id`/`asvs_id` через `owasp.consult(cwe)` (`reconcile.py:37-39,115,151-153`); у
+   угрозы приоритет собственного `wstg_id` над картой по CWE.
 3. `reconcile` (`reconcile.py:266-276`): ключ `key(h) = anchor_id or "symbol|cwe"`; дубли — побеждает больший
-   приоритет; сортировка по приоритету убыв.
-4. `coverage` (`reconcile.py:316-346`) — правило «nothing stays unexamined»: каждая точка входа без гипотезы на её
+   приоритет; сортировка по приоритету убыв. Ключ «|» (нет якоря, символа и CWE) и ключи из `done` `reconcile` молча
+   отбрасывает (`reconcile.py:272-273`).
+4. `coverage` (`reconcile.py:317-349`) — правило «nothing stays unexamined»: каждая точка входа без гипотезы на её
    символ становится baseline-гипотезой `kind="entry"` с приоритетом 10 и классами `hunt_classes(route, file,
    symbol)` (таблица `HUNT`, строки 281-290: `login/auth/password…` → 287/307/522; `profile/update/edit…` → 79/639;
    `admin` → 862/285; `search/query/allocation/benefit` → 89/943; `file/upload/static` → 22; `redirect/return/url` →
    601; `eval/template/render/contribution` → 95/1336; `regex/validat` → 1333; `:id`/`{id}`/`?userId=`/`/42` →
-   639/862 первыми; иначе `DEFAULT_HUNT` = 79/89/639). Детерминированная доля `adversarial=0.25` (seed 0) получает
-   формулировку `adversarial_sweep` («ignore assumed safety…», строки 349-360). Каждый production-файл, который никто
-   не читает, — file-baseline приоритета 8, не более `FILE_BASELINE_MAX=60` (строка 293). Каждый baseline несёт свой
-   якорь `tool="entrypoint"` (`_baseline`, строки 306-313), чтобы мог отчитаться (и, через discovery, отчитаться
-   в другом месте).
+   639/862 первыми; иначе `DEFAULT_HUNT` = 79/89/639). Детерминированная доля `adversarial=0.25` (`ceil(n×0.25)`,
+   `random.Random(0)`, параметры функции — не ручки Settings) кандидатов с символом получает дописку
+   `adversarial_sweep` («ignore assumed safety and trust boundaries…», строки 352-363), если попала в baseline. Каждый
+   production-файл, который никто не читает, — file-baseline приоритета 8, не более `FILE_BASELINE_MAX=60` (строка
+   293). Кандидаты без `file` пропускаются, а один обработчик под несколькими маршрутами даёт один baseline
+   (`reconcile.py:329,340-341`). Каждый baseline несёт свой якорь `tool="entrypoint"` (`_baseline`, строки 306-314),
+   чтобы мог отчитаться (и, через discovery, отчитаться в другом месте); синтетические `entrypoint`-якоря имеют
+   `cwe=""`, `severity="low"` (`reconcile.py:310-311`), CWE фиксируется при `report_finding`.
 
-**Инструменты / бюджет:** 0; `FILE_BASELINE_MAX`, `TRIAGE_BATCH` (план). **Отказ:** чистая. **Завершение:** одна
-очередь; `done` пуст на входе.
+**Инструменты / бюджет:** 0 вызовов модели; `FILE_BASELINE_MAX=60` — константа `reconcile.py:293` (env-ручки нет);
+`TRIAGE_BATCH` — план (§3 строка 121: 10; §5 строка 199: 15 — план расходится). **Отказ:** чистая; но у узла `plan`
+(`pipeline.py:112-149`) нет собственного try/except вокруг `build_queue`: исключение в
+`locate`/`entry_points_fn`/`source_files_fn` роняет весь `Workflow` (ADR-0007), в отличие от LLM-стадий внутри
+`stage()` (`pipeline.py:98-102`). **Завершение:** одна очередь; `done` пуст на входе.
 
-**Пример на NodeGoat (run 18):** раунд 0 — `h0-1` sink CWE-95 p100 (угроза + якорь `a_972d75`), `h0-2` sink CWE-601
-p85, `h0-3` sink CWE-522 p70, затем baseline p10: `displayWelcomePage`, `displayLoginPage`, `handleLoginRequest`,
-`displaySignupPage`, `handleSignup` (`app/routes/index.js:30-38`). Всего за 4 раунда 26 гипотез (8/8/8/2); file-baseline
-(до 60) очередь не достигла — главная причина промахов, ради которой планируется triage по батчам файлов (план §5).
+**Пример на NodeGoat (run 18):** раунд 0 — `h0-1` sink CWE-95 p100 (угроза + синтетический якорь `a_972d75`
+`tool="threatmodel"`, `app/routes/contributions.js:28`), `h0-2` sink CWE-601 p85, `h0-3` sink CWE-522 p70, затем
+baseline p10: `displayWelcomePage`, `displayLoginPage`, `handleLoginRequest`, `displaySignupPage`, `handleSignup`
+(`app/routes/index.js:30-38`). Всего за 4 раунда 26 гипотез (8/8/8/2); run 18 сделан старым планировщиком: baseline
+без `anchor_id`, `cwe` и hunt-классов, file-baseline (p8) ещё не было (в раундах 2-3 очередь дошла до p0-гипотез из
+`new_hypotheses`, которые шли бы после p8). Пример с текущим `coverage` (hunt-классы, entrypoint-якоря, file-baseline
+≤60) не снят; triage по батчам файлов (план §5) планируется именно против таких промахов.
 
-**Источники:** `reconcile.py:109-158,266-393`; `pipeline.py:148-149`; Shannon `plan.prompt.hbs:40-48` («A file no
+**Источники:** `reconcile.py:109-158,266-396`; `pipeline.py:148`; Shannon `plan.prompt.hbs:40-48` («A file no
 investigation lists is never examined by anything downstream»), `:57-72` (Adversarial Sweep / Random Digging, 25-50 %);
 план §3, строка 121.
 
@@ -500,9 +527,14 @@ investigation lists is never examined by anything downstream»), `:57-72` (Adver
 **Вход:** `PlanState`. **Выход:** маршрут `empty` → `export`, иначе default → `triage_sweep`; `output` = батчи.
 
 **Правило:** Shannon `workflow.ts:382-388` — `if (plan.value.investigationCount === 0)` → сразу `export`, «so the scan
-always ends with a valid, empty SARIF artifact rather than an absent one». У нас: пустая очередь и пустые батчи.
+always ends with a valid, empty SARIF artifact rather than an absent one». У нас (план): условие не зафиксировано —
+§2 строка 70 даёт только «investigationCount == 0 → export». Сегодня без роутера: при пустой очереди `investigate` не
+входит в цикл (`pipeline.py:157`, `rounds=0`), `finish` всё равно пишет `Report` и артефакт `timings`
+(`pipeline.py:195-210`) — исход тот же, что у Shannon.
 
-**Источники:** план §2 строка 70, §3 строка 122; Shannon `temporal/workflow.ts:382-388`.
+**Источники:** план §2 строка 70, §3 строка 122; Shannon `temporal/workflow.ts:382-388`. Аналог Shannon точен по
+тексту (`workflow.ts:382-389`), но у Shannon `export` при пустом плане идёт **без** research/review/critic; в нашем
+плане маршрут `empty` тоже ведёт прямо в `export`, минуя `calibrate` (план §2, строки 49,70).
 
 ### 3.11 `triage_sweep`
 
@@ -515,14 +547,20 @@ TriageBatch)`; один воркер — один батч файлов. **Ст�
 
 | Имя | Откуда | Схема |
 |---|---|---|
-| `id`, `file`, `symbol`, `route`, `classes`, `claim` | `Hypothesis` kind `entry` из принятого батча раунда (`pipeline.py:72`) | dict; `file = h.reads[0]` |
+| `id`, `file`, `symbol`, `route`, `classes`, `claim` | `Hypothesis` kind `entry` из принятого батча раунда (`pipeline.py:72`) | dict; `file = h.reads[0] if h.reads else ""`, `classes = [h.cwe] if h.cwe else []` (`graph_nodes.py:120-122`) |
 
 План: `[batch]` — список файлов батча (`TRIAGE_BATCH=10`).
 
 **Выход (сегодня):** `{"id", "file", "flagged", "classes"[CWE-…], "why"[:300], "failed"}` (`graph_nodes.py:129-133`).
+`classes` фильтруются: остаются только строки, начинающиеся с `CWE-` (без учёта регистра), и приводятся к верхнему
+регистру; всё остальное отбрасывается, и тогда `h.cwe` в `fold` не меняется (`graph_nodes.py:131-132`,
+`pipeline.py:83-84`). Если `md` непустой, но без ключа `flagged` — тоже `flagged=True` (`graph_nodes.py:130`).
 План: `TriageBatch{classifications[TriageClassification{file, flagged, classes[], why}]}` (§3, строка 100).
 
-**О чём думает (`TRIAGE_INSTRUCTION`, `instructions.py:200-214`).** Быстрая классификация, не аудит: сначала
+**О чём думает (`TRIAGE_INSTRUCTION`, `instructions.py:200-214`).** Инструкция начинается с `OPERATING_PRINCIPLES` и
+содержит явный лимит «At most a handful of calls» (`instructions.py:200,208`); агент, как все, работает с
+`include_contents="none"` и окном последних 3 tool-результатов (`agents.py:23-33`, `callbacks.py:47`). Быстрая
+классификация, не аудит: сначала
 `read_file` файла (окно обработчика), потом `grep` очевидных синков перечисленных классов (query builders,
 `$where/$regex`, `eval/new Function`, `exec/spawn`, `fs/path.join`, `res.redirect`, `innerHTML`, regex на вводе) и
 guard-ов, которые бы их закрывали (auth middleware, ownership checks, параметризация, энкодеры, allowlist). Флаг
@@ -538,25 +576,40 @@ guard-ов, которые бы их закрывали (auth middleware, owners
 > "Answer with JSON only: {\"file\": \"<path>\", \"flagged\": true|false, \"classes\": [\"CWE-…\"], \"why\": \"one line\"}"
 > (`instructions.py:214`)
 
-Shannon-оригинал (`triage.prompt.hbs:24-27`): «Each file should only get a fast classification:
-`{"potentially_flawed": true/false, "reason": "..."}`», батчи `ceil(files / CAPELLA_TRIAGE_CONCURRENCY=4)` файлов
-(`stages/research.ts:129-137`, `types.ts:32`), `TRIAGE_MAX_TURNS=100` (`research.ts:47`).
+Shannon-оригинал (`triage.prompt.hbs:24-25`, структурный вывод — строка 27): «Each file should only get a fast
+classification: `{"potentially_flawed": true/false, "reason": "..."}`», батчи `ceil(files /
+CAPELLA_TRIAGE_CONCURRENCY=4)` файлов (`stages/research.ts:129-137`, `types.ts:32`), `TRIAGE_MAX_TURNS=100`
+(`research.ts:47`).
 
 **Инструменты:** `triage_tools` = `subset(verifier_tools, {"read_file", "grep", "lsp_symbols"})` (`rosters.py:55-60`)
 — read-only, без вердикт-тула и без `shell`.
 
-**Бюджет:** `TRIAGE_MAX_CALLS=4` на item (`settings.py:57,102`, `agents.py:53-56`), `max_parallel_workers=max_parallel`
-(`graph_nodes.py:134`); план: `triage_max_calls × файлы`, `LLM_MODEL_SMALL`, `Retry 2` как repair-проход, окно
+**Бюджет:** `TRIAGE_MAX_CALLS=4` на item (`settings.py:57,102`, `agents.py:53-56`), `max_parallel_workers=max_parallel
+or None` (`graph_nodes.py:134`; `BUGFINDER_MAX_PARALLEL=0` ⇒ без лимита). Бюджет `TRIAGE_MAX_CALLS=4` считается
+per-branch: на 4-м вызове тулы снимаются и модель обязана ответить JSON (`BUDGET_LAST_CALL`), 5-й вызов получает
+канонический ответ «budget exhausted» → нет JSON → `flagged=True`; глобальный `budget_exhausted` triage не ставит
+(`stop_run=False`), так что исчерпание бюджета свипа никогда не останавливает скан (`callbacks.py:18-43`;
+`agents.py:53-56`). План: `triage_max_calls × файлы`, `LLM_MODEL_SMALL`, `Retry 2` как repair-проход, окно
 `read_file` 200 строк для triage (§3, строка 123).
 
 **Отказ и деградация — fail open:** исключение воркера ловится в теле (`graph_nodes.py:126-128`), нет JSON →
-`flagged=True` (`graph_nodes.py:130`): решает аудит, а не свип. План: пропущенный файл → 1 repair, затем
-`flagged=True`. `TRIAGE=0` выключает (`runner.py:111`, `pipeline.py:65`).
+`flagged=True` (`graph_nodes.py:130`): решает аудит, а не свип. Если fan-out вернул пустой/None список
+(`outs = ... or []`), все baselines остаются в аудите с нетронутыми `claim`/`cwe` (`pipeline.py:75-80`); узел объявлен
+`rerun_on_resume=True` (`graph_nodes.py:134-135`) — при resume свип переигрывается. План: пропущенный файл → 1 repair,
+затем `flagged=True`. `TRIAGE=0` выключает (`runner.py:111`, `pipeline.py:65`): `TRIAGE` — переключатель `_on`,
+выключает только точное значение `"0"` (`settings.py:28-30,95`); `subset()` для `triage_tools` падает `KeyError` на
+этапе сборки, если имя тула из `TRIAGE_TOOLS` отсутствует в `verifier_tools` (`rosters.py:58-69`).
 
-**Завершение:** один вызов на item (`run_id="triage_<id>"`); нода возвращает список dict-ов в `fold`.
+**Завершение:** один запуск узла на item (`run_id="triage_<id>"`, внутри — до `TRIAGE_MAX_CALLS` вызовов модели); батч
+раунда запускается как `run_id="triage_r<round>"` (`pipeline.py:75`); нода возвращает список dict-ов в `triage_batch`.
+Отдельного тайминга у свипа нет: `t0` берётся до `triage_batch`, и время свипа входит в ключ `verify_<round>` артефакта
+`timings` (`pipeline.py:170-177`). Диагностика — строка лога `triage round N: X of Y baselines flagged`
+(`pipeline.py:89`).
 
-**Пример на NodeGoat:** в run 18 (`.runs/1789204576`) все 26 гипотез ушли к `taint`, дозаписей «Triage: …» в
-заметках нет — свип в этом прогоне не отсеял ни одной baseline. Ожидание по плану §5 для ~35 production-файлов —
+**Пример на NodeGoat:** в run 18 (`.runs/1789204576`) все 26 гипотез (19 `entry`, 7 `sink`) ушли к `taint`, ни одного
+досье со `specialist="triage"` в `.state/state.db` нет — либо свип был выключен, либо не отсеял ни одной baseline (по
+артефактам не различить: `Triage: …` дописывается в `claim` уже после `put_hypotheses`, `pipeline.py:164,171,82`, а
+отдельного ключа `triage` в `timings` нет). Ожидание по плану §5 для ~35 production-файлов —
 ≈40 вызовов triage на small-модели, чтобы `$where`, IDOR `allocations/:userId`, XSS профиля, `isAdmin`, CSRF и
 ReDoS попали в аудируемое множество.
 
@@ -575,7 +628,12 @@ Shannon `triage.prompt.hbs`, `stages/research.ts:46-47,129-137,324-395`; пла�
 аудите; при этом `why` дописывается к `claim` («. Triage: …»), а первый CWE из `classes` становится `h.cwe` (это
 меняет маршрут к специалисту); `flagged=False` → `Dossier(verdict=rejected, notes="triage: <why>",
 specialist="triage")` — покрытие остаётся доказуемым (`pipeline.py:87-88`, сохраняется `put_dossiers`, строки 173,184).
-Не-`entry` гипотезы (синки сканера, угрозы) свип не проходят (`pipeline.py:72`).
+Не-`entry` гипотезы (kind `sink`/`authz`/`dependency`/`secret` — якоря сканеров и заземлённые угрозы,
+`reconcile.py:22-29,153`) свип не проходят (`pipeline.py:72`). Батч, целиком отсеянный свипом, всё равно расходует
+раунд: `rnd += 1` и `continue` без аудита и без `reconcile` (`pipeline.py:172-175`), то есть считается против
+`BUGFINDER_MAX_ROUNDS=4`. Дописанные `claim` («. Triage: …») и переназначенный `h.cwe` живут только в payload для
+специалиста: в стор гипотеза уже записана до свипа (`put_hypotheses`, `pipeline.py:164` против `171,82-84`), поэтому
+в `.state` и `summary.json` следов triage у гипотез нет — только rejected-досье со `specialist="triage"`.
 
 План (порт `stages/research.ts:206-250`): `usableClassifications` — одна классификация на назначенный файл, чужие
 пути и дубли отбрасываются («can never inflate coverage»); `computeTriageCoverage` — `considered/classified/
@@ -606,26 +664,36 @@ missing[]`; `missing>0 ⇒ coverage=reduced` в `ExportResult`.
 **Алгоритм цикла (`pipeline.py:157-193`).**
 1. `rnd >= max_rounds` → `stop="round limit"`.
 2. Батч `queue[:max_hyps]`; все его ключи попадают в `done` — даже отсеянные гейтом «never become grounded»
-   (`pipeline.py:162`).
+   (`pipeline.py:162`). Служебные ключи сессии пишутся каждый раунд: `ctx.state["round"] = rnd + 1`,
+   `ctx.state["queue"] = len(queue)` (`pipeline.py:165-166`) — их видно в `adk web`; на resume `round` восстанавливает
+   номер раунда, но очередь берётся из `node_input`, а не из state.
 3. `gate_hypotheses` (`graph.py:60-74`): id `h<round>-<n>`, `core.ground_hypothesis` (`rules.py:93-110`: claim
    обязателен, kind из `KINDS`, есть `anchor_id` в сторе или символ в индексе, `dependency` требует
    `consult=knowledge`, `authz` — `consult=domain`), отсев с заметкой, cap `max_hyps`.
-4. `triage_batch` (уходит в `triage_sweep`/`fold_triage`).
+4. `triage_batch` (уходит в `triage_sweep`/`fold_triage`). Раунд расходуется даже без аудита: если гейт отсеял весь
+   батч (`pipeline.py:167-169`) или triage снял всех (`172-175`), `rnd += 1` и цикл продолжается — при `max_rounds=4`
+   такие раунды съедают лимит.
 5. `ctx.run_node(verify_node, [...], run_id="verify_r<rnd>")` — fan-out; `timings["verify_<rnd>"]`.
-6. Досье → `put_dossiers`; `budget = ctx.state["budget_exhausted"]` → `stop="budget"`; если **все** досье раунда
-   `failed` (специалист бросил исключение, не «нет JSON») и это раунд 0 без бюджета → `RuntimeError("verify round 0
-   failed")` (`pipeline.py:181-183`: «a failed run keeps no round-0 dossiers»); в позднем раунде → `stop="verify
-   round N failed"`.
+6. Досье → `put_dossiers` (досье раунда в сторе — `[*triaged_out, *dossiers]`, `pipeline.py:184`, т.е. rejected-досье
+   triage лежат рядом с досье специалистов под тем же `round`); `budget = ctx.state["budget_exhausted"]` →
+   `stop="budget"`; если **все** досье раунда `failed` (специалист бросил исключение, не «нет JSON») и это раунд 0 без
+   бюджета → `RuntimeError("verify round 0 failed")` (`pipeline.py:181-183`: «a failed run keeps no round-0
+   dossiers»); в позднем раунде → `stop="verify round N failed: <ошибки досье через '; '>"` (`pipeline.py:181,190`).
 7. `reconcile(new_hypotheses[:3] на досье, queue, done)` — очередь пополняется (`pipeline.py:192`).
 
-**Один элемент fan-out (`route_and_verify`, `graph_nodes.py:88-110`).** `pick_agent` (`graph.py:44-57`): язык по
-суффиксу первого файла в `reads`, роутер `specialists.route` — сначала CWE (`TAINT_CWES`, `AUTHZ_CWES`,
-`SECRETS_CWES`, `CONFIG_CWES`, `specialists.py:55-58`), затем kind, затем generic Verifier (`specialists.py:106-115`).
+**Один элемент fan-out (`route_and_verify`, `graph_nodes.py:88-110`).** Каждый элемент запускается как
+`ctx.run_node(agent, payload, run_id=f"verify_{h.id}")` (`graph_nodes.py:96`); дедуп resume идёт по
+`(node_name, run_id)`, поэтому стабильность id `h<round>-<n>` — условие корректного переигрывания. `pick_agent`
+(`graph.py:44-57`): язык — по первому файлу из `reads` с известным суффиксом (`fs.LANG_EXT`; при пустом `reads` — поле
+`file`, которого у гипотезы нет → без оверлея), роутер `specialists.route_name` (`runner.py:108`; обёртка над `route`,
+"" как имя = generic) — сначала CWE (`TAINT_CWES`, `AUTHZ_CWES`, `SECRETS_CWES`, `CONFIG_CWES`,
+`specialists.py:55-58`), затем kind, затем generic Verifier (`specialists.py:106-115`).
 Payload: гипотеза + `skill`/`skills` (`adapter/skills.skill_for/skills_for`) + `specialist` + `instructions` (языковой
 оверлей `LANG_OVERLAYS`). Вердикт — **из стора**: `dossier_from_store` (`graph.py:77-89`) берёт лучшую находку,
 привязанную к `hypothesis_id` или к якорю без чужого id (ранг confirmed > rejected > uncertain); JSON модели даёт
 только `notes` и `new_hypotheses`; невалидный JSON → `d.error`; ничего в сторе и нет JSON → `error="no Dossier JSON
-and nothing reported"`.
+and nothing reported"`. Выход элемента несёт поле `failed` (`graph_nodes.py:110`), которое не хранится в `Dossier`
+(extra=ignore) и используется только для решения «раунд провален» до `put_dossiers`.
 
 **О чём думает специалист (`INVESTIGATOR_CORE`, `instructions.py:219-241`; generic `VERIFIER_INSTRUCTION`, 27-88).**
 Первым делом `load_skill` для каждого навыка из payload. Читает grounding: `list_anchors` по `anchor_id`, `read_file`
@@ -633,7 +701,10 @@ and nothing reported"`.
 review is the floor», строка 258). Вопросы: назван ли недоверенный вход, каждая ли точка пути процитирована
 `file:line`, доминирует ли санитайзер над синком на *этом* пути. Доказательство — цитаты строк, которые агент
 действительно прочитал, синк первым, ссылки `knowledge:`/`domain:` перед кодом. Обязан отвергнуть «looks safe» как
-контрфакт, доверие «validated upstream» без цитаты, клиентскую валидацию, blocklist, WAF (`taint`, строки 276-278).
+контрфакт (`INVESTIGATOR_CORE`, строка 228); в taint-секции «Not a finding» (строки 277-279): вход, доходящий только
+до bind-параметра/типизированного каста, клиентская валидация, self-XSS, WAF, реально включённое авто-экранирование
+шаблона (с цитатой конфига); blocklist-регекс — «не контроль, но и не доказательство — трассировать до синка».
+Игнорировать «validated upstream» без цитаты требует только generic `VERIFIER_INSTRUCTION` (строки 56-57).
 Заканчивает `report_finding`; отказ гейта возвращает причину — исправить и вызвать снова, «never drop the verdict».
 Специализации (`SPECIALIST_SECTIONS`, строки 255-332): `taint` — hunting-чеклист синков по классам и slot rule;
 `authz` — `consult_domain` обязателен, горизонтальные/вертикальные проверки, CSRF, сессии; `dependency` —
@@ -655,44 +726,76 @@ of candidate call-sites — this is the mandatory floor»; шаг 3 adversarial 
 каждый источник) — их todo-loop у нас сделан кодом: per-(entry, class) baseline (план §1, строка 34).
 
 **Инструменты:** ростеры `rosters.py:73-79` — `TAINT_TOOLS` (`report_finding`, `shell`, `_READ`, `_COMMON`),
-`AUTHZ_TOOLS` (+`consult_domain`), `DEPENDENCY_TOOLS` (+`consult_knowledge`, без shell), `SECRETS_TOOLS`,
-`CONFIG_TOOLS`; `dependency` дополнительно получает Knowledge-агент как `AgentTool` (`specialists.py:138,148-149`).
+`AUTHZ_TOOLS` (+`consult_domain`), `DEPENDENCY_TOOLS` (`report_finding`, `consult_knowledge`, `read_file`, `grep`,
+`lsp_definition`, `lsp_references`, `lsp_path_to_entry` + `_COMMON`; без shell, `lsp_symbols`/`lsp_callers`/
+`lsp_callees`), `SECRETS_TOOLS` и `CONFIG_TOOLS` (`report_finding`, `read_file`, `grep`, `lsp_definition`,
+`lsp_references` + `_COMMON`; без shell и consult-инструментов); `taint` не имеет `consult_knowledge`/`consult_domain`
+(`_COMMON` = `list_anchors`, `list_findings`, `note_add`, `note_list`, `consult_owasp`, `load_skill`, `list_skills`);
+`dependency` дополнительно получает Knowledge-агент как `AgentTool` (`specialists.py:138,148-149`).
 Генерик — `verifier_tools` целиком (`rosters.py:26-30`).
 
-**Бюджет и ограничители:** `max_rounds=4`, `max_hyps=8`, `max_parallel=3` (`settings.py:41-43`); на специалиста
-`max_calls` из реестра (taint/authz 30, dependency 15, secrets 10, config 12; `specialists.py:60-72`), переопределяемые
-`SPECIALIST_<NAME>_MAX_CALLS` (`specialists.py:127-129`); генерик `VERIFIER_MAX_MODEL_CALLS=30`; Knowledge
-`KNOWLEDGE_MAX_MODEL_CALLS=10`; окно инструментов 3 последних ответа; капы тулов (`tools/common.py:19-25`):
-`OUT_CAP=20000`, `GREP_CAP=4000`, `READ_WINDOW=60`, `SHELL_TIMEOUT=60`, `FILE_CAP=2 MiB`; ≤3 `new_hypotheses` на досье.
+**Бюджет и ограничители:** `max_rounds=4`, `max_hyps=8`, `max_parallel=3` (`settings.py:41-43`; ручки окружения
+`BUGFINDER_MAX_ROUNDS`, `BUGFINDER_MAX_HYPS`, `BUGFINDER_MAX_PARALLEL`, `settings.py:87-89`); `SPECIALISTS=0` отключает
+реестр — все гипотезы идут к generic `verify` (`runner.py:96-98`), `TRIAGE=0` убирает свип (`runner.py:111`); на
+специалиста `max_calls` из реестра (taint/authz 30, dependency 15, secrets 10, config 12; `specialists.py:60-72`),
+переопределяемые `SPECIALIST_<NAME>_MAX_CALLS` — читается напрямую из `os.environ` в обход `Settings`
+(`specialists.py:127-129`); генерик `VERIFIER_MAX_MODEL_CALLS=30`; Knowledge `KNOWLEDGE_MAX_MODEL_CALLS=10`; окно
+инструментов 3 последних ответа; капы тулов (`tools/common.py:19-25`): `OUT_CAP=20000`, `GREP_CAP=4000`,
+`READ_WINDOW=60`, `SHELL_TIMEOUT=60`, `FILE_CAP=2 MiB`; ≤3 `new_hypotheses` на досье. На fan-out `verify_r<rnd>` нет
+wall-clock таймаута: `stage_timeout` (`asyncio.wait_for`) оборачивает только модельные стадии `plan`
+(`pipeline.py:99`), а `ctx.run_node(verify_node, …)` в `pipeline.py:176` — нет; раунд ограничен только бюджетами
+вызовов специалистов и Knowledge.
 
 **Отказ и деградация:** ошибка элемента → error-dossier, батч не отменяется (`graph_nodes.py:96-98`); исчерпанный
 per-branch бюджет проявляется как мягкое «no Dossier JSON» (ADR-0007 «Resolved»); глобальный
 `STATE_BUDGET_EXHAUSTED` ставится только агентом с `stop_run=True` (`callbacks.py:39-40`; сегодня никто не
-передаёт) → `stop="budget"`.
+передаёт) → `stop="budget"`. Механика per-branch бюджета (`callbacks.py:31-43`): на `limit`-м вызове у модели
+снимаются инструменты и добавляется `BUDGET_LAST_CALL` («Answer NOW with your final JSON only»), сверх лимита —
+канированный ответ «budget exhausted» и ключ `budget_exhausted:<branch>`; для `dependency` Knowledge-AgentTool считает
+свой бюджет per invocation — 10 вызовов на каждый `consult_knowledge`, а не на run (`knowledge_agent.py:87-94`).
 
 **Завершение:** пустая очередь, лимит раундов, бюджет или проваленный раунд.
 
 **Пример на NodeGoat (run 18):** 4 раунда (32,2 / 58,9 / 50,2 / 9,0 с), 26 гипотез, все к `taint`; вердикты досье —
 6 confirmed, 3 rejected, 17 uncertain; LLM-находки: `f_46`/`f_47`/`f_51`/`f_52` CWE-95 `app/routes/contributions.js:28,
-32,33,34` (`eval` на `preTax/afterTax/roth`), `f_44` CWE-601 `app/routes/index.js:72` (discovery с якоря угрозы —
-попал под `investigator`-якорь), `f_45` CWE-522 `server.js:78`; отвергнуты `f_48` (`handleLoginRequest` → DAO
-`validateLogin`), `f_49`/`f_50` baseline `tutorial.js`. 28 отказов гейта, типичные: «evidence does not match the code
-at server.js:78 — quote the lines exactly as read», «file 'app/routes/index.js' does not match anchor's
-'app/routes/session.js'» (попытка off-anchor с якоря сканера), «anchor_id is required».
+32,33,34` (`eval` на `preTax/afterTax/roth`), `f_44` CWE-601 `app/routes/index.js:72` (semgrep-якорь
+`a_79469dff7b9c` `express-open-redirect`, гипотеза `h3-2` раунда 3; discovery-якорей `investigator` в run 18 нет — run
+прошёл до коммита c3298d9, добавившего discovery-ветку гейта), `f_45` CWE-522 `server.js:78`; отвергнуты `f_48`
+(`handleLoginRequest` → DAO `validateLogin`), `f_49`/`f_50` baseline `tutorial.js`. 28 отказов гейта, типичные:
+«evidence does not match the code at server.js:78 — quote the lines exactly as read», «file 'app/routes/index.js' does
+not match anchor's 'app/routes/session.js'; line 72 does not match anchor's 53» (off-anchor отчёт с
+*threatmodel*-якоря `a_911d2b5b2aa8`; run 18 прошёл до discovery-ветки гейта — сегодня такой отчёт с синтетического
+якоря идёт через `gates.py:28-45` и отказывается уже как «an off-anchor report must be a confirmed finding with a cwe»
+или «evidence does not match the code at <file>:<line>»; сообщение о координатах остаётся только для якорей
+сканеров/`investigator`), «anchor_id is required».
 
 **Источники:** `pipeline.py:151-193`; `graph_nodes.py:84-112`; `graph.py:44-89`; `rules.py:93-110`;
 `instructions.py:27-88,219-241,255-349`; `specialists.py`; `rosters.py:26-30,73-79`; план §3 строка 125.
 
 ### 3.14 `route_research`
 
-**Тип ADK (план):** `FunctionNode`-роутер. **Статус:** план (§3, строка 126).
+**Тип ADK (план):** `FunctionNode`-роутер. **Статус:** частично — ветка `none` живёт в `finish` (critic пропускается
+при 0 confirmed LLM-находок, `pipeline.py:199-200`); ветка `budget` есть как стоп-причина
+`InvestigateResult.stop == "budget"` (`pipeline.py:179,186-188`, `workflow.py:30`), но не как маршрут (`finish`
+только логирует, `pipeline.py:206-208`). Отдельный route-узел — план (§3, строка 126).
 
-**Вход:** `ResearchResult` + состояние стора. **Выход:** `none` (0 LLM-находок со статусом confirmed) → `export`;
-`budget` (`STATE_BUDGET_EXHAUSTED`) → `export`; default → `dedupe`.
+**Вход:** `ResearchResult` + состояние стора. **Выход:** `none` (план: `findingCount == 0` по
+`ResearchResult.findings`, §2 строка 72; какой статус/источник считать — план не фиксирует; сегодняшний аналог в
+`finish` — `status == confirmed and source != "direct"`, `pipeline.py:199`) → `export`; `budget`
+(`STATE_BUDGET_EXHAUSTED`) → `export`; default → `dedupe`.
 
 **Правило:** Shannon `workflow.ts:401-405` — `if (research.value.findingCount === 0)` → `export`; fallback при
 падении стадии → export последнего хорошего набора с `reduction` (catch-ветка `workflow.ts`, план §3 строка 126: `:503`). Открытый вопрос плана
-(§4, строки 171-172): глобальный флаг бюджета должны читать route-узлы, а не только `audit`.
+(§4, строки 171-172): глобальный флаг бюджета должны читать route-узлы, а не только `audit`. Глобальный флаг
+`STATE_BUDGET_EXHAUSTED` пишется колбэком только при `stop_run=True`; иначе в state попадает лишь
+`budget_exhausted:<branch>` (`callbacks.py:37-40`). Route-узел, читающий только глобальный ключ, не увидит исчерпание
+бюджета специалистов — сегодня `investigate` читает именно глобальный ключ (`pipeline.py:179`), а `runner.scan_full`
+дублирует его в `stop_reason` (`runner.py:174`). Сегодняшний fallback отличается от Shannon: если все специалисты
+раунда 0 упали, `investigate` бросает `RuntimeError` и экспорта нет (`pipeline.py:182-183`); падение раунда ≥1 даёт
+`stop = "verify round N failed: …"` и `finish` всё равно пишет отчёт (`pipeline.py:189-191,195-210`). Плановый «export
+последнего хорошего набора с `reduction`» для раунда 0 кода не имеет. Открытый вопрос плана §4 (строки 168-169):
+`export` с пятью входящими рёбрами из route-карт — валидатор допускает, но срабатывание «от первого триггера» надо
+подтвердить спайком; иначе route → export остаётся внутри dynamic-обёртки `finish`.
 
 **Источники:** план §2 строка 72, §3 строка 126, §4 строки 171-172; Shannon `temporal/workflow.ts:401-405` и catch-ветка (`:503` по плану).
 
@@ -703,12 +806,22 @@ at server.js:78 — quote the lines exactly as read», «file 'app/routes/index.
 
 **Вход:** находки стора. **Выход:** `{merged}`.
 
-**Правила сегодня (`store.py:111-123`).** Дубль = тот же `anchor_id`, либо (для пары не-direct) те же `(cwe, file)` и
-`|line − line'| ≤ NEAR_LINES = 6` («eval() on four consecutive lines is one bug», `store.py:35`). При дубле с
-большей `confidence` заменяются `status`, `evidence`, `confidence`, `hypothesis_id` (`store.py:118-122`) — это же
-механизм promotion для `confirm`. Иначе — новая `f_<n>` с заполнением remediation/WSTG/Top10 из OWASP-каталога
-(`_owasp_fill`, `store.py:45-51`). Гейты `report_finding`/`disprove_finding` благодаря этому идемпотентны (план §2,
-строка 93).
+**Правила сегодня (`store.py:111-123`).** Дубль = тот же непустой `anchor_id`, либо (для пары не-direct и при
+непустом `cwe` у новой находки) те же `(cwe, file)` и `|line − line'| ≤ NEAR_LINES = 6` (`store.py:113-115`); находки
+без CWE дедупятся только по якорю («eval() on four consecutive lines is one bug», `store.py:35`). При дубле с большей
+`confidence` заменяются `status`, `evidence` (целиком, не дополняется) и `confidence`; `hypothesis_id` — только если у
+новой находки он непустой (`store.py:117-121`) — это же механизм promotion для `confirm`. Правило замены вердикта
+двунаправленно: `status` заменяется при любой большей `confidence` (`store.py:117`), поэтому `rejected` с 1.0 понижает
+существующий `confirmed` с 0.9; при равной или меньшей `confidence` ничего не меняется и гейт возвращает старую находку
+(модель получает её `id`). Заметка/gate-log о слиянии не пишется — счётчик `{merged}` сегодня нигде не наблюдаем.
+Иначе — новая `f_<n>` с заполнением remediation/WSTG/Top10 из OWASP-каталога (`_owasp_fill`, `store.py:45-51`).
+`report_finding` благодаря этому идемпотентен (`gates.py:69` → `run.report`); `disprove_finding` идемпотентен иначе —
+через `set_status` (`gates.py:119`) и отказ на повторе, когда находка уже не confirmed (`gates.py:114-115`); план §2
+строка 93 объединяет оба под «дедуп стора» неточно. `NEAR_LINES` — константа модуля (`store.py:35`), не ручка
+`Settings` и не env; изменить окно можно только правкой кода. Дедуп — линейный проход по всем находкам run на каждый
+`report` (`store.py:112`). Тестовый дублёр `FakeRun(dedup=True)` повторяет только ветку по якорю (`tests/fakes.py:44-48`),
+near-line ветка покрыта только `tests/test_store.py:113-119` на реальном SQLite — тесты узлов на фейке слияние по
+строкам не увидят.
 
 Shannon: `dedupe.prompt.hbs:30-35` — дубли только при совпадении `code_paths` **с номером строки** и похожем
 заголовке; «Findings at different lines in the same file are DISTINCT»; id находки детерминирован
@@ -718,9 +831,12 @@ Shannon: `dedupe.prompt.hbs:30-35` — дубли только при совпа
 **Инструменты / бюджет:** 0. **Отказ:** чистая. **Завершение:** всегда.
 
 **Пример на NodeGoat (run 18):** `f_46` (`:28`), `f_47` (`:32`), `f_51` (`:33`), `f_52` (`:34`) — четыре CWE-95 в
-`contributions.js` остались отдельными, потому что у каждой свой якорь (`anchor_id` совпадение проверяется первым, а
-`f_47`→`f_51`→`f_52` — разные `investigator`-якоря); плановое слияние по title-similarity в `(file, cwe, ±6)` свело бы
-их к одной.
+`contributions.js` остались отдельными, потому что run 18 (завершён 14:16 +05) прошёл до появления near-line дедупа
+(коммит c3298d9, 14:19 +05); якоря у них разные (`threatmodel` для `f_46`, `semgrep` для `f_47`/`f_51`/`f_52`), но
+сегодняшнее правило `store.py:113-115` слило бы `f_47` (:32), `f_51` (:33), `f_52` (:34) в `f_46` (:28) уже по
+`(cwe, file, ±6)` — см. `tests/test_store.py:113-119`; сегодняшнее правило `(cwe, file, ±6)` уже сводит их к одной без
+сравнения заголовков; плановое слияние по title-similarity (§3, строка 127) — дополнительное, более строгое условие
+поверх него.
 
 **Источники:** `store.py:35,110-128`; Shannon `dedupe.prompt.hbs`, `collectors.ts:140-153`; план §3 строка 127.
 
@@ -739,8 +855,16 @@ repair — план (§3, строки 102,105-107,128; §4 шаг 4).
 | `anchor` | `store.anchor(f.anchor_id)` | `Anchor \| None` |
 | `specialist`, `skills`, `instructions` | роутер `role="critique"`, `skills_for(cwe, "", "critique")`, языковой оверлей | `str`, `list[str]`, `str` |
 
+Языковой оверлей (`instructions`) выбирается по суффиксу `finding.file` через `fs.LANG_EXT` (`graph.py:49-51`),
+маршрут — только по CWE (kind у находки пустой), fallback — generic `critic` без заметки `critic:<name> reviewed`
+(`graph_nodes.py:149-150`; `specialists.py:112-114`). Навыки для критика — `[control-skill по CWE, "counterevidence"]`
+(`skills.py:75-76`).
+
 **Выход:** сегодня `{finding_id, specialist, error}` (`graph_nodes.py:158`); вердикт — только через
-`disprove_finding` → `store.set_status(confirmed → uncertain)` (`gates.py:119`, `store.py:130-141`). План:
+`disprove_finding` → `store.set_status(confirmed → uncertain)` (`gates.py:119`, `store.py:130-141`). Итоговый JSON
+модели `{"finding_id","disproved","reason"}` (`instructions.py:149`) узел не читает — результат `ctx.run_node`
+отбрасывается (`graph_nodes.py:153`); единственный след вердикта — изменение статуса в сторе через
+`disprove_finding`. План:
 `ReviewVerdict{finding_id, status: VALID|FALSE_POSITIVE|PROVISIONALLY_VALID|NEEDS_RESEARCH, reasoning, repro_hints,
 checklist{13 ключей → RuleEval{outcome: PASS|FAIL|UNKNOWN|NOT_APPLICABLE, reason}}}` + аннотация.
 
@@ -764,7 +888,7 @@ a padded disproof is not» (строка 147).
 > "Only if it returns dominates=true may you call disprove_finding, quoting that control line as counter_evidence"
 > (`instructions.py:139-140`)
 >
-> "A disproved finding becomes uncertain, never deleted." (`instructions.py:146`)
+> "A disproved finding becomes uncertain, never deleted." (`instructions.py:145-146`)
 
 Shannon `review.prompt.hbs:113-129`: статусы `VALID` / `FALSE_POSITIVE` / `PROVISIONALLY_VALID` («passes the rules,
 but you are uncertain of its feasibility without dynamic verification») / `NEEDS_RESEARCH`; `FAIL` в чек-листе
@@ -775,35 +899,62 @@ but you are uncertain of its feasibility without dynamic verification») / `NEED
 (`adapter/dominance.py:118-144`; чистая проверка `check`, строки 92-115: та же функция, контроль раньше синка, цепочка
 блоков — префикс, либо guard-`if` с терминатором; ветка `else/elif/catch/except` никогда не доминирует), `read_file`,
 `grep`, `shell`, `lsp_*`, `consult_*`, навыки; специалисты — `TAINT_CRITIC_TOOLS`, `AUTHZ_CRITIC_TOOLS`
-(+`consult_domain`), `DEPENDENCY_CRITIC_TOOLS` (`rosters.py:80-83`).
+(+`consult_domain`), `DEPENDENCY_CRITIC_TOOLS` (`rosters.py:80-83`). `critic_tools` помимо перечисленного содержит
+`list_anchors`, `list_findings`, `note_add`, `note_list` (`common_tools`, `tools/common.py:125`);
+`read_file`/`grep`/`shell`/`consult_domain` — из `code_tools` (`tools/code.py:98`). Ограничения `check_dominance`:
+файл должен лежать внутри цели (`fs.inside`) и быть ≤ `FILE_CAP` = 2 МиБ, иначе `{"status":"error"}`
+(`dominance.py:130-138`, `fs.py:16`); язык — по расширению, неизвестное расширение считается brace-языком как
+javascript (`dominance.py:21-22,139`); сиблинг-ветки `default`/`finally` тоже никогда не доминируют
+(`dominance.py:25`); при недоступном индексе функция определяется эвристикой по заголовку (`dominance.py:133-136`).
+`dependency_critic` не выбирается роутером для находок: у `Finding` нет поля `kind`, а `cwes` этого специалиста пуст
+(`specialists.py:77,109-114`; `core/types.py:109-126`), поэтому dependency-находки LLM уходят generic-критику. Кроме
+того, `dependency_critic` получает отдельный Knowledge-AgentTool со своим бюджетом `KNOWLEDGE_MAX_MODEL_CALLS=10`
+(`specialists.py:138,148-149`; `runner.py:96-97`) и не имеет `shell` (`rosters.py:82-83`). `SPECIALISTS=0` отключает
+всех специалистов — всё идёт generic-критику (`runner.py:96-98`).
 
 **Бюджет:** `CRITIC_MAX_MODEL_CALLS=20` (`settings.py:52`), специалисты-критики 20/20/12 (`specialists.py:73-78`);
-план — `review_max_calls=8`, `Retry 2`.
+план — `review_max_calls=8`, `Retry 2`. Бюджет критика — per-branch колбэк (`agents.py:31,38`; `callbacks.py:29-43`):
+на вызове №limit у модели отбираются тулы и её заставляют ответить финальным JSON, сверх лимита возвращается
+канонический ответ «budget exhausted» и ставится ключ `budget_exhausted:<branch>`; `stop_run=False`, поэтому
+исчерпание бюджета критика скан не останавливает, а находка остаётся confirmed. Бюджеты специалистов-критиков
+переопределяются env `SPECIALIST_TAINT_CRITIC_MAX_CALLS` / `SPECIALIST_AUTHZ_CRITIC_MAX_CALLS` /
+`SPECIALIST_DEPENDENCY_CRITIC_MAX_CALLS` (`specialists.py:127-129,150`).
 
 **Отказ и деградация:** исключение → заметка `critic <id> failed`, находка остаётся confirmed («critic failure never
-loses confirmed findings», `graph_nodes.py:154-157`); `disprove_finding` отказывает, если находка не confirmed или
-цитаты не найдены в цели (`gates.py:114-118`, `quotes_in_target`); `CRITIC=0` выключает (`runner.py:110`). План:
-`FALSE_POSITIVE` без `disprove_finding` = заметка «FP без контрфакта», статус не меняется (§3, строки 106-107).
+loses confirmed findings», `graph_nodes.py:154-157`); `disprove_finding` отказывает (ответом `err(...)` модели, без
+записи в `gate_log`), если `finding_id` неизвестен, находка не confirmed, `counter_evidence` пуст или ни одна цитата не
+найдена в цели (`gates.py:111-118`, `quotes_in_target`); `quotes_in_target` проходит по всем файлам цели
+(`static.files`) и требует хотя бы одну цитату дословно где угодно в цели, не обязательно у якоря
+(`tools/common.py:50-59`) — каждый вызов `disprove_finding` стоит полного прохода по исходникам. `CRITIC=0` выключает
+(`runner.py:110`). План: `FALSE_POSITIVE` без `disprove_finding` = заметка «FP без контрфакта», статус не меняется
+(§3, строки 106-107).
 
-**Завершение:** один вызов на находку (`run_id="critic_<id>"`), `timings["critic"]`.
+**Завершение:** один вызов на находку (`run_id="critic_<id>"`), `timings["critic"]`. Весь fan-out запускается одним
+`ctx.run_node(critique_node, [...], run_id="critic")` и пропускается целиком, если критик выключен или нет confirmed
+LLM-находок (`pipeline.py:198-202`); элементы идут ≤ `max_parallel` одновременно (`BUGFINDER_MAX_PARALLEL=3`,
+`settings.py:43,89`; `graph_nodes.py:159-160`), узел `rerun_on_resume=True`; после прохода пишется лог `critic: N
+confirmed → M survived` (`pipeline.py:204-205`).
 
 **Пример на NodeGoat (run 18):** 14,0 с; `taint_critic` рассмотрел `f_44`, `f_46`, `f_47`, `f_51`, `f_52` (заметки
 `critic:taint_critic reviewed …`), `f_45` (CWE-522, класс не в ростерах) ушёл generic-критику; ни одна находка не
 опровергнута — все шесть остались confirmed.
 
-**Источники:** `graph_nodes.py:138-160`; `pipeline.py:196-205`; `instructions.py:90-149,243-253,321-331`;
+**Источники:** `graph_nodes.py:138-160`; `pipeline.py:196-205`; `instructions.py:90-149,243-253,322-332`;
 `gates.py:104-122`; `dominance.py`; Shannon `review.prompt.hbs`; план §3 строки 102,105-107,128.
 
 ### 3.17 `route_survivors`
 
 **Тип ADK (план):** `FunctionNode`-роутер. **Статус:** план (§3, строка 129).
 
-**Вход:** находки стора после `review`. **Выход:** `none` (0 confirmed LLM-находок) → `export`; default →
+**Вход:** находки стора после `review`. **Выход:** `none` (0 confirmed находок после `review`; фильтр
+`source != "direct"` план не оговаривает — сегодня он живёт в `finish`, `pipeline.py:199`) → `export`; default →
 `route_intent`; `output` = id confirmed.
 
 **Правило:** Shannon `workflow.ts:428-430` — `reviewedSurvivors = validCount + provisionalCount`; `> 0` → critic →
-confirm → calibrate, иначе export артефакта review. У нас survivors = `status == confirmed` (VALID) плюс, по плану,
-аннотированные `PROVISIONALLY_VALID`.
+confirm → calibrate, иначе export артефакта review. У нас survivors = все находки со `status == confirmed` после
+`review` (план §3, строка 129: output = ids confirmed); аннотация `review.status` (`PROVISIONALLY_VALID`,
+`NEEDS_RESEARCH`) статуса не меняет (план §3, строки 104-107), поэтому, в отличие от Shannon, NEEDS_RESEARCH-находки
+тоже попадают в survivors — если `route_survivors` не будет их исключать явно.
 
 **Источники:** план §2 строка 74, §3 строка 129; Shannon `temporal/workflow.ts:426-430`.
 
@@ -816,7 +967,11 @@ confirm → calibrate, иначе export артефакта review. У нас su
 `production`.
 
 **Правило:** Shannon `critic.prompt.hbs:30-35` шаг 2: если `Intent: SAMPLE_OR_TEST_ONLY`, все находки помечаются
-`SAMPLE_OR_TEST` и per-finding проверки пропускаются — у нас это ноль вызовов модели (план §2, строка 75).
+`SAMPLE_OR_TEST` и per-finding проверки пропускаются — у нас это ноль вызовов модели (план §2, строка 75). Сегодня
+короткого замыкания по intent нет: `finish` запускает критика над всеми confirmed LLM-находками (`source != "direct"`)
+независимо от intent (`pipeline.py:198-202`); маршрут `sample` появится только с узлом. Нормализация intent: любая
+строка, начинающаяся на «sample», → `sample`, всё остальное → `production` (`core/types.py:164-167`), т.е.
+Shannon-написание `SAMPLE_OR_TEST_ONLY` тоже даст `sample`.
 
 **Источники:** план §3 строка 130; `store.py:168-169`; `core/types.py:44,162-167`.
 
@@ -827,8 +982,12 @@ confirm → calibrate, иначе export артефакта review. У нас su
 
 **Вход:** id LLM-находок. **Выход:** `annotate(viability="SAMPLE_OR_TEST")` всем; далее `calibrate`. 0 вызовов
 модели. Статус находок не трогается: гейт SARIF остаётся `status == confirmed`, аннотации едут в `properties`
-(§3, строки 108-109). Сегодня intent влияет только на калибровку: множитель ×0.4 и правило `sample_or_test`
-(`calibrate.py:70-72`).
+(§3, строки 108-109). Сегодня intent влияет только на калибровку — множитель ×0.4 и правило `sample_or_test`
+(`calibrate.py:70-72`) — и попадает в `summary.json` полем `intent` (`store.py:207,211`); на маршрут и на запуск
+критика не влияет (`pipeline.py:198-202`). У `Finding` сегодня нет поля `viability` (и
+`review`/`repro_status`/`calibration`): `core/types.py:109-126`; `annotate` требует добавить эти поля в схему (план §3
+строка 104, §4 строка 146). «LLM-находки» = `Finding.source == "llm"` (`types.py:126`); direct-находки
+(`source == "direct"`) узел не трогает.
 
 **Источники:** план §3 строки 104-109,131; `calibrate.py:70-72`.
 
@@ -844,7 +1003,8 @@ SAMPLE_OR_TEST, reasoning}` → `annotate(viability=…)`.
 
 **О чём думает (план по `critic.prompt.hbs`).** Остаётся ли флоу триггерируемым в стандартной production-конфигурации:
 читает ±15 строк вокруг синка (`critic.prompt.hbs:57-63`), для logic/authz — доступен ли endpoint без debug-backdoor,
-mock-провайдера, test-only route (`:66-73`). Статусы `critic.prompt.hbs:75-95`: `NON_VIABLE` (compiled-out, debug-only,
+mock-провайдера, test-only route (`:70-73`; `:66-69` — memory-safety ветка, padding ⇒ NON_VIABLE, у нас неприменима).
+Статусы `critic.prompt.hbs:75-95`: `NON_VIABLE` (compiled-out, debug-only,
 непреодолимый OS-контроль), `SAMPLE_OR_TEST`, `CONDITIONAL_VIABLE` (не-дефолтная конфигурация), `VIABLE`. Fail-safe:
 файл/строка отсутствуют или вне диапазона → **никогда** `NON_VIABLE`, а `CONDITIONAL_VIABLE` с заметкой
 (`critic.prompt.hbs:46-55`: «a missing file is not dead code, and NON_VIABLE is excluded from export»). У нас
@@ -854,12 +1014,24 @@ mock-провайдера, test-only route (`:66-73`). Статусы `critic.pr
 Существующий текст маршрутов: «debug-only / test-only route, mock provider, or code compiled out of production
 builds» (`instructions.py:130`); «Missing file/line → note it, keep it» (`instructions.py:147`).
 
-**Инструменты (план):** `disprove_finding`, `check_dominance`, `lsp_path_to_entry`, `read_file`. **Бюджет (план):**
-`critic_max_calls=6`, `Retry 2`. **Отказ:** missing file/line → `CONDITIONAL_VIABLE`. **Завершение:** аннотации;
-`confirm`.
+**Инструменты (план):** `disprove_finding`, `check_dominance`, `lsp_path_to_entry`, `read_file`. Все четыре плановых
+инструмента уже есть в `critic_tools` (`rosters.py:33-38`): `disprove_finding` (`gates.py:105`), `check_dominance`
+(`dominance.py:122`), `lsp_path_to_entry` (`tools/lsp.py:65`), `read_file` (`tools/code.py:27`); специалисты-критики
+получают подмножества `*_CRITIC_TOOLS` (`rosters.py:80-83`). Существующий критик: `route_and_critique_node` —
+`@node(parallel_worker=True, max_parallel_workers=max_parallel)` (`graph_nodes.py:159-160`; `Settings.max_parallel=3`,
+`BUGFINDER_MAX_PARALLEL`, `settings.py:43,89`), вызывается из `finish` только над confirmed LLM-находками
+(`pipeline.py:198-202`); выключатель `CRITIC=0` (`settings.py:48,94`). **Бюджет (план):** `critic_max_calls=6`,
+`Retry 2`; бюджет сегодня `critic_max_calls=20` (`CRITIC_MAX_MODEL_CALLS`, `settings.py:52,97`) — план §3 предлагает 6
+для viability-узла, т.е. значение по умолчанию поменяется или появится отдельная ручка. **Отказ:** missing file/line →
+`CONDITIONAL_VIABLE`. Отказ сегодня: исключение агента → заметка `critic <id> failed: …`, находка остаётся confirmed
+(`graph_nodes.py:152-157`). Гейт `disprove_finding` переводит статус в `uncertain` (не `rejected`), дописывает
+`critic: <reason>` + цитаты в `evidence`; отказывает, если находка не confirmed или ни одна цитата не найдена в
+целевом коде (`gates.py:111-119`, `store.set_status` `store.py:130-141`). **Завершение:** аннотации; `confirm`.
 
-**Пример на NodeGoat (ожидание, план §5):** survivors × ≈5 вызовов ≈ 35 при 8 находках; `intent=production`, поэтому
-маршрут `sample` не срабатывает.
+**Пример на NodeGoat (ожидание по формуле плана §5 `survivors × ≈5`):** в run 18 после review остались бы 6 confirmed
+LLM-находок (`f_44…f_47`, `f_51`, `f_52`) → ≈30 вызовов (табличные «~35» плана §5 — модель на 150 файлов, не
+NodeGoat); сегодняшний критик просмотрел те же 6 за 14,0 с (`timings.critic`), опровергнул 0. `intent=production`
+(артефакт `threat_model`), поэтому маршрут `sample` не срабатывает.
 
 **Источники:** Shannon `critic.prompt.hbs`; `instructions.py:124-131,243-253`; план §3 строки 103,108-109,132; §4 шаг 5.
 
@@ -871,13 +1043,19 @@ builds» (`instructions.py:130`); «Missing file/line → note it, keep it» (`i
 **Вход:** только элементы с `review.status == PROVISIONALLY_VALID`; остальные — skip, 0 вызовов. **Выход:**
 `Confirmation{finding_id, repro_status: statically_confirmed|not_attempted, repro_hints}` → `annotate(repro_status=…)`;
 promotion = **повторный `report_finding` с большей `confidence`** — `store.report` заменяет вердикт при
-`f.confidence > old.confidence` (`store.py:118-122`).
+`f.confidence > old.confidence` (`store.py:117-121`). Promotion через повторный `report_finding` не сливает evidence:
+`store.report` при `f.confidence > old.confidence` заменяет `status`, `evidence` и `confidence` целиком, а
+`hypothesis_id` — только если у новой находки он непустой (`store.py:117-121`); повторный вызов проходит тот же
+`gate_finding` (цитата у якоря обязательна для confirmed, `scanner/adapter/tools/gates.py`).
 
 **О чём думает (план по `confirm.prompt.hbs`).** Движок без sandbox — подтверждение статическое: читает код на
 пути находки (синк и ingress), решает, «статически очевиден» ли флоу. `statically_confirmed` только при
 ПРИСУТСТВУЮЩЕМ reached-sink evidence — цитируемом `file:line` пути от attacker-controlled входа к синку; иначе
 `not_attempted` (`confirm.prompt.hbs:27-43`, «Reached-sink evidence gate»). Promotion `PROVISIONALLY_VALID → VALID`
-блокируется, если в `triage_checklist` есть `UNKNOWN` (`confirm.prompt.hbs:45-58`).
+блокируется, если в `triage_checklist` есть `UNKNOWN` (`confirm.prompt.hbs:45-58`); блокировка срабатывает и на
+`passes == false`, не только на `UNKNOWN` (`confirm.prompt.hbs:48`). Shannon обрабатывает и `VALID`, и
+`PROVISIONALLY_VALID` (skip только FALSE_POSITIVE/NEEDS_RESEARCH/DUPLICATE, `confirm.prompt.hbs:20-21`); сужение входа
+до одних PROVISIONALLY_VALID — решение плана (§3, строка 133), а не Shannon.
 
 **Инструменты (план):** `report_finding` + `read_file`/`lsp_*`. **Бюджет (план):** `confirm_max_calls=8`, `Retry 2`.
 **Отказ:** сбой → `not_attempted`. **Завершение:** аннотации; `calibrate`. Тест плана: «PROVISIONAL + цитата у якоря
@@ -907,29 +1085,41 @@ promotion = **повторный `report_finding` с большей `confidence`
 | `knowledge` | `enrichment_for(anchor_id)` (`store.py:173`) | `{kev, epss, …}` |
 
 **Выход:** `{"score", "impact", "likelihood", "multiplier", "priority": CRITICAL|HIGH|MEDIUM|LOW, "rules_applied"}`
-(`calibrate.py:88-89`) — report-only, никогда не меняет status/severity/экспорт (`calibrate.py:1`).
+(`calibrate.py:88-89`) — report-only, никогда не меняет status/severity/экспорт (`calibrate.py:1`). Пороги
+`priority`: score ≥ 8 → CRITICAL, ≥ 6 → HIGH, ≥ 3 → MEDIUM, иначе LOW (`scanner/core/calibrate.py:44-45`); score
+округляется до 0.1, multiplier — до 0.001 (`calibrate.py:87-88`).
 
 **Алгоритм (`calibrate.py:1-22,48-89`).** Hazard = (Impact + Likelihood) × Multiplier, cap 10. Impact по CWE:
 5 — RCE-класс (78/77/94/95/502); 4 — 89/918/611/22/287/306/284/285/639/862/863/798; 3 — 79/352/327/328/338/90/943;
-2 — по умолчанию; 1 — гигиена (676/614/1004/16); severity `low|info` капит impact до 2; `critical_entity` (+1).
+2 — по умолчанию; 1 — гигиена (676/614/1004/16); severity `low|info` капит impact до 2; `critical_entity` (+1) —
+прибавляется после капа low/info, поэтому находка с severity `info` получает impact 3 (см. `f_45`, `f_52` в run 18;
+`calibrate.py:54-61`).
 Likelihood: 3 (статический движок), 2 при `confidence < 0.5`, 1 если не confirmed; KEV → +1 (`exploited_in_the_wild`),
-EPSS ≥ 0.5 → +1 (`epss_high`). Multiplier: exposure (exposed 1.0 / internal 0.8 / privileged 0.5) × 0.8
-`static_confirmation` × 0.7 `user_interaction` (352/79/601) × 0.4 `sample_or_test`. Капы (самый строгий побеждает):
+иначе EPSS ≥ 0.5 → +1 (`epss_high`) — только один из двух бонусов (`calibrate.py:62-65`). Enrichment (`kev`/`epss`)
+существует только для якорей `tool == "osv"` и пишется при статическом скане, если `KNOWLEDGE_ENRICH != 0`
+(`scanner/adapter/knowledge.py:321-326`, `scanner/adapter/static.py:245`, `scanner/core/settings.py:64,107`,
+`runner.py:142`). Такие находки лежат в manifest-файлах и всегда капятся LOW 2.0 (`third_party_reachability`), так что
+бонус KEV/EPSS меняет только `likelihood`/`rules_applied` в отчёте, но не priority. Multiplier: exposure (exposed 1.0
+/ internal 0.8 / privileged 0.5) × 0.8 `static_confirmation` × 0.7 `user_interaction` (352/79/601) × 0.4
+`sample_or_test`. Без артефакта `architecture_model` `exposure_for` отдаёт `internal` и пустые extra_rules
+(`calibrate.py:100-101`), т.е. multiplier ≤ 0.64 и кап HIGH через `internal_nested`; неизвестное значение exposure тоже
+даёт 0.8 (`calibrate.py:66`). Капы (самый строгий побеждает):
 manifest-файл → LOW 2.0 `third_party_reachability`; не confirmed → LOW `unreachable_inputs`; impact 1 → LOW
 `hygiene_only`; CWE-79 → MEDIUM 5.9 `strict_xss`; multiplier < 0.8 → HIGH 7.9 `internal_nested`; всегда HIGH 7.9
 `static_confirmation` — never CRITICAL. Exposure: `exposed`, если идентификатор из `trust_boundaries` встречается в
 title/evidence или базовое имя файла — в границе (`calibrate.py:104-106`).
 
 Shannon `calibrate.prompt.hbs` («This stage is report-only … only ever *adds* a risk score», Hazard = Impact +
-Likelihood, fallback `CONDITIONAL_VIABLE`/`not_attempted` при отсутствующих полях) + `partials/capella-calibration-
-rules.hbs` (27 правил) — у нас подмножество, решаемое из (cwe, status, confidence, file, intent, exposure).
+Likelihood, fallback `CONDITIONAL_VIABLE`/`not_attempted` при отсутствующих полях) +
+`prompts/partials/capella-calibration-rules.hbs` (27 правил: 11 Force-LOW, 8 cap-HIGH, 8 cap-MEDIUM) — у нас
+подмножество, решаемое из (cwe, status, confidence, file, intent, exposure).
 
 **Инструменты / бюджет:** 0 (опция LLM — `survivors × 2`, план §5). **Отказ:** чистая. **Завершение:** всегда.
 
 **Пример на NodeGoat (run 18):** `f_46` CWE-95 → impact 5, likelihood 3, multiplier 0.8 → 6.4 HIGH; `f_51`
-(`confidence=0.0`) → likelihood 2 → 5.6 MEDIUM; `f_44` CWE-601 → impact 2, ×0.7 user_interaction → 2.7 LOW; `f_45`
-CWE-522 → 3.8 MEDIUM; 40 зависимостей в `package-lock.json` → 2.0 LOW (`third_party_reachability`); секреты
-CWE-798 → 4.5 MEDIUM.
+(`confidence=0.0`) → likelihood 2 → 5.6 MEDIUM; `f_44` CWE-601 → impact 3 (2 + `critical_entity`), likelihood 3,
+multiplier 0.448 (internal × 0.8 × 0.7 user_interaction) → 2.7 LOW (`internal_nested`); `f_45` CWE-522 → 3.8 MEDIUM;
+40 зависимостей в `package-lock.json` → 2.0 LOW (`third_party_reachability`); секреты CWE-798 → 4.5 MEDIUM.
 
 **Источники:** `calibrate.py`; `store.py:168-173`; Shannon `calibrate.prompt.hbs`; план §3 строка 134.
 
@@ -939,22 +1129,33 @@ CWE-798 → 4.5 MEDIUM.
 **Статус:** частично — `finish` (`pipeline.py:195-210`) пишет `stop_reason` в state, артефакт `timings`, возвращает
 `Report{rounds, stop_reason, timings}` (`core/workflow.py:33-36`); SARIF/summary пишет `runner.scan_full`
 (`runner.py:174-181`) после сессии. План: `ExportResult(Report){coverage: complete|reduced, reductions[]}` и
-`properties{review, viability, repro_status, calibration, coverage}` (§3, строки 104,135).
+`properties{review, viability, repro_status, calibration, coverage}` (§3, строки 104,135). Сегодняшний `finish` перед
+отчётом запускает критика по LLM-находкам со статусом confirmed (`pipeline.py:198-205`, `timings["critic"]`), т.е. в
+`export` в плане уходит «`finish` минус critic» (§3, строка 135).
 
 **Вход:** `InvestigateResult`/маршруты; стор. **Выход:** `report.sarif` и `summary.json` в `.runs/<ts>/`
-(`runner.py:176-179`); `run.finish("done", stop)`.
+(`runner.py:176-179`); `run.finish("done", stop)`. `stop` для `run.finish("done", stop)` берётся из state:
+`stop_reason`, а при пустом — `"budget"`, если выставлен глобальный `budget_exhausted` (`runner.py:174`); `run.finish`
+выполняется до записи файлов (`runner.py:175-179`). Каталог `.runs` — параметр `scan_full(runs_dir=Path(".runs"))`,
+не ручка `Settings`; CLI его не переопределяет (`runner.py:160`, `scanner/main.py:21`).
 
 **Правила экспорта (`store.py:175-216`).** В SARIF попадают только `status == confirmed` (`store.py:188`) — direct и
-LLM; `ruleId` = CWE, `level` по severity (`_LEVEL`, строка 36), `message` = title + evidence, `properties{finding_id,
-anchor_id, confidence, source, calibration}`, `taxa` WSTG / Top 10 2021 / Top 10 2025 / ASVS (`_taxa`, строки 54-58;
-все использованные таксоны объявлены в `taxonomies`), `fixes` из remediation. `summary.json`: счётчики
-confirmed/rejected/uncertain, все находки с калибровкой, `gate_refusals`, `intent`, `timings`. Гейт Shannon
-`passesExportGate`: `status === 'VALID' && viability ∈ {VIABLE, CONDITIONAL_VIABLE}` (`sarif-exporter.ts:57-62`); у
-нас `NON_VIABLE` реализуется только через `disprove_finding`, так что гейт остаётся `status == confirmed`, а
-аннотации — в `properties` (план §3, строки 108-109).
+LLM; `ruleId` = CWE или `"unknown"` (находка без CWE), `level` по severity (`_LEVEL`, строка 36; неизвестная severity →
+`warning`), `message` = title + evidence, `properties{finding_id, anchor_id, confidence, source, calibration}`, `taxa`
+WSTG / Top 10 2021 / Top 10 2025 / ASVS (`_taxa`, строки 54-58; все использованные таксоны объявлены в `taxonomies`),
+`fixes` из remediation. `summary.json`: счётчики confirmed/rejected/uncertain, все находки с калибровкой,
+`gate_refusals`, `intent`, `timings`; содержит также `run_id` и `target` (`store.py:208`); `timings` пишется только
+если артефакт есть (`store.py:212-213`). Ключи `stop_reason`, `sarif_path`, `summary_path` добавляются только в
+возвращаемый dict `scan_full` и в файл не попадают (`runner.py:181`). Гейт Shannon `passesExportGate`:
+`status === 'VALID' && viability ∈ {VIABLE, CONDITIONAL_VIABLE}` (`sarif-exporter.ts:57-62`); у нас `NON_VIABLE`
+реализуется только через `disprove_finding`, так что гейт остаётся `status == confirmed`, а аннотации — в
+`properties` (план §3, строки 108-109).
 
 **Инструменты / бюджет:** 0. **Отказ:** в `runner.scan_full` исключение сессии → `run.finish("failed")` без отчёта
-(`runner.py:165-169`) — план требует «выполняется всегда» (§3, строка 135). **Завершение:** конец графа.
+(`runner.py:165-169`) — план требует «выполняется всегда» (§3, строка 135). Отчёт не пишется и при падении `prepare`
+(сканеры/индекс/агент): `run.finish("failed", str(e))` и исключение наружу (`runner.py:153-156`); `investigate`
+поднимает `RuntimeError`, если в раунде 0 упали все специалисты без бюджета (`pipeline.py:182-183`) — это тоже путь
+«без отчёта». **Завершение:** конец графа.
 
 **Пример на NodeGoat (run 18):** `summary.json`: 49 confirmed (43 direct + 6 llm), 3 rejected, 0 uncertain,
 `gate_refusals=28`, `intent=production`, `timings` — 8 стадий; SARIF с 49 результатами.
@@ -968,21 +1169,36 @@ confirmed/rejected/uncertain, все находки с калибровкой, `
 должен существовать; координаты `cwe/file/line`, отличные от якоря сканера, отвергаются («coordinates come from the
 anchor — omit them»); синтетический якорь без CWE получает CWE модели (`gates.py:49-50`); секреты (CWE-798) сравниваются
 и хранятся редактированными (`gates.py:52-54`, `rules.py:157-159`); класс с обязательным consult требует
-`knowledge:<id>` / `domain:<entity>` (`check_consulted`, `rules.py:164-175`); confirmed требует цитаты, реально
-присутствующей в 3 строках вокруг якоря (`default_reader`, `common.py:37-38`; `bare_quote` снимает префикс
+`knowledge:<id>` / `domain:<entity>` (`check_consulted`, `rules.py:164-175`); проверка consult-цитат пропускается
+для статуса `uncertain` (`gates.py:55`): неуверенный вердикт по dependency/authz-якорю принимается без
+`knowledge:`/`domain:`; confirmed требует цитаты, реально присутствующей в окне ±3 строки (7 строк) вокруг якоря
+(`default_reader`, `common.py:37-38`; `fs.read_lines(window=3)`, `fs.py:72-79`; `bare_quote` снимает префикс
 `path:line:` и HTML-сущности, `rules.py:149-152`); `validate_finding` (`rules.py:112-125`): title, статус из
-`STATUSES`, confidence в [0,1] (значения 1..100 нормализуются, `gates.py:91-92`), confirmed без anchor/evidence не
-проходит. **Discovery (Shannon):** если якорь синтетический (`SYNTHETIC_TOOLS = ("threatmodel", "entrypoint")`,
-`types.py:43`) и модель передала другие `file, line`, гейт требует `confirmed` + `cwe`, проверяет цитату **в
-указанном месте** и чеканит якорь `tool="investigator"` с `rule_id` = исходный якорь (`gates.py:28-45`) — каждая
-находка по-прежнему имеет ровно один якорь. Отказ логируется в `gate_log` и возвращается модели как причина
-(`gates.py:96-98`). `disprove_finding` (`gates.py:104-122`): только confirmed, хотя бы одна цитата найдена в цели
-(`quotes_in_target`), результат — `uncertain` с добавленными `critic: <reason>` и цитатами; удаления нет.
+`STATUSES`, confidence в [0,1] (значения >1 и ≤100 делятся на 100, ровно 1.0 остаётся как есть; `gates.py:91-92`),
+confirmed без anchor/evidence не проходит. **Discovery (Shannon):** если якорь синтетический
+(`SYNTHETIC_TOOLS = ("threatmodel", "entrypoint")`, `types.py:43`) и модель передала другие `file, line`, гейт требует
+`confirmed` + `cwe`, проверяет цитату **в указанном месте** и чеканит якорь `tool="investigator"` с `rule_id` =
+исходный якорь (`gates.py:28-45`) — каждая находка по-прежнему имеет ровно один якорь. Отказ логируется в `gate_log`
+и возвращается модели как причина (`gates.py:96-98`). Дедуп в `store.report` (`store.py:110-128`): дубликат — тот же
+`anchor_id` или та же пара (cwe, file) в пределах `NEAR_LINES=6` строк (`store.py:35`), причём direct-находки по
+(cwe,file,line) не склеиваются; при большей `confidence` у новой записи заменяются status/evidence/confidence, id
+остаётся. `disprove_finding` (`gates.py:104-122`): только confirmed, хотя бы одна цитата найдена в цели
+(`quotes_in_target`), результат — `uncertain` с добавленными `critic: <reason>` и цитатами; удаления нет. Отказы
+`disprove_finding` в `gate_log` не пишутся — только возвращаются модели (`gates.py:111-118`); `log_gate` вызывает лишь
+`report_finding` (`gates.py:96-98`).
 
 **Бюджеты и окно инструментов.** `budget_callback` (`callbacks.py:18-45`) считает вызовы модели по `branch`
-(per_branch) или глобально; на вызове `limit` инструменты снимаются и добавляется `BUDGET_LAST_CALL` — «Answer NOW
-with your final JSON only»; сверх лимита — канированный ответ `budget exhausted`, ключ `budget_exhausted:<branch>`,
-и только при `stop_run=True` глобальный `budget_exhausted` (никто из текущих агентов его не ставит).
+(per_branch, все агенты `new_agent` по умолчанию), по invocation (`per_invocation` — Knowledge-консультант,
+`knowledge_agent.py:88-89`) или глобально; на вызове `limit` инструменты снимаются и добавляется `BUDGET_LAST_CALL` —
+«Answer NOW with your final JSON only»; сверх лимита — канированный ответ `budget exhausted`, ключ
+`budget_exhausted:<branch>`, и только при `stop_run=True` глобальный `budget_exhausted` (никто из текущих агентов его
+не ставит). Умолчания бюджетов по ролям: verifier 30, critic 20, architect 40, domain_modeler 12, threat_modeler 6,
+knowledge 10, triage 4 (`settings.py:51-57`, env `*_MAX_MODEL_CALLS`/`TRIAGE_MAX_CALLS`, `settings.py:96-102`); каждая
+LLM-стадия ещё ограничена `STAGE_TIMEOUT=600` с через `asyncio.wait_for` (`settings.py:44,90`, `pipeline.py:99`).
+Direct lane капится `DIRECT_MAX=200` якорей на инструмент, самые тяжёлые по severity первыми (`reconcile.py:51-65`).
+Флаги-выключатели стадий: `THREAT_MODEL`, `DOMAIN_MODEL`, `CRITIC`, `TRIAGE`, `SPECIALISTS` — включены, пока переменная
+не равна ровно "0" (`settings.py:28-30,91-95`); `DOMAIN_MODEL` действует только вместе с `THREAT_MODEL`
+(`runner.py:103-104`).
 `tool_window_callback(keep=3)` (`callbacks.py:47-66`) заменяет старые `function_response` дайджестом `tool args:
 N chars`, чтобы промпт не рос; у DomainModeler и ThreatModeler окно выключено. `include_contents="none"` — свежий
 контекст на каждую активацию (`agents.py:47`). Капы тулов: `OUT_CAP=20000`, `GREP_CAP=4000` (`rg -m 100`),
@@ -992,12 +1208,17 @@ N chars`, чтобы промпт не рос; у DomainModeler и ThreatModeler
 calibrate_llm, recon, llm_model_small` (§4, строка 147).
 
 **Resume.** Сегодня — два слоя: артефактный (`store.artifact(name)` возвращает кэш стадии без вызова модели,
-`pipeline.py:95-96`; CLI-перезапуск — новая ADK-сессия) и ADK: все динамические узлы `rerun_on_resume=True`
-(`pipeline.py:213`, `graph_nodes.py:68,111,134,159`), `ctx.run_node(..., run_id=…)` дедуплицируется по
-`(node_name, run_id)` против событий сессии (ADR-0007, «Consequences»), `store.report` идемпотентен. План:
-`App(resumability_config=ResumabilityConfig(is_resumable=True))` — завершённые статические узлы реплеятся из событий,
-dynamic-узлы переигрывают тело с кэшем детей; артефактный resume остаётся для CLI (§2, строки 94-95; §4 шаг 7).
-Сессии пишутся в `SqliteSessionService(sessions_path)` под `APP_NAME="fullscan"` (`runner.py:72-85`).
+`pipeline.py:95-96`) — но артефакты привязаны к run (`store.py:160-162`), а CLI-перезапуск открывает новый run и новую
+ADK-сессию (`store.py:71-75`, `runner.py:140`, `runner.py:76`), так что сегодня этот кэш срабатывает только при
+повторном прогоне `plan` внутри одного run; межзапускового resume в CLI нет — и ADK: все динамические узлы
+`rerun_on_resume=True` (`pipeline.py:213`, `graph_nodes.py:68,111-112,134-135,159-160`), `ctx.run_node(..., run_id=…)`
+дедуплицируется по `(node_name, run_id)` против событий сессии (ADR-0007, «Consequences»), `store.report`
+идемпотентен. План: `App(resumability_config=ResumabilityConfig(is_resumable=True))` — завершённые статические узлы
+реплеятся из событий, dynamic-узлы переигрывают тело с кэшем детей; артефактный resume остаётся для CLI (§2, строки
+94-95; §4 шаг 7). Сессии пишутся в `SqliteSessionService(sessions_path)` под `APP_NAME="fullscan"`
+(`runner.py:72-85`): id `run-<run_id>-<имя цели>`, пользователь `user`, `SESSIONS_PATH` по умолчанию
+`.state/sessions.db` (`runner.py:48-49,76-79`, `settings.py:60,104`); при рестарте `store.start_run` помечает
+незавершённые runs как `stopped/orphaned` (`store.py:71-75`).
 
 **Параллелизм.** Fan-out'ы — `@node(parallel_worker=True, max_parallel_workers=max_parallel or None)`
 (`route_and_verify`, `triage`, `route_and_critique`); ошибка элемента ловится в теле воркера, иначе ADK поднимает
@@ -1011,8 +1232,12 @@ uncertain` (`types.py:11`). `VALID` = `confirmed`. `FALSE_POSITIVE` — аген
 (→ `uncertain`), иначе заметка «FP без контрфакта», статус не меняется. `PROVISIONALLY_VALID` / `NEEDS_RESEARCH` —
 аннотации (`RunStore.annotate`), promotion в `confirm` — повторный `report_finding` с большей `confidence`.
 `NON_VIABLE` — тоже только через `disprove_finding`. `SAMPLE_OR_TEST` — аннотация `viability` от `mark_sample`
-(0 вызовов) и множитель калибровки ×0.4. Гейт SARIF остаётся `status == confirmed`; `review/viability/repro_status/
-calibration` едут в `properties`.
+(0 вызовов) и множитель калибровки ×0.4; множитель ×0.4 сегодня включается не аннотацией viability, а
+`intent == "sample"` из артефакта `threat_model` (`store.py:168-169`, `calibrate.py:70-72`); intent нормализуется
+fail-closed: всё, что не начинается с «sample», — production (`types.py:158-163`). Гейт SARIF остаётся
+`status == confirmed` (`store.py:188`); сегодня в `properties` едут `finding_id, anchor_id, confidence, source,
+calibration` (`store.py:183-184`), а `review/viability/repro_status` и `RunStore.annotate` — план (§3, строки 104-105;
+в `ports.py:84-99` метода нет).
 
 ## 5. Что не портируется из Shannon и почему
 
@@ -1028,7 +1253,8 @@ calibration` едут в `properties`.
   плана.
 - **C5 dedupe как LLM-стадия** — не нужна модель: дедуп детерминирован в `store.report` (план §1, строка 25).
 - **C9 calibrate с 27-правильным чек-листом** — по умолчанию детерминированный `core/calibrate.py`; LLM-вариант —
-  опция `CALIBRATE_LLM=1` (план §3, строка 134; §5).
+  планируемая опция `CALIBRATE_LLM=1` (план §3, строка 134; §5; в `Settings.from_env` её пока нет,
+  `settings.py:79-119`).
 - **P6 Markdown/executive report** (`report-executive.txt`) — вне этой карты; возможен как отдельный `single_turn`
   агент с `output_schema=ExecutiveSummary` перед `export` (план §4, строка 174).
 - **KB-файлы Capella** (`architecture.md`, `entities/*.md`, `vulnerabilities/*.md`, `index.md`, `dependencies.json`)
