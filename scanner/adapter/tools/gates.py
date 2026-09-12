@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 from scanner import core
 from scanner.adapter.tools.common import err
-from scanner.core import Finding
+from scanner.core import Anchor, Finding
 
 
 def _mismatch(name: str, got, want) -> str | None:
@@ -25,6 +25,24 @@ def gate_finding(run, read: Callable[[str, int], str], draft: Finding) -> str | 
     a = run.anchor(draft.anchor_id)
     if a is None:
         return f"unknown anchor_id {draft.anchor_id!r} — use ids from list_anchors"
+    if a.tool in core.SYNTHETIC_TOOLS and draft.file and draft.line and (draft.file, draft.line) != (a.file, a.line):
+        # Discovery (Shannon): a baseline/threat hypothesis found something elsewhere. The quote check at the
+        # reported location is the real gate; a passing quote mints an "investigator" anchor so every finding
+        # still has exactly one anchor.
+        if draft.status != core.CONFIRMED or not draft.cwe:
+            return "an off-anchor report must be a confirmed finding with a cwe — rejections belong in your Dossier"
+        try:
+            code = read(draft.file, draft.line)
+        except Exception as e:  # noqa: BLE001
+            return f"cannot read {draft.file}:{draft.line} to verify evidence: {e}"
+        if not any(q and q in code for q in (core.bare_quote(e) for e in draft.evidence if not core.is_consult_ref(e))):
+            return f"evidence does not match the code at {draft.file}:{draft.line} — quote the lines exactly as read"
+        cwe = draft.cwe.strip().upper()
+        a = Anchor(id=core.new_anchor_id("investigator", cwe, draft.file, draft.line), tool="investigator", rule_id=a.id,
+                   cwe=cwe, severity=draft.severity or "medium", file=draft.file, line=draft.line,
+                   message=f"discovered from {a.tool} anchor {a.id}")
+        run.save_anchors([a])
+        draft = draft.model_copy(update={"anchor_id": a.id})
     bad = [m for m in (_mismatch("cwe", draft.cwe, a.cwe), _mismatch("file", draft.file, a.file), _mismatch("line", draft.line, a.line)) if m]
     if bad:
         return "; ".join(bad) + "; coordinates come from the anchor — omit them or pick the right anchor_id"

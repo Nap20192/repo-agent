@@ -39,7 +39,8 @@ Status = Literal["confirmed", "rejected", "uncertain"]
 Kind = Literal["entry", "sink", "dependency", "secret", "authz"]
 CandidateKind = Literal["entry", "sink", "external"]
 Severity = Literal["critical", "high", "medium", "low", "info"]
-Tool = Literal["gosec", "semgrep", "osv", "gitleaks", "threatmodel", "entrypoint"]
+Tool = Literal["gosec", "semgrep", "osv", "gitleaks", "threatmodel", "entrypoint", "investigator"]
+SYNTHETIC_TOOLS = ("threatmodel", "entrypoint")  # anchors minted from a stage, not a scanner: they only say "start here"
 Intent = Literal["production", "sample"]
 
 # One CWE taxonomy (ADR 0006): cwe → class family. The specialists' router and the consult gate derive from it;

@@ -108,3 +108,12 @@ def test_direct_findings_dedup_by_anchor_only(tmp_path):
     assert len(run.findings()) == 2
     assert run.report(Finding(anchor_id="a_osv1", cwe="CWE-1321", file="package-lock.json", line=1, title="again",
                               status=CONFIRMED, confidence=1.0, source="direct")).id == "f_1"
+
+
+def test_llm_findings_dedup_within_near_lines(tmp_path):
+    from scanner.adapter.store import Store
+    run = Store(str(tmp_path / "s.db")).start_run("/t")
+    a = run.report(Finding(anchor_id="a1", cwe="CWE-95", file="c.js", line=32, title="eval", status="confirmed", confidence=0.9))
+    b = run.report(Finding(anchor_id="a2", cwe="CWE-95", file="c.js", line=34, title="eval again", status="confirmed", confidence=0.5))
+    far = run.report(Finding(anchor_id="a3", cwe="CWE-95", file="c.js", line=90, title="other eval", status="confirmed", confidence=0.5))
+    assert b.id == a.id and far.id != a.id and len(run.findings()) == 2

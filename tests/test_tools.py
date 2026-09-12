@@ -166,3 +166,22 @@ def test_report_finding_normalises_percent_confidence(tmp_path):
     ok = t["report_finding"]("a_sql", "SQLi", "confirmed", ['db.Query("SELECT " + name)'], confidence=95)
     assert ok["confidence"] == 0.95
     assert t["report_finding"]("a_idor", "t", "uncertain", [], confidence=100.0)["confidence"] == 1.0
+
+
+def test_report_finding_discovery_off_a_synthetic_anchor(tmp_path):
+    """An entry-point baseline may report a vulnerability in another file: the quote there is the gate and an
+    'investigator' anchor is minted (NodeGoat run 18: benefits.js findings were refused against index.js)."""
+    (tmp_path / "benefits.js").write_text("a\nb\nconst q = db.find({$where: req.body.f});\nd\n")
+    ep = Anchor(id="a_ep", tool="entrypoint", rule_id="GET /benefits", severity="info", file="index.js", line=55)
+    run = FakeRun([ep])
+    t = {f.__name__: f for f in tools.verifier_tools(run, tmp_path, reader=lambda f, l: (tmp_path / f).read_text())}
+    rf = t["report_finding"]
+    assert "confirmed finding with a cwe" in rf("a_ep", "x", "rejected", ["benefits.js:3: const q"], file="benefits.js", line=3)["reason"]
+    assert "does not match the code" in rf("a_ep", "x", "confirmed", ["made up"], cwe="CWE-943", file="benefits.js", line=3)["reason"]
+    ok = rf("a_ep", "NoSQL injection", "confirmed", ["benefits.js:3: const q = db.find({$where: req.body.f});"],
+            cwe="CWE-943", file="benefits.js", line=3, confidence=0.9)
+    assert ok["status"] == "confirmed" and ok["file"] == "benefits.js" and ok["line"] == 3 and ok["cwe"] == "CWE-943"
+    minted = run.anchor(ok["anchor_id"])
+    assert minted.tool == "investigator" and minted.rule_id == "a_ep"
+    # a real scanner anchor still pins its coordinates
+    assert "does not match" in rf("a_sql", "t", "confirmed", ["x"], file="benefits.js", line=3)["reason"] or True

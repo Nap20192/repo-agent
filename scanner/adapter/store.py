@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS gate_log(run INTEGER, time REAL, anchor_id TEXT, reas
 CREATE TABLE IF NOT EXISTS notes(run INTEGER, time REAL, text TEXT, ref TEXT);
 CREATE TABLE IF NOT EXISTS artifacts(run INTEGER, stage TEXT, json TEXT, PRIMARY KEY(run, stage));
 """
+NEAR_LINES = 6  # same CWE in the same file this close = one finding (eval() on four consecutive lines is one bug)
 _LEVEL = {"critical": "error", "high": "error", "medium": "warning", "low": "note", "info": "note"}
 _TAXONOMIES = {  # SARIF toolComponent name → (Finding field, GUID-less reference info)
     "WSTG": ("wstg_id", "OWASP Web Security Testing Guide", "https://owasp.org/www-project-web-security-testing-guide/"),
@@ -111,7 +112,7 @@ class Run:
         for i, old in enumerate(self.findings(), 1):
             same = (f.anchor_id and old.anchor_id == f.anchor_id) or \
                    (f.cwe and "direct" not in (f.source, old.source)  # direct osv findings share manifest:1 per CWE
-                    and (old.cwe, old.file, old.line) == (f.cwe, f.file, f.line))
+                    and (old.cwe, old.file) == (f.cwe, f.file) and abs(old.line - f.line) <= NEAR_LINES)
             if not same:
                 continue
             if f.confidence > old.confidence:
