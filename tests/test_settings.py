@@ -40,3 +40,10 @@ def test_no_env_reads_outside_settings():
     root = Path(__file__).resolve().parent.parent
     offenders = [f for f in owned if re.search(r"os\.(environ|getenv)", (root / f).read_text())]
     assert offenders == []
+
+
+def test_triage_knobs():
+    from scanner.core.settings import Settings
+    assert Settings.from_env({}).triage is True and Settings.from_env({}).triage_max_calls == 4
+    s = Settings.from_env({"TRIAGE": "0", "TRIAGE_MAX_CALLS": "7"})
+    assert s.triage is False and s.triage_max_calls == 7

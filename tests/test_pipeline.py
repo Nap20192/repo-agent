@@ -196,3 +196,57 @@ def test_workflow_is_a_four_node_graph():
     assert isinstance(wf, Workflow) and wf.name == "scan_v3"
     names = {n.name for e in wf.edges for n in e if hasattr(n, "name")}
     assert {"build_skeleton", "plan", "investigate", "finish"} <= names
+
+
+# --- card 44: triage --------------------------------------------------------------------------------------
+
+def _triage_double(store, flag_files: set[str], fail_file: str = ""):
+    """Triage stand-in: flags hypotheses whose file is in flag_files, raises for fail_file."""
+    from google.adk.workflow import FunctionNode
+
+    async def triage(ctx, node_input: dict):
+        f = node_input["file"]
+        if f == fail_file:
+            raise RuntimeError("boom")
+        store.add_note("triaged:" + f)
+        return {"file": f, "flagged": f in flag_files, "classes": ["CWE-943"], "why": "db call on request field"}
+    return FunctionNode(func=triage, name="triage", rerun_on_resume=True)
+
+
+def test_triage_gates_baselines_and_records_unflagged_as_rejected():
+    run = FakeRun([])
+    eps = [Candidate(kind="entry", file="allocations.js", line=8, symbol="displayAllocations", route=["GET /allocations/:userId"]),
+           Candidate(kind="entry", file="tutorial.js", line=8, symbol="displayTutorial", route=["GET /tutorial"])]
+    verified = []
+    from google.adk.workflow import FunctionNode
+
+    async def verify(ctx, node_input: dict):
+        verified.append((node_input["file"] if "file" in node_input else node_input["reads"][0], node_input["cwe"], node_input["claim"]))
+        return {"hypothesis_id": node_input["id"], "verdict": "uncertain", "notes": "v"}
+    wf = _workflow(run, verifier=FunctionNode(func=verify, name="verify", rerun_on_resume=True),
+                   triage=_triage_double(run, {"allocations.js"}), entry_points_fn=lambda: eps, max_parallel=1)
+    _run(wf)
+    assert [t for t, _ in notes_of(run) if t.startswith("triaged:")] == ["triaged:allocations.js", "triaged:tutorial.js"]
+    assert [(f, c) for f, c, _ in verified] == [("allocations.js", "CWE-943")]  # flagged: verified with the triage class
+    assert "Triage: db call on request field" in verified[0][2]
+    rejected = [d for d in run.doss[0] if d.verdict == core.REJECTED]
+    assert len(rejected) == 1 and "triage" in rejected[0].notes and rejected[0].specialist == "triage"
+    assert len(run.doss[0]) == 2  # one triage rejection + one verified dossier, same round
+
+
+def test_triage_failure_fails_open_and_scanner_anchors_skip_triage():
+    run = FakeRun()  # A1/A2: scanner sinks — never triaged
+    eps = [Candidate(kind="entry", file="x.js", line=1, symbol="x", route=["GET /x"])]
+    _run(_workflow(run, triage=_triage_double(run, set(), fail_file="x.js"), entry_points_fn=lambda: eps, max_parallel=1))
+    assert [t for t, _ in notes_of(run) if t.startswith("triaged:")] == []  # the double raised before noting
+    hyps = run.hyps[0]
+    assert [h.kind for h in hyps] == ["sink", "sink", "entry"]
+    assert [d.verdict for d in run.doss[0]] == [core.CONFIRMED, core.REJECTED, core.REJECTED]  # the baseline reached the verifier (fail open)
+    assert all(d.notes == "n" and d.specialist != "triage" for d in run.doss[0])
+
+
+def test_no_triage_node_means_the_old_flow():
+    run = FakeRun([])
+    eps = [Candidate(kind="entry", file="x.js", line=1, symbol="x", route=["GET /x"])]
+    _run(_workflow(run, entry_points_fn=lambda: eps, max_parallel=1))
+    assert len(run.doss[0]) == 1 and run.doss[0][0].specialist == ""

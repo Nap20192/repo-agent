@@ -39,6 +39,7 @@ from scanner.adapter.tools.rosters import (
     architect_tools,
     critic_tools,
     subset,
+    triage_tools,
     verifier_tools,
 )
 
@@ -76,5 +77,6 @@ __all__ = [
     "report_finding_tool",
     "shell_quote",
     "subset",
+    "triage_tools",
     "verifier_tools",
 ]

@@ -23,12 +23,14 @@ from scanner.adapter.store import Store
 from scanner.adapter.tools import (
     architect_tools,
     critic_tools,
+    triage_tools,
     verifier_tools,
 )
 from scanner.app.agents import (
     new_architect,
     new_critic,
     new_threat_modeler,
+    new_triage,
     new_verifier,
 )
 from scanner.app.domain import new_domain_modeler
@@ -105,6 +107,7 @@ def wiring(run, target: Path, entries: list[Candidate], model, index: Index | No
         "router": route_name,
         "verifier": new_verifier(model, verifier_tools(run, target, index=index), s.verifier_max_calls),
         "critic": new_critic(model, critic_tools(run, target, index=index), s.critic_max_calls) if s.critic else None,
+        "triage": new_triage(model, triage_tools(run, target, index=index), s.triage_max_calls) if s.triage else None,
         "store": run,
         "target": str(target),
         "has_anchor": lambda i: run.anchor(i) is not None,

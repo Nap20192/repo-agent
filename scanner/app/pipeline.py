@@ -25,9 +25,10 @@ from scanner.app.graph_nodes import (
     direct_findings_node,
     route_and_critique_node,
     route_and_verify_node,
+    triage_node,
 )
 from scanner.app.reconcile import KNOWN_WSTG, build_queue, ground_artifacts, key, reconcile
-from scanner.core import Anchor, ArchitectureModel, Candidate, Dossier, Threat, ThreatModel
+from scanner.core import Anchor, ArchitectureModel, Candidate, Dossier, Hypothesis, Threat, ThreatModel
 from scanner.core.ports import Closeable, Router, RunStore
 from scanner.core.workflow import InvestigateResult, QueueState, Report, ScanSkeleton
 
@@ -45,6 +46,7 @@ class ScanWorkflow(Workflow):
 
 def build_workflow(
     *, store: RunStore, target: str, verifier, critic=None, architect=None, domain_modeler=None, threat_modeler=None,
+    triage=None,
     specialists: dict | None = None, router: Router | None = None,
     has_anchor: Callable[[str], bool], has_symbol: Callable[[str], bool],
     locate: Callable[[str], tuple[str, int] | None] | None = None,
@@ -60,6 +62,32 @@ def build_workflow(
     direct_node = direct_findings_node(store, target)
     verify_node = route_and_verify_node(store, verifier, specialists, router, max_parallel)
     critique_node = route_and_critique_node(store, critic, specialists, router, max_parallel) if critic is not None else None
+    sweep_node = triage_node(triage, max_parallel) if triage is not None else None
+
+    async def triage_batch(ctx, accepted: list[Hypothesis], rnd: int) -> tuple[list[Hypothesis], list[Dossier]]:
+        """Card 44: the cheap sweep over a batch's baselines (kind entry; scanner sinks and threats skip it).
+        Unflagged → a rejected dossier with the reason (coverage stays provable); flagged → the triage class and
+        reason ride along into the specialist audit. ponytail: per batch, so a sweep never looks past
+        max_hyps items — widen the batch when triage is measurably cheaper than the audit."""
+        base = [h for h in accepted if h.kind == "entry"]
+        if sweep_node is None or not base:
+            return accepted, []
+        outs = await ctx.run_node(sweep_node, [h.model_dump() for h in base], run_id=f"triage_r{rnd}") or []
+        by_id = {o.get("id"): o for o in outs}
+        keep, rejected = [], []
+        for h in accepted:
+            o = by_id.get(h.id)
+            if o is None or o.get("flagged", True):
+                if o and o.get("why"):
+                    h.claim += f". Triage: {o['why']}"
+                if o and o.get("classes"):
+                    h.cwe = o["classes"][0]
+                keep.append(h)
+            else:
+                rejected.append(Dossier(hypothesis_id=h.id, verdict=core.REJECTED, notes=f"triage: {o.get('why', '')}",
+                                        specialist="triage"))
+        log.info("triage round %d: %d of %d baselines flagged", rnd, len(base) - len(rejected), len(base))
+        return keep, rejected
 
     async def stage(ctx, agent, name: str, payload: dict) -> dict | None:
         """One LLM stage: cached artifact (resume) or the agent on `payload` bounded by stage_timeout; its JSON
@@ -140,6 +168,11 @@ def build_workflow(
                 rnd += 1
                 continue
             t0 = time.monotonic()
+            accepted, triaged_out = await triage_batch(ctx, accepted, rnd)
+            if not accepted:  # the sweep cleared the whole batch: no audit this round
+                store.put_dossiers(rnd, triaged_out)
+                rnd += 1
+                continue
             outs = await ctx.run_node(verify_node, [h.model_dump() for h in accepted], run_id=f"verify_r{rnd}") or []
             timings[f"verify_{rnd}"] = round(time.monotonic() - t0, 3)
             dossiers = [Dossier.model_validate(o) for o in outs]
@@ -148,7 +181,7 @@ def build_workflow(
             failed = "; ".join(d.error for d in dossiers if d.error) if outs and all(o.get("failed") for o in outs) else ""
             if failed and not budget and rnd == 0:
                 raise RuntimeError(f"verify round 0 failed: {failed}")  # a failed run keeps no round-0 dossiers
-            store.put_dossiers(rnd, dossiers)
+            store.put_dossiers(rnd, [*triaged_out, *dossiers])
             rnd += 1
             if budget:
                 stop = "budget"

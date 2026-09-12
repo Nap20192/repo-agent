@@ -15,6 +15,7 @@ from scanner.app.instructions import (
     ARCHITECT_INSTRUCTION,
     CRITIC_INSTRUCTION,
     THREAT_MODELER_INSTRUCTION,
+    TRIAGE_INSTRUCTION,
     VERIFIER_INSTRUCTION,
 )
 
@@ -47,6 +48,12 @@ def new_agent(
         before_model_callback=before_model,
         before_tool_callback=log_tools_callback,
     )
+
+
+def new_triage(model, tools: list, max_calls: int = 4) -> LlmAgent:
+    """Rapid classification of one baseline (file/entry point): flagged or not, with classes — no verdicts."""
+    return new_agent("triage", "flags files/entry points worth a specialist audit; cheap, read-only",
+                     TRIAGE_INSTRUCTION, tools, max_calls, model=model)
 
 
 def new_verifier(model, tools: list, max_calls: int = 30) -> LlmAgent:

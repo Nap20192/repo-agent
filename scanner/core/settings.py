@@ -46,6 +46,7 @@ class Settings:
     threat_model: bool = True
     domain_model: bool = True
     critic: bool = True
+    triage: bool = True  # cheap classification of baselines before the specialist audit (card 44)
     # budgets (model calls)
     verifier_max_calls: int = 30
     critic_max_calls: int = 20
@@ -53,6 +54,7 @@ class Settings:
     domain_modeler_max_calls: int = 12
     threat_modeler_max_calls: int = 6
     knowledge_max_calls: int = 10
+    triage_max_calls: int = 4
     # state
     state_path: str = ".state/state.db"
     sessions_path: str = ".state/sessions.db"
@@ -90,12 +92,14 @@ class Settings:
             threat_model=_on(e, "THREAT_MODEL"),
             domain_model=_on(e, "DOMAIN_MODEL"),
             critic=_on(e, "CRITIC"),
+            triage=_on(e, "TRIAGE"),
             verifier_max_calls=_int(e, "VERIFIER_MAX_MODEL_CALLS", 30),
             critic_max_calls=_int(e, "CRITIC_MAX_MODEL_CALLS", 20),
             architect_max_calls=_int(e, "ARCHITECT_MAX_MODEL_CALLS", 40),
             domain_modeler_max_calls=_int(e, "DOMAIN_MODELER_MAX_MODEL_CALLS", 12),
             threat_modeler_max_calls=_int(e, "THREAT_MODELER_MAX_MODEL_CALLS", 6),
             knowledge_max_calls=_int(e, "KNOWLEDGE_MAX_MODEL_CALLS", 10),
+            triage_max_calls=_int(e, "TRIAGE_MAX_CALLS", 4),
             state_path=e.get("STATE_PATH") or ".state/state.db",
             sessions_path=e.get("SESSIONS_PATH") or ".state/sessions.db",
             skip_deps=e.get("SKIP_DEPS") == "1",

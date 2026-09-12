@@ -52,6 +52,14 @@ def architect_tools(run, target: Path, index: Index | None = None) -> list[Calla
     return [list_entry_points, list_anchors, read_file, grep, *lsp_tools(target, index or default_index(target)), consult_owasp, list_skills, load_skill]
 
 
+TRIAGE_TOOLS = {"read_file", "grep", "lsp_symbols"}
+
+
+def triage_tools(run, target: Path, index: Index | None = None) -> list[Callable]:
+    """Triage: read-only, no verdict tool, no shell — a fast look, not an audit."""
+    return subset(verifier_tools(run, target, index=index), TRIAGE_TOOLS)
+
+
 def subset(tools: list[Callable], names: set[str]) -> list[Callable]:
     """Pick tools by function name, in `names` order of the source list; an unknown name is a build-time typo."""
     by = {t.__name__: t for t in tools}

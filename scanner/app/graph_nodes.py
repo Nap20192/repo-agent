@@ -112,6 +112,29 @@ def route_and_verify_node(store: RunStore, verifier, specialists: dict, router: 
                 rerun_on_resume=True, name="route_and_verify")
 
 
+def triage_node(triage, max_parallel: int):
+    """Triage fan-out (card 44): one baseline hypothesis in → {"id", "file", "flagged", "classes", "why", "failed"}.
+    A failed or JSON-less triage flags the item (fail open: the audit, not the sweep, decides)."""
+    async def triage_one(ctx, node_input: dict) -> dict:
+        h = Hypothesis.model_validate(node_input)
+        file = h.reads[0] if h.reads else ""
+        payload = {"id": h.id, "file": file, "symbol": h.symbol, "route": h.route, "classes": [h.cwe] if h.cwe else [],
+                   "claim": h.claim}
+        out, err = None, ""
+        try:
+            out = await ctx.run_node(triage, payload, run_id=f"triage_{h.id}")
+        except Exception as e:  # noqa: BLE001 — one failed classification must not cancel the batch
+            err = _why(e)
+            log.warning("triage %s: %s", h.id, err)
+        md = _model_json(out) or {}
+        flagged = bool(md.get("flagged", True)) if md else True
+        classes = [c for c in md.get("classes", []) if isinstance(c, str) and c.upper().startswith("CWE-")]
+        return {"id": h.id, "file": file, "flagged": flagged, "classes": [c.upper() for c in classes],
+                "why": str(md.get("why", ""))[:300], "failed": bool(err)}
+    return node(triage_one, parallel_worker=True, max_parallel_workers=max_parallel or None,
+                rerun_on_resume=True, name="triage")
+
+
 def route_and_critique_node(store: RunStore, critic, specialists: dict, router: Router | None, max_parallel: int):
     """Critic fan-out over confirmed findings: {finding, anchor, specialist, skills} → the (specialist) critic;
     verdict changes land in the store through disprove_finding. Output per item: finding id, specialist, error."""

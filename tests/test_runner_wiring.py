@@ -49,3 +49,12 @@ def test_new_architect_overlay_is_appended():
     from scanner.app.agents import new_architect
     a = new_architect("gemini-flash-lite-latest", [], 5, overlay="GO OVERLAY")
     assert a.instruction.endswith("GO OVERLAY")
+
+
+def test_wiring_has_a_triage_agent_with_read_only_tools(tmp_path, monkeypatch):
+    monkeypatch.setenv("SPECIALISTS", "0")
+    kw = runner.wiring(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
+    names = {getattr(t, "__name__", getattr(t, "name", "")) for t in kw["triage"].tools}
+    assert kw["triage"].name == "triage" and names == {"read_file", "grep", "lsp_symbols"}
+    monkeypatch.setenv("TRIAGE", "0")
+    assert runner.wiring(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")["triage"] is None
