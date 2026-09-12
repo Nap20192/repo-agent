@@ -24,7 +24,7 @@
   пакет `index/` (LSP-адаптеры и grep fallback: `lsp.py`, `grep.py`, `rpc.py`, `languages.py`, `callgraph.py`).
 - `scanner/app` — инструкции (`instructions.py`), колбэки (`callbacks.py`), агенты (`agents.py`),
   специалисты и роутер (`specialists.py`), knowledge AgentTool (`knowledge_agent.py`),
-  граф v2 (`pipeline_v2.py`), Reconciler (`reconcile.py`), domain-модель (`domain.py`),
+  граф Workflow (`pipeline_v3.py`, узлы в `graph_nodes.py`, общие помощники в `graph.py`), Reconciler (`reconcile.py`), domain-модель (`domain.py`),
   трассировка и сжатие (`observe.py`), сборка и прогон (`runner.py`), settings (`settings.py`).
 - `scanner/main.py` — только CLI, вся логика в `scanner/app/runner.py`.
 - `web/fullscan/agent.py` — точка входа `adk web` (тот же граф, установка via `uv sync`).
@@ -37,7 +37,8 @@ ArchitectureModel; ThreatModeler выдаёт заземлённые threats и 
 сливает якоря сканеров и threats в одну очередь без дублей, чеканя синтетический якорь
 (`tool=threatmodel`, file:line определения символа) для угроз без якоря сканера, чтобы гейт
 `report_finding` остался единственным и якорным. Артефакты стадий — в таблице `artifacts` State
-(resume пропускает готовые стадии). Lead (петля v1) вырезан: единственный граф — `PipelineV2`. `THREAT_MODEL=0` — без Architect/ThreatModeler.
+(resume пропускает готовые стадии). Граф — ADK 2.9 `Workflow` из четырёх узлов `build_skeleton → plan → investigate → finish`
+(ADR-0007; параллельная верификация — `parallel_worker`-узел, роутер специалистов в коде). `THREAT_MODEL=0` — без Architect/ThreatModeler.
 Инструкции стадий адаптированы из Mantis/Shannon (Apache-2.0), см. THIRD_PARTY_NOTICES.md.
 
 **Прямые находки (direct lane).** Якоря, которые точно случились — osv-зависимости, gitleaks-секреты,
@@ -126,7 +127,6 @@ uv run pytest -q
 | `BUGFINDER_MAX_ROUNDS` | раунды investigation | 4 |
 | `BUGFINDER_MAX_HYPS` | гипотез за раунд | 8 |
 | `BUGFINDER_MAX_PARALLEL` | параллельных Investigator'ов | 3 |
-| `JSON_RETRY` | повторить JSON-парсинг ответа модели | on |
 | `STAGE_TIMEOUT` | таймаут стадии в секундах | 600 |
 | `SPECIALISTS` | использовать специалистов (0 = одиночные Verifier/Critic) | on |
 | `THREAT_MODEL` | включить Architect/ThreatModeler | on |
@@ -165,5 +165,5 @@ git-aware обход osv-scanner ничего не находит в мелко�
 Модули: `scanner/core/{types,rules,calibrate,settings,ports,domain}.py` (доменный лист), `scanner/adapter/static.py`
 (сканеры → якоря), `scanner/adapter/{store,owasp,domain,dominance,knowledge,entrypoints,fs,skills}.py` (адаптеры),
 `scanner/adapter/tools/{common,code,lsp,gates,rosters}.py` (агент-тулы), `scanner/adapter/index/{lsp,grep,rpc,languages,callgraph}.py`
-(код индекс), `scanner/app/{agents,specialists,knowledge_agent,pipeline_v2,reconcile,domain}.py` (специалисты и граф),
+(код индекс), `scanner/app/{agents,specialists,knowledge_agent,pipeline_v3,graph_nodes,graph,reconcile,domain}.py` (специалисты и граф),
 `scanner/app/{callbacks,observe,runner,settings}.py` (исполнение), `scanner/main.py` (CLI, eval), `web/fullscan/agent.py` (`adk web`).

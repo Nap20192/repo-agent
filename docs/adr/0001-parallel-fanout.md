@@ -1,6 +1,9 @@
 ---
-status: accepted (2026-09-12)
+status: superseded by 0007 (2026-09-12)
 ---
+
+> Superseded by `docs/adr/0007-workflow-graph.md`: the graph root is now an ADK `Workflow`; `ParallelAgent` and
+> `_Graph._run_activations` are gone. The evidence below (a `Workflow` cannot run under a `BaseAgent` root) still holds.
 # Fan-out of Investigators/Critics stays on `ParallelAgent`; ADK `Workflow` is not usable inside our graph agent
 
 ## Context

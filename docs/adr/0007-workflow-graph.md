@@ -1,5 +1,5 @@
 ---
-status: proposed (2026-09-12)
+status: accepted (2026-09-12)
 ---
 # Migrate `PipelineV2` to the ADK 2.9 `Workflow` graph API
 
@@ -97,6 +97,19 @@ replaces the agent root itself.
 
 ## Status
 
-Proposed. Reviewed at GATE 1 alongside `docs/plans/workflow-migration.md`; moves to `accepted` when the
-blueprint's migration-order table is agreed, and to a closing note when card 43's merge gate is met (all
-pipeline tests green on the `Workflow` root, `adk web` renders the graph).
+Accepted 2026-09-12. Card 43 merged: steps 1–9 of `docs/plans/workflow-migration.md` landed, `PipelineV2`,
+`Graph`, `activation` and the `ParallelAgent` fan-out are deleted, the suite is green on the `Workflow` root,
+`adk web` renders the four-node graph, a live smoke on ollama runs end to end.
+
+## Resolved (what differed from the proposal)
+
+- No `state_schema`: ADK rejects undeclared keys and the budget callback writes per-branch keys; the shared keys
+  are documented in `scanner/core/workflow.py` only.
+- Direct findings run before the Architect (card 42's review), not inside `plan` after the stages.
+- Stage timeout is `asyncio.wait_for` around `ctx.run_node` (degrades to "no artifact"); the artifact-based
+  resume short-circuit stays because a CLI re-run is a fresh ADK session.
+- Every node reached through `ctx.run_node` needs `rerun_on_resume=True`; a child's exception arrives as
+  `DynamicNodeFailError` with the cause in `.error`.
+- A per-branch verifier budget surfaces as a soft "no Dossier JSON" dossier error, not the `budget` stop.
+- `ScanWorkflow(Workflow)` carries the `index` so the runner closes LSP servers as before.
+- The eval harness runs an agent as a dynamic node with the payload as the user turn (no `activation`).

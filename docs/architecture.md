@@ -57,16 +57,34 @@ validate» [King] — порты принимают уже проверенны�
 
 ## Отображение на Google ADK [ADK]
 
-- `PipelineV2(BaseAgent)` — custom agent с `_run_async_impl`; стадии = активации `LlmAgent`-клонов через
-  `ParallelAgent` в изолированных ветках (`stage_<name>`, `verify_round_<r>_<chunk>.verify_r<r>_<i>`, `critic_<i>`);
-  ADR-0001 фиксирует, почему не `Workflow`.
-- Один `LlmAgent` на специалиста строится раз на прогон; на активацию — `clone()` с инструкцией + payload
-  (`include_contents="none"`, история не растёт между раундами).
+- Граф — `Workflow` ADK 2.9 (`scanner/app/pipeline_v3.py`, ADR-0007): статический скелет из четырёх узлов,
+  тела которых — динамические узлы с собственным `try/except`, потому что ADK валит весь Workflow при ошибке
+  любого узла, а скан обязан деградировать, а не падать.
+
+  | Узел | Тип | LLM | Что делает |
+  |---|---|---|---|
+  | `build_skeleton` | `FunctionNode` | 0 | якоря пре-пасса (уже в State) + entry points → `ScanSkeleton` |
+  | `plan` | `@node(rerun_on_resume=True)` | 0–3 стадии | direct findings (без модели) → Architect → DomainModeler → ThreatModeler → grounding → очередь (`QueueState`) |
+  | `investigate` | `@node(rerun_on_resume=True)` | ≤ rounds·hyps | раунды: гейт гипотез → `route_and_verify` (parallel worker) → досье из фактов стора → reconcile новых гипотез |
+  | `finish` | `@node(rerun_on_resume=True)` | ≤ confirmed | `route_and_critique` над llm-подтверждёнными (direct — факты), артефакт `timings`, `stop_reason` |
+
+- Узлы живут в `scanner/app/graph_nodes.py`, строятся фабриками на прогон (замыкание на `RunStore` и агентов).
+  Параллельность — `@node(parallel_worker=True, max_parallel_workers=k)`: ADK раскладывает список элементов по
+  воркерам; ошибка одного элемента ловится внутри узла (иначе ADK отменяет всю пачку). Роутер CWE → специалист
+  остаётся в коде (`graph.pick_agent`), не в графе.
+- Один `LlmAgent` на специалиста строится раз на прогон; активация — `ctx.run_node(agent, payload)`: payload
+  (гипотеза/находка + скиллы + overlay) приходит моделью как user-ход, `include_contents="none"` не даёт истории
+  расти между раундами. Клонов и подмены инструкций больше нет.
 - `before_model_callback`: бюджет вызовов (per-branch, per-invocation для `AgentTool`, глобальный стоп только у
-  корневых стадий) и окно результатов тулов; `before_tool_callback`: лог.
-- Консультанты как `AgentTool` (Knowledge) — отдельная корневая инвокация со своим бюджетом.
-- Состояние: `session.state` для счётчиков и `stop_reason`, SQLite State (`.state/state.db`) как источник правды,
-  ADK-сессии в `.state/sessions.db` для `adk web`; спаны OTLP через `maybe_set_otel_providers`.
+  корневых стадий) и окно результатов тулов; `before_tool_callback`: лог. Колбэки висят на агентах и работают
+  под `run_node` без изменений.
+- Таймаут стадии — `asyncio.wait_for` вокруг `run_node` внутри `plan` (деградация до «нет артефакта»), не
+  `timeout=` узла (это уронило бы Workflow).
+- Resume: `plan` пропускает стадию, если её артефакт уже в State (CLI-перезапуск — новая ADK-сессия, replay
+  ADK этого не покрывает). Консультанты как `AgentTool` (Knowledge) — отдельная инвокация со своим бюджетом.
+- Состояние: `session.state` для счётчиков и `stop_reason` (ключи в `scanner/core/workflow.py`), SQLite State
+  (`.state/state.db`) как источник правды, ADK-сессии в `.state/sessions.db` для `adk web`; спаны OTLP через
+  `maybe_set_otel_providers`. `adk web` рендерит граф через `graph_serialization` (`/dev/apps/fullscan/build_graph`).
 
 ## Конвенции
 

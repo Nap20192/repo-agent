@@ -7,7 +7,7 @@ Read `README.md` for the pipeline, `BOARD.md` for the cards/contract, `docs/rnd/
 ```
 scanner/core      domain leaf: types (Literal vocabularies), rules, calibrate, settings, ports (Index parts, RunStore, Router)
 scanner/adapter   fs, entrypoints, static scanners, SQLite State, OWASP, skills, knowledge, domain, dominance, tools/ (package), index/ (LSP per language + grep)
-scanner/app       ADK agents (one `new_agent` factory), specialists registry + router, PipelineV2 graph, reconcile, callbacks, observe, runner (composition root)
+scanner/app       ADK agents (one `new_agent` factory), specialists registry + router, the ADK Workflow graph (pipeline_v3 + graph_nodes, helpers in graph), reconcile, callbacks, observe, runner (composition root)
 scanner/main.py   CLI only            eval/dataset.py  eval logic            web/fullscan/agent.py   adk web entrypoint (lazy)
 ```
 Arrows point inward: `core` imports nothing of ours; `adapter` never imports `app`; only `runner.py` wires adapter
@@ -30,7 +30,7 @@ uv run python scripts/ecc_rnd.py       # ECC catalog diff (see .claude/skills/ec
 - Work through ECC: `ecc:orch-add-feature` / `orch-fix-defect` / `orch-refine-code` → `tdd-workflow` →
   `code-reviewer` (+ `security-reviewer` when subprocesses, paths, secrets or the gate change). Honor GATE 1
   (plan) and GATE 2 (commit). Keep BOARD.md cards: owner, state, files, merge gate.
-- Tests first; a node or tool without a test is unfinished. Fakes live in `tests/test_graph.py`.
+- Tests first; a node or tool without a test is unfinished. Fakes live in `tests/fakes.py` (node-shaped doubles, `_workflow`, `_run`).
 - Never use the user's LLM keys for your own tests: use ollama (`LLM_BASE_URL=http://localhost:11434/v1`).
 - Findings exist only through the `report_finding` gate (the one exception is the deterministic direct lane:
   osv/gitleaks/semgrep-error anchors → `store.report` with dedup and enrichment, no model, no gate — card 42); secrets are redacted (`core.redact_secrets`); tool

@@ -1,5 +1,5 @@
 """Card 43 step 5: the v3 Workflow (START → build_skeleton → plan → investigate → finish) under the real ADK
-Runner with node doubles — the PipelineV2 contract (tests/test_stages.py, tests/test_graph.py) ported node by node.
+Runner with node doubles — the graph contract, node by node.
 Assertions are on the store and the session state, never on branch names."""
 
 import json
