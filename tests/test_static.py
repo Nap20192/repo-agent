@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from scanner.adapter import static as st
 from scanner.adapter.static import (
     anchors_from_sarif,
     entry_points,
@@ -11,6 +12,7 @@ from scanner.adapter.static import (
     read_lines,
     scan,
 )
+from scanner.core import new_anchor_id
 
 SAMPLE = Path(__file__).resolve().parent.parent / "samples" / "02-vulnshop"
 
@@ -148,3 +150,31 @@ def test_js_route_detector_is_linear_on_adversarial_lines(tmp_path):
     eps = entry_points(tmp_path)
     assert time.monotonic() - t0 < 1.0
     assert [(c.line, c.route) for c in eps] == [(2, ["GET /y"])]  # the long line is skipped, the inline handler found
+
+
+def test_gosec_runs_per_go_module(tmp_path, monkeypatch):
+    """A go.mod in a subdirectory (Photoview: api/go.mod) is scanned from that directory and paths are re-rooted."""
+    (tmp_path / "api").mkdir()
+    (tmp_path / "api" / "go.mod").write_text("module x\n")
+    (tmp_path / "api" / "main.go").write_text("package main\n")
+    (tmp_path / "frontend").mkdir()
+    (tmp_path / "frontend" / "index.ts").write_text("export {}\n")
+    calls = []
+
+    def fake_run(cmd, cwd, timeout=600):
+        calls.append(cwd)
+        return json.dumps({"runs": [{"tool": {"driver": {"name": "gosec", "rules": []}}, "results": [
+            {"ruleId": "G101", "level": "error", "message": {"text": "x"},
+             "locations": [{"physicalLocation": {"artifactLocation": {"uri": "main.go"}, "region": {"startLine": 1}}}]}]}]})
+    monkeypatch.setattr(st, "_run", fake_run)
+    anchors = st._gosec(tmp_path)
+    assert calls == [tmp_path / "api"]
+    assert [(a.file, a.line, a.rule_id) for a in anchors] == [("api/main.go", 1, "G101")]
+    assert anchors[0].id == new_anchor_id("gosec", "G101", "api/main.go", 1)
+
+
+def test_gosec_without_go_mod_runs_at_the_root(tmp_path, monkeypatch):
+    (tmp_path / "main.go").write_text("package main\n")
+    calls = []
+    monkeypatch.setattr(st, "_run", lambda cmd, cwd, timeout=600: calls.append(cwd) or "{}")
+    assert st._gosec(tmp_path) == [] and calls == [tmp_path]

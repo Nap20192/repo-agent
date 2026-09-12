@@ -127,7 +127,17 @@ def anchors_from_sarif(data: str, tool: str, target: Path) -> list[Anchor]:
 
 
 def _gosec(target: Path) -> list[Anchor]:
-    return anchors_from_sarif(_run(["gosec", "-fmt", "sarif", "-quiet", "-no-fail", "./..."], target), "gosec", target)
+    """gosec needs a module root as cwd: one run per go.mod (Photoview keeps its module in api/); the root
+    is used only when no go.mod exists. Reported paths are module-relative and get re-rooted to the target."""
+    out = []
+    for mod in sorted({p.parent for p in files(target) if p.name == "go.mod"}) or [target]:
+        sub = "" if mod == target else str(mod.relative_to(target))
+        for a in anchors_from_sarif(_run(["gosec", "-fmt", "sarif", "-quiet", "-no-fail", "./..."], mod), "gosec", mod):
+            if sub:
+                file = f"{sub}/{a.file}"
+                a = a.model_copy(update={"file": file, "id": new_anchor_id("gosec", a.rule_id, file, a.line)})
+            out.append(a)
+    return out
 
 
 # registry packs per language (validated against the registry; p/express does not exist)
