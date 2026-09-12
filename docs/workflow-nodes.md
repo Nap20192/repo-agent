@@ -1,6 +1,6 @@
 # Узлы рабочего графа сканера: вход, выход, «о чём думает» каждая нода
 
-Документ описывает граф скана репозитория — 24 узла (23 Shannon-графа + `scan`) из `docs/plans/shannon-graph.md` §2–3 — так, как
+Документ описывает граф скана репозитория — 24 узла статического Shannon-графа (ADR-0008) из `docs/plans/shannon-graph.md` §2–3 — так, как
 он существует в коде сегодня (4-узловой `Workflow` `scan`: `scan → build_skeleton → plan → investigate → finish`,
 `scanner/app/pipeline.py:212-215`) и как он спланирован (`scan_v4`, план §2, строки 65-78). Для каждой ноды
 различаются статусы **есть** (код с `file:line`), **частично** (поведение есть, но живёт внутри другого узла или в
@@ -38,36 +38,35 @@ flowchart TD
     route_intent -- "default" --> critic --> confirm --> calibrate --> export
 ```
 
-Сегодняшний граф (`pipeline.py:212-215`): `START → scan → build_skeleton → plan → investigate → finish`, где `plan`
-содержит `direct_findings`, три LLM-стадии, `ground` и `build_queue`; `investigate` — цикл раундов с triage и
-`route_and_verify`; `finish` — `route_and_critique` и отчёт.
+Сегодняшний граф (`pipeline.py:326-338`) совпадает с диаграммой: статический `Workflow` с fan-out на `architect`/`recon`,
+`JoinNode`, четырьмя route-картами и parallel-worker узлами; `audit` — единственный динамический цикл (ADR-0008).
 
 | # | Узел | Тип ADK (план §2/§3) | Статус | Вход → выход |
 |---|---|---|---|---|
 | 0 | `scan` | `FunctionNode` | есть (`graph_nodes.py:40-55`) | user turn → `{anchors, ran, failed}`; якоря → стор |
 | 1 | `build_skeleton` | `FunctionNode` | есть (`graph_nodes.py:39-43`) | user turn → `ScanSkeleton` |
 | 2 | `direct_findings` | `FunctionNode` | есть, вызывается изнутри `plan` (`pipeline.py:115`) | якоря стора → `{remaining, reported}` |
-| 3 | `architect` | `stage_node(LlmAgent single_turn, output_schema=ArchitectureModel)` | частично: `stage()` (`pipeline.py:92-110`) | `{target, entry_points, anchors}` (план — `DirectResult`) → артефакт `architecture_model` |
-| 4 | `recon` | `FunctionNode` | план (§3, строка 116) | `ScanSkeleton` → `ReconMap` |
-| 5 | `join_model` | `JoinNode` | план (§3, строка 117) | `{architect, recon}` → dict |
-| 6 | `domain_modeler` | `stage_node`, `output_schema=DomainMap` | частично (`pipeline.py:122-126`) | join dict → артефакт `domain_map` |
-| 7 | `threat_modeler` | `stage_node`, `output_schema=ThreatModel` | частично (`pipeline.py:127-134`) | am + dm (+ `recon.auth`, план) → артефакт `threat_model` |
+| 3 | `architect` | `stage_node(LlmAgent single_turn, output_schema=ArchitectureModel)` | есть (`pipeline.py:142 (stage_node)`) | `{target, entry_points, anchors}` (план — `DirectResult`) → артефакт `architecture_model` |
+| 4 | `recon` | `FunctionNode` | есть (`pipeline.py:146-159,309`) | `ScanSkeleton` → `ReconMap` |
+| 5 | `join_model` | `JoinNode` | есть (`pipeline.py:310 (JoinNode)`) | `{architect, recon}` → dict |
+| 6 | `domain_modeler` | `stage_node`, `output_schema=DomainMap` | есть (`pipeline.py:143`) | join dict → артефакт `domain_map` |
+| 7 | `threat_modeler` | `stage_node`, `output_schema=ThreatModel` | есть (`pipeline.py:144`) | am + dm (+ `recon.auth`, план) → артефакт `threat_model` |
 | 8 | `ground` | `FunctionNode` | есть (`reconcile.py:220-263`, вызов `pipeline.py:136-147`) | артефакты → `{dropped}` |
-| 9 | `plan` | `FunctionNode` | частично: `build_queue`/`coverage` есть, батчи — план | → `PlanState` |
-| 10 | `route_plan` | `FunctionNode` (route) | план (§3, строка 122) | `PlanState` → `empty` / default |
-| 11 | `triage_sweep` | `@node(parallel_worker)` над triage-агентом | частично: `triage_node` по одному item (`graph_nodes.py:115-135`) | `[batch]` → `[TriageBatch]` |
-| 12 | `fold_triage` | `FunctionNode` | частично: `triage_batch` (`pipeline.py:67-90`) | батчи + `PlanState` → `QueueState` |
-| 13 | `audit` | `@node(rerun_on_resume)` цикл + `route_and_verify` | частично: `investigate` (`pipeline.py:151-193`) | `QueueState` → `ResearchResult` |
-| 14 | `route_research` | `FunctionNode` (route) | план (§3, строка 126) | → `none` / `budget` / default |
-| 15 | `dedupe` | `FunctionNode` | частично: дедуп в `store.report` (`store.py:110-128`) | → `{merged}` |
-| 16 | `review` | `parallel_worker` над `LlmAgent(output_schema=ReviewVerdict)` | частично: `route_and_critique` (`graph_nodes.py:138-160`) | `[Finding]` → `[ReviewVerdict]` |
-| 17 | `route_survivors` | `FunctionNode` (route) | план (§3, строка 129) | → `none` / default |
-| 18 | `route_intent` | `FunctionNode` (route) | план (§3, строка 130) | `threat_model.intent` → `sample` / default |
-| 19 | `mark_sample` | `FunctionNode` | план (§3, строка 131) | → `annotate(viability=SAMPLE_OR_TEST)` |
-| 20 | `critic` | `parallel_worker` над `LlmAgent(output_schema=Viability)` | частично: маршруты viability в `CRITIC_INSTRUCTION` (`instructions.py:124-131`) | survivors → `[Viability]` |
-| 21 | `confirm` | `parallel_worker` над `LlmAgent(output_schema=Confirmation)` | план (§3, строка 133) | provisional → `[Confirmation]` |
-| 22 | `calibrate` | `FunctionNode` | частично: `core.calibrate` внутри `write_report` (`store.py:171-173,184`) | → annotate(calibration) |
-| 23 | `export` | `FunctionNode`, терминал | частично: `finish` + `runner.scan_full` (`pipeline.py:195-210`, `runner.py:176-181`) | → `ExportResult` |
+| 9 | `plan` | `FunctionNode` | есть (`pipeline.py:180-189,312`) | → `PlanState` |
+| 10 | `route_plan` | `FunctionNode` (route) | есть (`pipeline.py:190-194,313`) | `PlanState` → `empty` / default |
+| 11 | `triage_sweep` | `@node(parallel_worker)` над triage-агентом | есть (`graph_nodes.py:142-163, pipeline.py:193`) | `[batch]` → `[TriageBatch]` |
+| 12 | `fold_triage` | `FunctionNode` | есть (`pipeline.py:199-207`) | батчи + `PlanState` → `QueueState` |
+| 13 | `audit` | `@node(rerun_on_resume)` цикл + `route_and_verify` | есть (`pipeline.py:208-246`) | `QueueState` → `ResearchResult` |
+| 14 | `route_research` | `FunctionNode` (route) | есть (`pipeline.py:247-251`) | → `none` / `budget` / default |
+| 15 | `dedupe` | `FunctionNode` | есть (`pipeline.py:252-261`) | → `{merged}` |
+| 16 | `review` | `parallel_worker` над `LlmAgent(output_schema=ReviewVerdict)` | есть (`graph_nodes.py:199-214, pipeline.py:260`) | `[Finding]` → `[ReviewVerdict]` |
+| 17 | `route_survivors` | `FunctionNode` (route) | есть (`pipeline.py:262-265`) | → `none` / default |
+| 18 | `route_intent` | `FunctionNode` (route) | есть (`pipeline.py:266-268`) | `threat_model.intent` → `sample` / default |
+| 19 | `mark_sample` | `FunctionNode` | есть (`pipeline.py:269-275`) | → `annotate(viability=SAMPLE_OR_TEST)` |
+| 20 | `critic` | `parallel_worker` над `LlmAgent(output_schema=Viability)` | есть (`graph_nodes.py:215-229, pipeline.py:274`) | survivors → `[Viability]` |
+| 21 | `confirm` | `parallel_worker` над `LlmAgent(output_schema=Confirmation)` | есть (`graph_nodes.py:230-245, pipeline.py:280`) | provisional → `[Confirmation]` |
+| 22 | `calibrate` | `FunctionNode` | есть (`pipeline.py:282-288`) | → annotate(calibration) |
+| 23 | `export` | `FunctionNode`, терминал | есть (`pipeline.py:289-305`) | → `ExportResult` |
 
 Уточнения к таблице:
 - `architect`: сегодняшний вход — не `DirectResult`, а payload `{target, entry_points, anchors}`: target и entry points
@@ -211,7 +210,7 @@ semgrep-якорей run 18 имеют severity `info` (стор, run=18), по�
 
 **Тип ADK (план):** `stage_node(LlmAgent(mode="single_turn", output_schema=ArchitectureModel, output_key="architecture_model"))`
 — `@node(rerun_on_resume=True)` с `asyncio.wait_for(ctx.run_node(...), stage_timeout)` в `try/except` (план §2,
-строки 84-86). **Статус:** частично — та же логика живёт в локальной функции `stage()` (`pipeline.py:92-110`) и
+строки 84-86). **Статус:** есть (граф карты 45, `pipeline.py:142`; прежнее место — — та же логика живёт в локальной функции `stage()` (`pipeline.py:92-110`) и
 агенте `new_architect` (`agents.py:69-72`), JSON парсится из текста `_model_json` (`graph_nodes.py:77-81`), а не
 через `output_schema`.
 
@@ -290,7 +289,7 @@ Shannon `prompts/sast/capella/architecture.prompt.hbs` (KB: `architecture.md`, `
 
 ### 3.4 `recon`
 
-**Тип ADK (план):** `FunctionNode`. **Статус:** план (§3, строка 116) — кода узла нет. Существующие части, которые он
+**Тип ADK (план):** `FunctionNode`. **Статус:** есть (граф карты 45, `pipeline.py:146-159,309`; ниже описано прежнее место в коде) (§3, строка 116) — кода узла нет. Существующие части, которые он
 собирает: точки входа `adapter/entrypoints.entry_points` (`entrypoints.py:87`), словари источников/синков по языкам
 `LANG_OVERLAYS` (`instructions.py:335-350`, сегодня — текст инструкции), детектор guard-ов `adapter/domain._GUARD`
 (`domain.py:27`).
@@ -321,7 +320,7 @@ Python: `cursor.execute` с f-string, `subprocess shell=True`, `render_template_
 ### 3.5 `join_model`
 
 **Тип ADK (план):** `JoinNode` — единственный настоящий fan-in (план §2, строка 87: ждёт `architect` и `recon`,
-отдаёт `{name: output}`). **Статус:** план (§3, строка 117).
+отдаёт `{name: output}`). **Статус:** есть (граф карты 45, `pipeline.py:310`; прежнее место — (§3, строка 117).
 
 **Вход:** выходы `architect` (`architecture_model` или `None`) и `recon` (`ReconMap`). **Выход:**
 `{"architect": …, "recon": …}`.
@@ -341,7 +340,7 @@ Python: `cursor.execute` с f-string, `subprocess shell=True`, `render_template_
 
 ### 3.6 `domain_modeler`
 
-**Тип ADK (план):** `stage_node`, `output_schema=DomainMap`. **Статус:** частично — `stage(ctx, domain_modeler,
+**Тип ADK (план):** `stage_node`, `output_schema=DomainMap`. **Статус:** есть (граф карты 45, `pipeline.py:143`; ниже описано прежнее место в коде) — `stage(ctx, domain_modeler,
 "domain_map", …)` (`pipeline.py:122-126`), агент `new_domain_modeler` (`scanner/app/domain.py:39-41`).
 
 **Вход**
@@ -391,7 +390,7 @@ IDOR…», «Rule candidate in test/e2e/integration/profile_spec.js:54 lacks enf
 
 ### 3.7 `threat_modeler`
 
-**Тип ADK (план):** `stage_node`, `output_schema=ThreatModel`. **Статус:** частично (`pipeline.py:127-134`; агент
+**Тип ADK (план):** `stage_node`, `output_schema=ThreatModel`. **Статус:** есть (граф карты 45, `pipeline.py:144`; ниже описано прежнее место в коде) (`pipeline.py:127-134`; агент
 `new_threat_modeler`, `agents.py:75-77`).
 
 **Вход**
@@ -400,7 +399,7 @@ IDOR…», «Rule candidate in test/e2e/integration/profile_spec.js:54 lacks enf
 |---|---|---|
 | `architecture_model` | артефакт или пустая модель (`am`, `pipeline.py:121,128`) | `ArchitectureModel` |
 | `domain_map` | артефакт или `{}` | `DomainMap` |
-| `recon.auth` | план (§3, строка 119) | `list` |
+| `recon.auth` | узел `recon` через `join_model` (`pipeline.py:137-141`) | `list` |
 
 **Выход:** артефакт `threat_model` = `ThreatModel{threats[Threat{id, cwe, claim, symbol, file, line, wstg_id, priority,
 reads}], notes[str], intent: "production"|"sample"}` (`core/types.py:128-167`). `intent` нормализуется валидатором:
@@ -478,7 +477,7 @@ CWE-95 и `WSTG-CLNT-02 → WSTG-CLNT-04` для CWE-601; ни одна сущн
 
 ### 3.9 `plan`
 
-**Тип ADK (план):** `FunctionNode` (`build_queue` + `coverage` + новый `batch_files`). **Статус:** частично — очередь
+**Тип ADK (план):** `FunctionNode` (`build_queue` + `coverage` + новый `batch_files`). **Статус:** есть (граф карты 45, `pipeline.py:180-189,312`; ниже описано прежнее место в коде) — очередь
 есть (`reconcile.py:366-396`, вызов `pipeline.py:148`); батчи файлов, артефакт `plan` и схема
 `PlanState(QueueState){batches[[file]]}` — план (§3, строки 100,121).
 
@@ -553,7 +552,7 @@ investigation lists is never examined by anything downstream»), `:57-72` (Adver
 ### 3.10 `route_plan`
 
 **Тип ADK (план):** `FunctionNode`-роутер: `yield Event(route="empty", output=payload)`; без `route` срабатывает
-`DEFAULT_ROUTE` (план §2, строка 83). **Статус:** план (§3, строка 122).
+`DEFAULT_ROUTE` (план §2, строка 83). **Статус:** есть (граф карты 45, `pipeline.py:190-194,313`; прежнее место — (§3, строка 122).
 
 **Вход:** `PlanState`. **Выход:** маршрут `empty` → `export`, иначе default → `triage_sweep`; `output` = батчи.
 
@@ -570,7 +569,7 @@ always ends with a valid, empty SARIF artifact rather than an absent one». У �
 ### 3.11 `triage_sweep`
 
 **Тип ADK (план):** `@node(parallel_worker=True, max_parallel_workers=triage_parallel)` над `LlmAgent(output_schema=
-TriageBatch)`; один воркер — один батч файлов. **Статус:** частично — `triage_node` (`graph_nodes.py:115-135`)
+TriageBatch)`; один воркер — один батч файлов. **Статус:** есть (граф карты 45, `graph_nodes.py:142-163`; прежнее место — — `triage_node` (`graph_nodes.py:115-135`)
 классифицирует **один** baseline-item, вызывается из `triage_batch` внутри раунда `investigate` (`pipeline.py:67-90,
 171`); батчи по файлам, `TriageBatch`, repair и артефакт покрытия — план (§3, строка 123; §4, строки 144,157-158).
 
@@ -649,7 +648,7 @@ Shannon `triage.prompt.hbs`, `stages/research.ts:46-47,129-137,324-395`; пла�
 
 ### 3.12 `fold_triage`
 
-**Тип ADK (план):** `FunctionNode`. **Статус:** частично — свёртка результатов есть в `triage_batch`
+**Тип ADK (план):** `FunctionNode`. **Статус:** есть (граф карты 45, `pipeline.py:199-207`; ниже описано прежнее место в коде) — свёртка результатов есть в `triage_batch`
 (`pipeline.py:76-90`); отдельный узел, `PlanState → QueueState` и артефакт `triage_coverage` — план (§3, строка 124).
 
 **Вход:** выходы `triage_sweep` + принятый батч (сегодня) / `PlanState` (план). **Выход:** `(keep, rejected)`
@@ -678,7 +677,7 @@ missing[]`; `missing>0 ⇒ coverage=reduced` в `ExportResult`.
 
 **Тип ADK:** `@node(rerun_on_resume=True)` с Python-циклом раундов (`pipeline.py:213`), внутри — `route_and_verify`
 `@node(parallel_worker=True, max_parallel_workers=max_parallel, rerun_on_resume=True)` (`graph_nodes.py:111-112`).
-**Статус:** частично — сегодняшний `investigate` (`pipeline.py:151-193`) минус `triage_batch` (план §4, строка 143).
+**Статус:** есть (граф карты 45, `pipeline.py:208-246`; прежнее место — — сегодняшний `investigate` (`pipeline.py:151-193`) минус `triage_batch` (план §4, строка 143).
 
 **Вход**
 
@@ -805,7 +804,7 @@ not match anchor's 'app/routes/session.js'; line 72 does not match anchor's 53»
 
 ### 3.14 `route_research`
 
-**Тип ADK (план):** `FunctionNode`-роутер. **Статус:** частично — ветка `none` живёт в `finish` (critic пропускается
+**Тип ADK (план):** `FunctionNode`-роутер. **Статус:** есть (граф карты 45, `pipeline.py:247-251`; ниже описано прежнее место в коде) — ветка `none` живёт в `finish` (critic пропускается
 при 0 confirmed LLM-находок, `pipeline.py:199-200`); ветка `budget` есть как стоп-причина
 `InvestigateResult.stop == "budget"` (`pipeline.py:179,186-188`, `workflow.py:30`), но не как маршрут (`finish`
 только логирует, `pipeline.py:206-208`). Отдельный route-узел — план (§3, строка 126).
@@ -832,7 +831,7 @@ not match anchor's 'app/routes/session.js'; line 72 does not match anchor's 53»
 
 ### 3.15 `dedupe`
 
-**Тип ADK (план):** `FunctionNode`. **Статус:** частично — дедуп работает при записи в `store.report`
+**Тип ADK (план):** `FunctionNode`. **Статус:** есть (граф карты 45, `pipeline.py:252-261`; ниже описано прежнее место в коде) — дедуп работает при записи в `store.report`
 (`store.py:110-128`); отдельный узел `{merged}` со слиянием по похожести заголовка — план (§3, строка 127).
 
 **Вход:** находки стора. **Выход:** `{merged}`.
@@ -873,7 +872,7 @@ Shannon: `dedupe.prompt.hbs:30-35` — дубли только при совпа
 
 ### 3.16 `review`
 
-**Тип ADK (план):** `parallel_worker` над `LlmAgent(output_schema=ReviewVerdict)`. **Статус:** частично —
+**Тип ADK (план):** `parallel_worker` над `LlmAgent(output_schema=ReviewVerdict)`. **Статус:** есть (граф карты 45, `graph_nodes.py:199-214, pipeline.py:260`; ниже описано прежнее место в коде) —
 `route_and_critique` (`graph_nodes.py:138-160`) с `CRITIC_INSTRUCTION` (13 правил уже там, `instructions.py:98-122`);
 `ReviewVerdict`, чек-лист как данные, `RunStore.annotate(review=…)`, статусы `PROVISIONALLY_VALID`/`NEEDS_RESEARCH`,
 repair — план (§3, строки 102,105-107,128; §4 шаг 4).
@@ -975,7 +974,7 @@ confirmed → M survived` (`pipeline.py:204-205`).
 
 ### 3.17 `route_survivors`
 
-**Тип ADK (план):** `FunctionNode`-роутер. **Статус:** план (§3, строка 129).
+**Тип ADK (план):** `FunctionNode`-роутер. **Статус:** есть (граф карты 45, `pipeline.py:262-265`; ниже описано прежнее место в коде) (§3, строка 129).
 
 **Вход:** находки стора после `review`. **Выход:** `none` (0 confirmed находок после `review`; фильтр
 `source != "direct"` план не оговаривает — сегодня он живёт в `finish`, `pipeline.py:199`) → `export`; default →
@@ -991,7 +990,7 @@ confirm → calibrate, иначе export артефакта review. У нас su
 
 ### 3.18 `route_intent`
 
-**Тип ADK (план):** `FunctionNode`-роутер. **Статус:** план (§3, строка 130). Существующая часть: `Store._intent()`
+**Тип ADK (план):** `FunctionNode`-роутер. **Статус:** есть (граф карты 45, `pipeline.py:266-268`; ниже описано прежнее место в коде) (§3, строка 130). Существующая часть: `Store._intent()`
 читает `threat_model.intent`, по умолчанию `production` (`store.py:168-169`).
 
 **Вход:** артефакт `threat_model`. **Выход:** `sample` → `mark_sample`; default → `critic`. Нет артефакта →
@@ -1008,7 +1007,7 @@ Shannon-написание `SAMPLE_OR_TEST_ONLY` тоже даст `sample`.
 
 ### 3.19 `mark_sample`
 
-**Тип ADK (план):** `FunctionNode`. **Статус:** план (§3, строка 131); требует нового метода порта
+**Тип ADK (план):** `FunctionNode`. **Статус:** есть (граф карты 45, `pipeline.py:269-275`; ниже описано прежнее место в коде) (§3, строка 131); требует нового метода порта
 `RunStore.annotate(finding_id, **fields)`, который **отказывает** для `status/evidence/confidence` (§3, строки 104-105).
 
 **Вход:** id LLM-находок. **Выход:** `annotate(viability="SAMPLE_OR_TEST")` всем; далее `calibrate`. 0 вызовов
@@ -1102,7 +1101,7 @@ promotion = **повторный `report_finding` с большей `confidence`
 ### 3.22 `calibrate`
 
 **Тип ADK (план):** `FunctionNode` (+ опция `CALIBRATE_LLM=1`: `parallel_worker` с 27-правильным чек-листом на small-
-модели). **Статус:** частично — `core.calibrate` детерминирован (`calibrate.py:48-89`) и вызывается из
+модели). **Статус:** есть (граф карты 45, `pipeline.py:282-288`; прежнее место — — `core.calibrate` детерминирован (`calibrate.py:48-89`) и вызывается из
 `write_report`/`write_summary` (`store.py:171-173,184,210`); перенос в узел и `annotate(calibration)` — план (§3,
 строка 134; §4 шаг 7).
 
@@ -1157,7 +1156,7 @@ multiplier 0.448 (internal × 0.8 × 0.7 user_interaction) → 2.7 LOW (`interna
 ### 3.23 `export`
 
 **Тип ADK (план):** `FunctionNode`, единственный терминал, выполняется всегда (Shannon: export даже при fallback).
-**Статус:** частично — `finish` (`pipeline.py:195-210`) пишет `stop_reason` в state, артефакт `timings`, возвращает
+**Статус:** есть (граф карты 45, `pipeline.py:289-305`; прежнее место — — `finish` (`pipeline.py:195-210`) пишет `stop_reason` в state, артефакт `timings`, возвращает
 `Report{rounds, stop_reason, timings}` (`core/workflow.py:33-36`); SARIF/summary пишет `runner.scan_full`
 (`runner.py:174-181`) после сессии. План: `ExportResult(Report){coverage: complete|reduced, reductions[]}` и
 `properties{review, viability, repro_status, calibration, coverage}` (§3, строки 104,135). Сегодняшний `finish` перед
