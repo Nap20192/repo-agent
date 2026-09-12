@@ -32,7 +32,8 @@ uv run python scripts/ecc_rnd.py       # ECC catalog diff (see .claude/skills/ec
   (plan) and GATE 2 (commit). Keep BOARD.md cards: owner, state, files, merge gate.
 - Tests first; a node or tool without a test is unfinished. Fakes live in `tests/test_graph.py`.
 - Never use the user's LLM keys for your own tests: use ollama (`LLM_BASE_URL=http://localhost:11434/v1`).
-- Findings exist only through the `report_finding` gate; secrets are redacted (`core.redact_secrets`); tool
+- Findings exist only through the `report_finding` gate (the one exception is the deterministic direct lane:
+  osv/gitleaks/semgrep-error anchors → `store.report` with dedup and enrichment, no model, no gate — card 42); secrets are redacted (`core.redact_secrets`); tool
   outputs are capped; symlinks outside the target are invisible. Do not weaken these.
 - Ponytail: stdlib first, no abstraction with one implementation, mark deliberate corners `# ponytail:`.
 - `.env`, `.state/`, `.runs/`, `.targets/` are local; never commit them.

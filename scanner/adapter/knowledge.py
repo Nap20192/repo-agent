@@ -356,7 +356,8 @@ def imported_by(target: Path, package: str, max_files: int = 5000) -> int:
         if f.suffix not in fs.LANG_EXT:
             continue
         try:
-            text = f.read_bytes()[: fs.FILE_CAP].decode("utf-8", errors="ignore")
+            with f.open("rb") as fh:  # read at most FILE_CAP bytes; never slurp a multi-GB bundle to slice it
+                text = fh.read(fs.FILE_CAP).decode("utf-8", errors="ignore")
         except OSError:
             continue
         n += bool(pat.search(text))

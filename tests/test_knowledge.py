@@ -189,3 +189,13 @@ def test_imported_by_counts_source_files(tmp_path):
     assert kn.imported_by(tmp_path, "lodash") == 3
     assert kn.imported_by(tmp_path, "golang.org/x/text") == 1
     assert kn.imported_by(tmp_path, "nothing") == 0
+
+
+def test_imported_by_reads_at_most_file_cap_bytes(tmp_path, monkeypatch):
+    """An oversized source file is read only up to FILE_CAP (security review M1: no full read before the slice)."""
+    from scanner.adapter import fs
+    from scanner.adapter import knowledge as kn
+    monkeypatch.setattr(fs, "FILE_CAP", 64)
+    (tmp_path / "early.js").write_text("const x = require('lodash');\n" + "/" * 200)
+    (tmp_path / "late.js").write_text("/" * 200 + "\nconst y = require('lodash');\n")
+    assert kn.imported_by(tmp_path, "lodash") == 1
