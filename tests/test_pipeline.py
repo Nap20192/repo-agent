@@ -282,9 +282,11 @@ def test_workflow_is_the_static_shannon_graph():
 def test_recon_artifact_and_threat_modeler_gets_the_guards():
     run = FakeRun()
     tm = fake_stage_node(run, "threat_modeler", {"intent": "production", "threats": []})
-    rec = {"sources": [], "sinks": {"nosql": ["allocations.js:20"]}, "auth": ["session.js:12: isLoggedIn"], "config_files": ["server.js"]}
+    rec = {"sources": [Candidate(kind="entry", file="x.js", line=1, symbol="x")], "sinks": {"nosql": ["allocations.js:20"]},
+           "auth": ["session.js:12: isLoggedIn"], "config_files": ["server.js"]}
     _run(_workflow(run, threat_modeler=tm, recon_fn=lambda: rec))
-    assert run.artifact("recon") == rec
+    art = run.artifact("recon")
+    assert art["sinks"] == rec["sinks"] and art["sources"][0]["symbol"] == "x" and json.dumps(art)  # JSON-native
     seen = next(json.loads(t[5:]) for t, _ in notes_of(run) if t.startswith("seen:"))
     assert seen["auth"] == ["session.js:12: isLoggedIn"]
 

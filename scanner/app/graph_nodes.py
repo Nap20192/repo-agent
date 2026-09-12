@@ -164,11 +164,18 @@ def triage_sweep_node(triage, store: RunStore, max_parallel: int):
 
 
 def _annotating_worker(name: str, agent, store: RunStore, specialists: dict, router: Router | None, max_parallel: int,
-                       annotate: Callable[[dict, dict], None], role: str = "critique"):
+                       annotate: Callable[[dict, dict], None], role: str = "critique",
+                       select: Callable[[dict], dict | None] | None = None):
     """A parallel worker over the model's confirmed findings: {finding, anchor, specialist, skills} → the agent;
     its JSON becomes an annotation through `annotate(finding_dict, json)`; verdict changes only through the gates
-    inside the agent. No agent → 0 calls, the finding passes through."""
+    inside the agent. No agent → 0 calls, the finding passes through. `select` maps the incoming item to the
+    finding dict to work on (None = skip with 0 calls); by default the item IS the finding dict."""
     async def worker(ctx, node_input: dict) -> dict:
+        if select is not None:
+            picked_item = select(node_input)
+            if picked_item is None:
+                return {"finding_id": node_input.get("finding_id") or node_input.get("id", ""), "specialist": "", "error": "", "skipped": True}
+            node_input = picked_item
         f = Finding.model_validate(node_input)
         if agent is None:
             return {"finding_id": f.id, "specialist": "", "error": ""}
@@ -229,10 +236,16 @@ def viability_node(critic, store: RunStore, specialists: dict, router: Router | 
 
 def confirm_node(confirm, store: RunStore, max_parallel: int):
     """Static confirmation of PROVISIONALLY_VALID findings: Confirmation → annotation `repro_status`; promotion
-    happens inside the agent through a second report_finding with a higher confidence."""
+    happens inside the agent through a second report_finding with a higher confidence. Items whose review is
+    not provisional pass through with 0 calls (the worker's input is the viability worker's output list)."""
     from scanner.core.workflow import Confirmation
 
     def annotate(fd: dict, md: dict) -> None:
         c = Confirmation.model_validate({**md, "finding_id": fd["id"]})
         store.annotate(fd["id"], repro_status=c.repro_status)
-    return _annotating_worker("confirm", confirm, store, {}, None, max_parallel, annotate)
+
+    def only_provisional(item: dict) -> dict | None:
+        fid = item.get("finding_id") or item.get("id")
+        f = next((x for x in store.findings() if x.id == fid), None)
+        return f.model_dump() if f is not None and f.review.get("status") == "PROVISIONALLY_VALID" else None
+    return _annotating_worker("confirm", confirm, store, {}, None, max_parallel, annotate, select=only_provisional)

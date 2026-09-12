@@ -51,6 +51,7 @@ from scanner.core.workflow import (
     ExportResult,
     PlanState,
     QueueState,
+    ReconMap,
     ResearchResult,
     ScanSkeleton,
 )
@@ -149,7 +150,7 @@ def build_workflow(
         rec = {"sources": [], "sinks": {}, "auth": [], "config_files": []}
         if recon_fn is not None:
             try:
-                rec = recon_fn()
+                rec = ReconMap.model_validate(recon_fn()).model_dump()  # JSON-native: the artifact store dumps it
             except Exception as e:  # noqa: BLE001 — recon is an inventory; an error is an empty inventory
                 log.warning("recon failed: %s", e)
                 store.add_note(f"recon failed: {e}")
@@ -187,13 +188,11 @@ def build_workflow(
         return ps
 
     def route_plan(node_input: dict) -> Event:
-        return Event(route=planning.route_plan(node_input.get("queue", [])), output=node_input)
+        """empty → export; default → the triage sweep, which fans out one item per file batch."""
+        route = planning.route_plan(node_input.get("queue", []))
+        return Event(route=route, output=[{"files": b} for b in node_input.get("batches", [])] if route == "default" else node_input)
 
     sweep = triage_sweep_node(triage, store, triage_parallel)
-
-    def to_batches(node_input: dict) -> list:
-        """PlanState → the list the parallel triage worker fans out (each item = one batch of files)."""
-        return [{"files": b} for b in node_input.get("batches", [])]
 
     def fold(node_input: list) -> dict:
         ps = PlanState.model_validate(store.artifact("plan") or {})
@@ -272,11 +271,7 @@ def build_workflow(
 
     viab = viability_node(critic, store, specialists, router, max_parallel)
 
-    def provisional(node_input) -> list:
-        """Only PROVISIONALLY_VALID reviews go to confirm; everything else costs 0 calls."""
-        return [f.model_dump() for f in _llm(store) if f.review.get("status") == "PROVISIONALLY_VALID"]
-
-    conf = confirm_node(confirm, store, max_parallel)
+    conf = confirm_node(confirm, store, max_parallel)  # confirms only PROVISIONALLY_VALID reviews (0 calls otherwise)
 
     def calibrate(node_input) -> dict:
         intent = (store.artifact("threat_model") or {}).get("intent", "production")
@@ -310,7 +305,6 @@ def build_workflow(
     n_ground = FunctionNode(func=ground, name="ground")
     n_plan = node(plan, rerun_on_resume=True, name="plan")
     n_route_plan = FunctionNode(func=route_plan, name="route_plan")
-    n_batches = FunctionNode(func=to_batches, name="batches")
     n_fold = FunctionNode(func=fold, name="fold_triage")
     n_audit = node(audit, rerun_on_resume=True, name="audit")
     n_route_research = FunctionNode(func=route_research, name="route_research")
@@ -318,20 +312,19 @@ def build_workflow(
     n_route_surv = FunctionNode(func=route_survivors, name="route_survivors")
     n_route_intent = FunctionNode(func=route_intent, name="route_intent")
     n_mark = FunctionNode(func=mark_sample, name="mark_sample")
-    n_prov = FunctionNode(func=provisional, name="provisional")
     n_cal = FunctionNode(func=calibrate, name="calibrate")
     n_export = node(export, rerun_on_resume=True, name="export")
 
     edges = [
         (START, n_scan, n_skel, n_direct, (architect_node, n_recon), n_join, domain_node, threat_node, n_ground, n_plan, n_route_plan),
-        (n_route_plan, {"empty": n_export, DEFAULT_ROUTE: n_batches}),
-        (n_batches, sweep, n_fold, n_audit, n_route_research),
+        (n_route_plan, {"empty": n_export, DEFAULT_ROUTE: sweep}),
+        (sweep, n_fold, n_audit, n_route_research),
         (n_route_research, {"none": n_export, DEFAULT_ROUTE: n_dedupe}),
         (n_dedupe, rev, n_route_surv),
         (n_route_surv, {"none": n_export, DEFAULT_ROUTE: n_route_intent}),
         (n_route_intent, {"sample": n_mark, DEFAULT_ROUTE: viab}),
         (n_mark, n_cal),
-        (viab, n_prov, conf, n_cal, n_export),
+        (viab, conf, n_cal, n_export),
     ]
     # no state_schema: ADK rejects undeclared keys, and the budget callback writes per-branch keys (`budget_exhausted:<branch>`)
     return ScanWorkflow(name="scan", edges=edges, index=index)
