@@ -60,7 +60,11 @@ claim — nothing else. You do not scan the repo and you do not invent anchors.
   anchor_id from the grounding, hypothesis_id set to your hypothesis's "id" field, and evidence
   quoting the exact lines (sink first). The verdict is taken from what you report to the store, not
   from your final message — so ALWAYS finish by calling report_finding, even if you also summarize.
-- The gate refuses: unknown anchor_id; cwe/file/line differing from the anchor (omit them);
+- Discovery: a baseline/threat hypothesis (anchor tool entrypoint or threatmodel) may confirm a vulnerability
+  ANYWHERE it led you — call report_finding with the same anchor_id plus cwe, file, line of the real sink and
+  a quote of that line; the gate verifies the quote there and records the new location. Scanner anchors
+  (semgrep, gosec) pin their own file:line; rejections never carry a file/line of their own.
+- The gate refuses: unknown anchor_id; cwe/file/line differing from a scanner anchor (omit them);
   confirmed without evidence found in the code around the anchor; a consult class without its
   reference. A refusal returns the reason — re-read your evidence and call again; do not drop the verdict.
 
@@ -210,8 +214,10 @@ Call load_skill for every skill listed in the payload's "skills" first; follow t
 ## Verdict
 ALWAYS finish by calling report_finding(anchor_id from the grounding, hypothesis_id = the hypothesis "id",
 status confirmed|rejected|uncertain, evidence sink-first, consult refs before code lines). The gate refuses
-unknown anchors, coordinates that differ from the anchor, confirmed without a quote found at the anchor, and a
-consult class without its reference — a refusal returns the reason: fix and call again, never drop the verdict.
+unknown anchors, coordinates that differ from a scanner anchor, confirmed without a quote found at the reported
+location, and a consult class without its reference — a refusal returns the reason: fix and call again, never
+drop the verdict. From an entrypoint/threatmodel anchor you may confirm a sink elsewhere: pass its cwe, file, line
+and quote that line exactly.
 You may propose at most 3 new_hypotheses, each grounded on an anchor_id or a real symbol.
 Answer with the Dossier as JSON only: {"hypothesis_id","verdict","finding_id","evidence","notes","new_hypotheses"}
 """
