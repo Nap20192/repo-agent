@@ -12,3 +12,6 @@ __pycache__/
 # local target clones (adk web BUGFINDER_TARGET experiments)
 /ewq/
 /qwe/
+
+# compiled sample binaries
+*.exe
