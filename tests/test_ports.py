@@ -4,7 +4,7 @@ from scanner.adapter.index import FallbackIndex, GrepIndex, MultiIndex, build_in
 from scanner.adapter.index.languages import LANGUAGES
 from scanner.adapter.index.lsp import LspIndex
 from scanner.adapter.store import Store
-from scanner.app.specialists import ROUTER
+from scanner.app.agents.registry import route_name as ROUTER
 from scanner.core.ports import (
     CallGraph,
     Closeable,

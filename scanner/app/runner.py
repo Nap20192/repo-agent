@@ -15,6 +15,7 @@ from google.adk.apps import App
 from google.adk.errors._stale_session_error import StaleSessionError
 from google.adk.runners import Runner
 from google.adk.sessions.sqlite_session_service import SqliteSessionService
+from google.adk.tools.agent_tool import AgentTool
 from google.genai import types
 
 from scanner import core
@@ -23,34 +24,12 @@ from scanner.adapter import recon as recon_adapter
 from scanner.adapter.index import build_index
 from scanner.adapter.knowledge import KnowledgeConfig
 from scanner.adapter.store import Store
-from scanner.adapter.tools import (
-    architect_tools,
-    confirm_tools,
-    critic_tools,
-    review_tools,
-    subset,
-    triage_tools,
-    verifier_tools,
-    viability_tools,
-)
-from scanner.app.agents import (
-    new_architect,
-    new_confirm,
-    new_critic,
-    new_review,
-    new_threat_modeler,
-    new_triage,
-    new_triage_batch,
-    new_verifier,
-    new_viability,
-)
-from scanner.app.domain import new_domain_modeler
-from scanner.app.knowledge_agent import make_consult_knowledge, new_knowledge_agent
+from scanner.adapter.tools import ToolContext
+from scanner.app.agents import build
+from scanner.app.agents.registry import AGENTS, ROSTER, architect_overlay, route_name
 from scanner.app.observe import compaction_config, setup_tracing
 from scanner.app.pipeline import build_workflow
 from scanner.app.settings import Settings, apply_dotenv
-from scanner.app.specialists import REGISTRY, architect_overlay, route_name
-from scanner.app.specialists import build as build_specialists
 from scanner.core import Candidate
 from scanner.core.ports import Index
 
@@ -59,11 +38,7 @@ log = logging.getLogger("scanner.runner")
 APP_NAME = "fullscan"  # = the agent folder under web/, so CLI sessions show in the same app of the ADK UI
 SESSION_USER = "user"  # the ADK dev UI lists this user's sessions
 
-# Agents `wiring` does not build (the graph uses their batch / viability siblings): `standalone` builds them itself.
-EXTRA_AGENTS = ("triage", "critic", "knowledge")
-# Every LlmAgent of the project by its `.name`: one `adk create` app each under web/ (card 46).
-ROSTER = ("architect", "domain_modeler", "threat_modeler", "triage_batch", "verify", "review", "viability", "confirm",
-          *EXTRA_AGENTS, *(spec.name for spec in REGISTRY))
+__all__ = ["ROSTER", "build_agent", "prepare", "scan_full", "standalone", "wiring"]  # ROSTER: every agent name (web/<name>)
 
 
 def load_env(path: str = ".env") -> None:
@@ -119,34 +94,45 @@ async def run_session(agent, target: str, run_id: int, settings: Settings | None
     return dict(s.state) if s else {}
 
 
+def build_agents(model, run, target: Path, index: Index, s: Settings) -> dict[str, LlmAgent | None]:
+    """Every agent of the registry for one run, by name — None when its Settings flag is off (the graph keeps the
+    node as a no-op of the same name). One Knowledge AgentTool per consults_knowledge specialist (own budget each);
+    the Architect gets the stack overlay of the target's languages."""
+    ctx = ToolContext(target, run, index=index, settings=s)
+    overlay = architect_overlay(fs.detect_langs(target))
+    out: dict[str, LlmAgent | None] = {}
+    for spec in AGENTS.values():
+        if spec.flag and not getattr(s, spec.flag):
+            out[spec.name] = None
+            continue
+        extra = [AgentTool(build(AGENTS["knowledge"], model, ctx, s))] if spec.consults_knowledge else None
+        out[spec.name] = build(spec, model, ctx, s, overlay=overlay if spec.name == "architect" else "", extra_tools=extra)
+    return out
+
+
 def wiring(run, target: Path, entries: list[Candidate], model, index: Index | None = None,
            settings: Settings | None = None, deps: bool = False) -> dict:
     """Everything the graph needs for one run, by keyword: agents (Architect → DomainModeler → ThreatModeler,
-    Investigator + specialists, Critic), the store, the index-backed callables and the budgets."""
+    Investigator + specialists, the verdict ladder), the store, the index-backed callables and the budgets."""
     s = settings or Settings.from_env()
     index = index or build_index(target, max_files=s.index_max_files, max_bytes=s.index_max_bytes)  # LSP per language, grep fallback
     has_symbol = index.has_symbol
     langs = fs.detect_langs(target)
-    specialists = build_specialists(  # the Knowledge consultant is injected at construction (one AgentTool per user)
-        model, run, target, index, knowledge_factory=lambda: make_consult_knowledge(model, s.knowledge_max_calls),
-    ) if s.specialists else {}
+    agents = build_agents(model, run, target, index, s)
     return {
         "index": index,
         "scan_fn": lambda: static.scan(target, skip_deps=not deps and s.skip_deps, knowledge_cfg=run.knowledge),
-        "architect": new_architect(model, architect_tools(run, target, index=index), s.architect_max_calls,
-                                overlay=architect_overlay(langs)) if s.threat_model else None,
-        "domain_modeler": new_domain_modeler(model, architect_tools(run, target, index=index), s.domain_modeler_max_calls)
-        if s.threat_model and s.domain_model else None,
-        "threat_modeler": new_threat_modeler(model, subset(architect_tools(run, target, index=index), {"consult_owasp", "read_file", "grep"}),
-                                             s.threat_modeler_max_calls) if s.threat_model else None,
-        "specialists": specialists,
+        "architect": agents["architect"],
+        "domain_modeler": agents["domain_modeler"] if s.threat_model else None,  # the domain stage rides on the threat model
+        "threat_modeler": agents["threat_modeler"],
+        "specialists": {n: a for n, a in agents.items() if AGENTS[n].role and (AGENTS[n].kinds or AGENTS[n].cwes) and a is not None},
         "router": route_name,
-        "verifier": new_verifier(model, verifier_tools(run, target, index=index), s.verifier_max_calls),
+        "verifier": agents["verify"],
         # the verdict ladder (Shannon review → critic → confirm); CRITIC=0 turns all three off, the nodes stay
-        "review": new_review(model, review_tools(run, target, index=index), s.review_max_calls) if s.critic else None,
-        "critic": new_viability(model, viability_tools(run, target, index=index), s.viability_max_calls) if s.critic else None,
-        "confirm": new_confirm(model, confirm_tools(run, target, index=index), s.confirm_max_calls) if s.critic else None,
-        "triage": new_triage_batch(model, triage_tools(run, target, index=index), s.triage_max_calls) if s.triage else None,
+        "review": agents["review"],
+        "critic": agents["viability"],
+        "confirm": agents["confirm"],
+        "triage": agents["triage_batch"],
         "recon_fn": (lambda: recon_adapter.recon(target, entries, langs, index)) if s.recon else None,
         "knowledge_cfg": getattr(run, "knowledge", None),
         "triage_batch": s.triage_batch,
@@ -221,14 +207,10 @@ def _shared_run(target: Path, s: Settings) -> tuple:
         run.knowledge = KnowledgeConfig.from_settings(s)
         index = build_index(target, max_files=s.index_max_files, max_bytes=s.index_max_bytes)
         model = model_from_env(s)
-        w = wiring(run, target, entrypoints.entry_points(target), model, index, s)
-        res = w["scan_fn"]()  # the graph's `scan` node, once: anchors are what the investigators and gates work on
+        res = static.scan(target, skip_deps=s.skip_deps, knowledge_cfg=run.knowledge)  # the graph's `scan` node, once
         run.save_anchors(res.anchors)
         run.put_artifact("scan", {"anchors": len(res.anchors), "ran": res.ran, "failed": res.failed})
-        agents = {a.name: a for a in w.values() if isinstance(a, LlmAgent)} | dict(w["specialists"])
-        agents["triage"] = new_triage(model, triage_tools(run, target, index=index), s.triage_max_calls)
-        agents["critic"] = new_critic(model, critic_tools(run, target, index=index), s.critic_max_calls)
-        agents["knowledge"] = new_knowledge_agent(model, s.knowledge_max_calls)
+        agents = build_agents(model, run, target, index, s)
     except Exception as e:
         run.finish("failed", str(e))
         store.close()

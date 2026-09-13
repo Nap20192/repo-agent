@@ -1,6 +1,7 @@
 """Knowledge consultant: DB clients (fixtures, no network), cache, osv enrichment rounds, reachability."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -126,12 +127,16 @@ def test_reachable_symbols_via_index():
 
 
 def test_knowledge_agent_builds_and_exposes_tools(offline):
-    from scanner.app.knowledge_agent import make_consult_knowledge, new_knowledge_agent
+    from google.adk.tools.agent_tool import AgentTool
 
-    agent = new_knowledge_agent("gemini-flash-lite-latest", max_calls=5)
+    from scanner.adapter.tools import ToolContext
+    from scanner.app.agents import build
+    from scanner.app.agents.registry import AGENTS
+
+    agent = build(AGENTS["knowledge"], "gemini-flash-lite-latest", ToolContext(Path(".")))
     names = {t.__name__ for t in agent.tools if callable(t)}
-    assert names >= {"osv_query", "ghsa", "nvd_cve", "epss", "kev", "deps_dev"} and "web_search" not in names
-    tool = make_consult_knowledge("gemini-flash-lite-latest")
+    assert names >= {"osv_query", "ghsa", "nvd_cve", "epss", "kev", "deps_dev"} and "web_search" not in names  # no Tavily in Settings
+    tool = AgentTool(agent)
     assert tool.name == "knowledge" and tool.agent is not None
 
 

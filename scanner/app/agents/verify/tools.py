@@ -1,0 +1,23 @@
+"""Tool roster of `verify`: registry names, in the order the model should see them."""
+
+ROSTER = (
+    'report_finding',
+    'read_file',
+    'grep',
+    'shell',
+    'consult_domain',
+    'lsp_symbols',
+    'lsp_definition',
+    'lsp_references',
+    'lsp_callers',
+    'lsp_callees',
+    'lsp_path_to_entry',
+    'list_anchors',
+    'list_findings',
+    'note_add',
+    'note_list',
+    'consult_knowledge',
+    'consult_owasp',
+    'list_skills',
+    'load_skill',
+)

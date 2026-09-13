@@ -4,8 +4,8 @@
 import pytest
 
 from scanner.adapter.skills import SKILLS
-from scanner.app import specialists as sp
-from scanner.app.instructions import OPERATING_PRINCIPLES
+from scanner.app.agents import registry as sp
+from scanner.app.agents.shared import OPERATING_PRINCIPLES
 from scanner.core import Finding, Hypothesis
 from tests.fakes import IDOR, SQL, FakeRun
 
@@ -28,7 +28,7 @@ def test_route_cwe_beats_kind_then_kind_then_generic():
     assert sp.route(Hypothesis(kind="sink", cwe="CWE-287", claim="x"))[0].name == "authz"  # A07 authentication
     assert sp.route(Hypothesis(kind="entry", cwe="", claim="x"))[0].name == "taint"  # entry points are taint work
     assert sp.route(Hypothesis(kind="sink", cwe="CWE-9999", claim="x"))[0].name == "taint"  # unknown CWE: kind decides
-    assert sp.route(Hypothesis(kind="other", cwe="CWE-9999", claim="x"))[0].name == "verifier"  # generic fallback
+    assert sp.route(Hypothesis(kind="other", cwe="CWE-9999", claim="x"))[0].name == "verify"  # generic fallback
     assert sp.route_name(Hypothesis(kind="other", cwe="", claim="x"), "go", "investigate") == ("", sp.LANG_OVERLAYS["go"])
     assert sp.route_name(Finding(cwe="CWE-89", title="t"), "", "critique") == ("taint_critic", "")
 
@@ -58,12 +58,12 @@ def test_max_calls_env_override(monkeypatch):
 
 def test_build_makes_one_agent_per_specialist(tmp_path):
     (tmp_path / "main.go").write_text("package main\n")
-    agents = sp.build("gemini-flash-lite-latest", FakeRun([SQL, IDOR], dedup=True), tmp_path, None)
+    agents = sp.build_specialists("gemini-flash-lite-latest", FakeRun([SQL, IDOR], dedup=True), tmp_path, None)
     assert set(agents) == {s.name for s in sp.REGISTRY}
     for s in sp.REGISTRY:
         a = agents[s.name]
         assert a.name == s.name and a.instruction.startswith(OPERATING_PRINCIPLES) and a.include_contents == "none"
-        assert {t.__name__ for t in a.tools} == s.tool_names
+        assert {t.__name__ for t in a.tools} == set(s.tools)
 
 
 @pytest.mark.parametrize("name,must,must_not", [
@@ -78,7 +78,7 @@ def test_build_makes_one_agent_per_specialist(tmp_path):
 ])
 def test_tool_subsets(name, must, must_not):
     s = next(x for x in sp.REGISTRY if x.name == name)
-    assert must <= s.tool_names and not (must_not & s.tool_names)
+    assert must <= set(s.tools) and not (must_not & set(s.tools))
 
 
 def test_architect_overlay_by_stack():
@@ -93,13 +93,13 @@ def test_top10_coverage_maps_every_category_to_existing_specialists():
         for part in who.replace("(502)", "").split("+"):
             assert part in names, (cat, part)
     config = next(x for x in sp.REGISTRY if x.name == "config")
-    assert config.max_calls == 12 and {"CWE-614", "CWE-532", "CWE-1357"} <= config.cwes
+    assert config.budget == 12 and {"CWE-614", "CWE-532", "CWE-1357"} <= config.cwes
     secrets = next(x for x in sp.REGISTRY if x.name == "secrets")
     assert secrets.cwes == frozenset({"CWE-798", "CWE-312", "CWE-321"})
 
 
 def test_route_translates_lang_ext_names_to_overlays():
-    from scanner.app import specialists as sp
+    from scanner.app.agents import registry as sp
     from scanner.core import Hypothesis
     h = Hypothesis(kind="sink", cwe="CWE-89", claim="x", reads=["a.ts"])
     _, ts = sp.route(h, "typescript")

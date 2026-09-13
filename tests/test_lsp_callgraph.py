@@ -132,7 +132,7 @@ def test_lsp_tools_expose_call_hierarchy(tmp_path):
         def close(self): return None
 
     (tmp_path / "main.go").write_text("package main\n")
-    t = {f.__name__: f for f in tools._lsp_tools(tmp_path, Idx(), entries_fn=lambda: ["main"])}
+    t = {f.__name__: f for f in tools.make(["lsp_symbols", "lsp_definition", "lsp_references", "lsp_callers", "lsp_callees", "lsp_path_to_entry"], tools.ToolContext(tmp_path, index=Idx(), entries_fn=lambda: ["main"]))}
     assert {"lsp_callers", "lsp_callees", "lsp_path_to_entry"} <= set(t)
     assert t["lsp_callers"]("login")["callers"] == [{"file": "main.go", "line": 11, "symbol": "pingHandler"}]
     assert t["lsp_callees"]("pingHandler")["callees"] == [{"file": "main.go", "line": 5, "symbol": "login"}]

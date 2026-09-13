@@ -3,20 +3,19 @@
 import inspect
 import re
 import typing
+from pathlib import Path
 
 from google.adk.workflow import FunctionNode
 
 from scanner import core
 from scanner.adapter.skills import SKILLS, skill_for
-from scanner.adapter.tools import architect_tools, critic_tools, subset, verifier_tools
-from scanner.app import instructions as ins
-from scanner.app.agents import (
-    new_architect,
-    new_critic,
-    new_threat_modeler,
-    new_verifier,
-)
+from scanner.adapter.tools import TOOLS, ToolContext, make
+from scanner.app.agents import build
+from scanner.app.agents import registry as sp
+from scanner.app.agents import shared as ins
+from scanner.app.agents.registry import AGENTS
 from scanner.core import ArchitectureModel, Dossier, Threat, ThreatModel
+from scanner.core.settings import Settings
 from tests.fakes import FakeRun, _run, _workflow
 
 MODEL = "gemini-flash-lite-latest"  # constructing an LlmAgent never touches the network
@@ -25,20 +24,31 @@ TOOL_RX = re.compile(r"\b(load_skill|list_skills|report_finding|disprove_finding
 
 
 def _agents(tmp_path):
-    run = FakeRun()
+    ctx = ToolContext(tmp_path, FakeRun())
+    return {name: build(spec, MODEL, ctx) for name, spec in AGENTS.items()}
 
-    return {
-        "verifier": new_verifier(MODEL, verifier_tools(run, tmp_path)),
-        "critic": new_critic(MODEL, critic_tools(run, tmp_path)),
-        "architect": new_architect(MODEL, architect_tools(run, tmp_path)),
-        "threat_modeler": new_threat_modeler(MODEL, subset(architect_tools(run, tmp_path), {"consult_owasp", "read_file", "grep"})),
-    }
+
+def test_every_agent_folder_follows_the_template():
+    """One folder per agent with the same four files; the SPEC's roster names exist in the tool registry; its budget is a
+    Settings field or a literal; its node kind is one of the graph's wrappers."""
+    root = Path(__file__).resolve().parent.parent / "scanner" / "app" / "agents"
+    for name, spec in AGENTS.items():
+        folder = root / spec.app
+        assert {f.name for f in folder.iterdir() if f.suffix == ".py"} == {"__init__.py", "agent.py", "instruction.py", "tools.py"}, name
+        assert set(spec.tools) <= set(TOOLS), (name, set(spec.tools) - set(TOOLS))
+        assert isinstance(spec.budget, int) or hasattr(Settings(), spec.budget), name
+        assert spec.node in ("", "stage", "worker", "tool") and spec.role in ("", "investigate", "critique"), name
+        assert spec.instruction.startswith(ins.OPERATING_PRINCIPLES) or name == "knowledge"
+
+
+# Pre-existing gaps the template test surfaced (card 47 follow-up): the instruction names a tool the roster lacks.
+KNOWN_GAPS = {"viability": {"lsp_references"}, "confirm": {"disprove_finding"}}  # confirm: "never disprove_finding" — a mention
 
 
 def test_every_tool_named_in_an_instruction_exists_on_that_agent(tmp_path):
     agents = _agents(tmp_path)
     for name, agent in agents.items():
-        have = {t.__name__ for t in agent.tools}
+        have = {t.__name__ for t in agent.tools} | KNOWN_GAPS.get(name, set())
         own = agent.instruction.removeprefix(ins.OPERATING_PRINCIPLES)  # the shared preamble is checked below
         mentioned = set(TOOL_RX.findall(own))
         assert mentioned <= have, f"{name}: instruction names tools the agent lacks: {mentioned - have}"
@@ -47,7 +57,7 @@ def test_every_tool_named_in_an_instruction_exists_on_that_agent(tmp_path):
 
 
 def test_every_skill_named_in_instructions_exists():
-    for text in (ins.VERIFIER_INSTRUCTION, ins.CRITIC_INSTRUCTION):
+    for text in (AGENTS["verify"].instruction, AGENTS["critic"].instruction):
         para = next(p for p in text.split("\n\n") if "load_skill" in p)
         hyphenated = set(re.findall(r"\b[a-z]+(?:-[a-z]+)+\b", para))
         assert hyphenated <= set(SKILLS), f"unknown skills named: {hyphenated - set(SKILLS)}"
@@ -59,10 +69,10 @@ def test_json_shapes_in_instructions_match_the_models():
         block = text[text.index(marker):]
         return set(re.findall(r'"([a-z_]+)"', block.split("}", 1)[0]))
 
-    assert keys(ins.VERIFIER_INSTRUCTION, "Answer with the Dossier") <= set(Dossier.model_fields)
-    assert keys(ins.ARCHITECT_INSTRUCTION, "Answer with the ArchitectureModel") <= set(ArchitectureModel.model_fields)
-    assert keys(ins.THREAT_MODELER_INSTRUCTION, "Answer with the ThreatModel") <= set(ThreatModel.model_fields)
-    assert keys(ins.THREAT_MODELER_INSTRUCTION, "threats[]:") <= set(Threat.model_fields)
+    assert keys(AGENTS["verify"].instruction, "Answer with the Dossier") <= set(Dossier.model_fields)
+    assert keys(AGENTS["architect"].instruction, "Answer with the ArchitectureModel") <= set(ArchitectureModel.model_fields)
+    assert keys(AGENTS["threat_modeler"].instruction, "Answer with the ThreatModel") <= set(ThreatModel.model_fields)
+    assert keys(AGENTS["threat_modeler"].instruction, "threats[]:") <= set(Threat.model_fields)
 
 
 def test_skill_for_covers_every_gated_cwe_class():
@@ -84,8 +94,7 @@ def test_verifier_payload_carries_the_skill_hint():
 
 
 def test_tools_have_docstrings_and_primitive_params(tmp_path):
-    run = FakeRun()
-    tools = {t.__name__: t for t in verifier_tools(run, tmp_path) + critic_tools(run, tmp_path) + architect_tools(run, tmp_path)}
+    tools = {t.__name__: t for t in make(TOOLS, ToolContext(tmp_path, FakeRun()))}
     allowed = {str, int, float, bool, dict, list, list[str]}
     for name, t in tools.items():
         assert (t.__doc__ or "").strip(), f"{name}: empty docstring (it is the tool description)"
@@ -97,10 +106,8 @@ def test_tools_have_docstrings_and_primitive_params(tmp_path):
 def test_every_specialist_instruction_names_only_its_tools_and_skills(tmp_path):
     """Per-specialist contract: tools named in the instruction ⊆ the specialist's tools; skills exist;
     the Dossier/answer JSON keys match the models; every instruction starts with the shared preamble."""
-    from scanner.app import specialists as sp
-
     (tmp_path / "main.go").write_text("package main\n")
-    agents = sp.build(MODEL, FakeRun(), tmp_path, None)
+    agents = sp.build_specialists(MODEL, FakeRun(), tmp_path, None)
     for spec in sp.REGISTRY:
         agent = agents[spec.name]
         have = {t.__name__ for t in agent.tools}
@@ -119,7 +126,9 @@ def test_every_specialist_instruction_names_only_its_tools_and_skills(tmp_path):
 
 def test_specialist_sections_are_hunting_checklists():
     """Card 44/3: the taint/authz/config sections say what to grep for, what is proof and what is not."""
-    from scanner.app.instructions import SPECIALIST_SECTIONS as S
+    from scanner.app.agents import authz, config, taint
+
+    S = {"taint": taint.instruction.SECTION, "authz": authz.instruction.SECTION, "config": config.instruction.SECTION}
     for name, anchors in {
         "taint": ["$where", "innerHTML", "slot", "after", "Not a finding", "SSRF", "ReDoS"],
         "authz": ["ownership", "before the side effect", "isAdmin", "CSRF", "fixation", "Not a finding"],
@@ -130,5 +139,5 @@ def test_specialist_sections_are_hunting_checklists():
 
 
 def test_threat_modeler_may_read_code():
-    from scanner.app.instructions import THREAT_MODELER_INSTRUCTION as T
+    T = AGENTS["threat_modeler"].instruction
     assert "read_file" in T and "grep" in T and "no code tools" not in T

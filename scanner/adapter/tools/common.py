@@ -1,19 +1,15 @@
-"""Shared pieces of the agent tools: caps, path confinement, shell quoting, and the tools every role gets
-(anchors, findings, notes, consult_knowledge, consult_owasp). Every tool returns a dict; errors are
-{"status": "error", "reason": ...}, never raised into the model."""
+"""Shared pieces of the agent tools: output caps, path confinement, shell quoting, default reader/index.
+Every tool returns a dict; errors are {"status": "error", "reason": ...}, never raised into the model."""
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from pathlib import Path
 
-from scanner.adapter import knowledge as kn
 from scanner.adapter import static
 from scanner.adapter.fs import (
-    inside,  # noqa: F401 — re-export: the one path-confinement helper
+    inside,
 )
-from scanner.adapter.owasp import consult_owasp
 from scanner.core.ports import Index
 
 OUT_CAP = 20_000
@@ -23,7 +19,6 @@ DEF_CAP = 120  # lines of a definition body returned by lsp_definition
 SYM_CAP = 200  # symbols listed by lsp_symbols
 READ_WINDOW = 60
 SHELL_TIMEOUT = 60
-_ADVISORY_ID = re.compile(r"^(GHSA|CVE|PYSEC|GO|RUSTSEC|OSV)-", re.IGNORECASE)
 
 
 def err(reason: str) -> dict:
@@ -59,67 +54,8 @@ def quotes_in_target(target: Path, quotes: list[str]) -> bool:
     return False
 
 
-def _advisories(vulns: list[dict]) -> dict:
-    out = []
-    for v in vulns[:5]:
-        patched = v.get("fixed") or [
-            ev.get("fixed")
-            for aff in v.get("affected", [])
-            for rg in aff.get("ranges", [])
-            for ev in rg.get("events", [])
-            if ev.get("fixed")
-        ]
-        out.append({
-            "ref": f"knowledge:{v['id']}",
-            "summary": (v.get("summary") or v.get("details") or "")[:300],
-            "affected": [a.get("package", {}).get("name") for a in v.get("affected", [])][:5],
-            "patched": patched[:5],
-        })
-    return {"advisories": out}
 
 
-def common_tools(run) -> list[Callable]:
-    """Tools shared by every role: anchors, findings, notes, knowledge and OWASP consultants."""
-
-    def list_anchors(cwe: str = "", severity: str = "", file: str = "", limit: int = 0) -> dict:
-        """List static-analysis anchors (facts file:line found by scanners). Every finding
-        must reference one of these by anchor_id. Filter by cwe, severity, file; limit the count."""
-        all_ = run.anchors()
-        out = [
-            a.model_dump()
-            for a in all_
-            if (not cwe or a.cwe == cwe)
-            and (not severity or a.severity == severity)
-            and (not file or a.file == file)
-        ]
-        return {"anchors": out[:limit] if limit > 0 else out, "total": len(all_)}
-
-    def list_findings() -> dict:
-        """List all findings reported so far in this run."""
-        return {"findings": [f.model_dump() for f in run.findings()]}
-
-    def note_add(text: str, ref: str = "") -> dict:
-        """Add a note to the run's shared scratchpad (survives rounds). ref: anchor/file it is about."""
-        run.add_note(text, ref)
-        return {"status": "ok"}
-
-    def note_list() -> dict:
-        """List notes from the run's shared scratchpad."""
-        return {"notes": run.notes()}
-
-    def consult_knowledge(query: str) -> dict:
-        """Look up a known vulnerability at osv.dev (cache-first). query: an advisory id (GHSA-/CVE-/PYSEC-/GO-)
-        or a package name. Cite the returned ref ('knowledge:<id>') in evidence — required by the
-        gate for dependency findings."""
-        q = query.strip()
-        if _ADVISORY_ID.match(q):
-            v = kn.osv_vuln(q)
-            vulns = [v] if v.get("id") else []
-        else:
-            data = kn.osv_query_package(q)
-            vulns = data.get("vulns") or []
-        if not vulns:
-            return err(f"no advisory for {q!r}")
-        return _advisories(vulns)
-
-    return [list_anchors, list_findings, note_add, note_list, consult_knowledge, consult_owasp]
+def confined(target: Path, rows: list[tuple]) -> list[tuple]:
+    """Keep only rows whose file is inside the target (never leak files outside it); capped at 50."""
+    return [r for r in rows if inside(target, r[0]) is not None][:50]

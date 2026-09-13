@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import json
 import os
 import tempfile
@@ -28,17 +29,12 @@ from google.genai import types
 
 from scanner import core
 from scanner.adapter.index import build_index
-from scanner.adapter.owasp import consult_owasp
 from scanner.adapter.store import Store
-from scanner.adapter.tools import architect_tools, critic_tools, verifier_tools
-from scanner.app import specialists as sp
-from scanner.app.agents import (
-    new_architect,
-    new_critic,
-    new_threat_modeler,
-    new_verifier,
-)
-from scanner.app.domain import make_consult_domain
+from scanner.adapter.tools import ToolContext
+from scanner.adapter.tools.consult.domain import map_only
+from scanner.app.agents import build
+from scanner.app.agents import registry as sp
+from scanner.app.agents.registry import AGENTS
 from scanner.app.graph import parse_json, text_of
 from scanner.app.reconcile import KNOWN_WSTG
 from scanner.core import (
@@ -123,6 +119,14 @@ async def _activate(agent, label: str, payload: dict, probe: Probe, suffix: str 
     return text, tools
 
 
+def _agent(name: str, model, run, target: Path, index, budget: int, only: tuple[str, ...] = ()):
+    """One registry agent with the trial's budget; `only` narrows the roster (the ThreatModeler trial gives it consult_owasp alone)."""
+    spec = AGENTS[name]
+    if only:
+        spec = dataclasses.replace(spec, tools=only)
+    return build(dataclasses.replace(spec, budget=budget), model, ToolContext(target, run, index=index))
+
+
 def _store(tmp: Path, anchors: list[Anchor]):
     store = Store(str(tmp / f"state-{time.time_ns()}.db"))
     run = store.start_run(str(SAMPLE))
@@ -138,7 +142,7 @@ def _refusals(run) -> list[str]:
 
 async def trial_architect(model, tmp, index, budget, probe):
     store, run = _store(tmp, [SQLI, CMDI])
-    text, tools = await _activate(new_architect(model, architect_tools(run, SAMPLE, index=index), budget), "Skeleton", SKELETON, probe)
+    text, tools = await _activate(_agent("architect", model, run, SAMPLE, index, budget), "Skeleton", SKELETON, probe)
     store.close()
     if not {"list_entry_points", "grep", "read_file", "lsp_symbols"} & set(tools):
         return False, f"never looked at the code (tools: {sorted(set(tools))})"
@@ -165,7 +169,6 @@ async def trial_domain_modeler(model, tmp, index, budget, probe):
     """08-idor-go: every rule must be grounded on a real symbol; getOrder's missing owner check must surface."""
     from scanner.adapter.domain import extract
     from scanner.adapter.index import build_index
-    from scanner.app.domain import new_domain_modeler
     from scanner.core.domain import DomainMap
 
     idor = SAMPLE.parent / "08-idor-go"
@@ -173,7 +176,7 @@ async def trial_domain_modeler(model, tmp, index, budget, probe):
     try:
         store, run = _store(tmp, [])
         skeleton = extract(idor, idx).model_dump()
-        text, _ = await _activate(new_domain_modeler(model, architect_tools(run, idor, index=idx), budget), "DomainInput",
+        text, _ = await _activate(_agent("domain_modeler", model, run, idor, idx, budget), "DomainInput",
                                   {"architecture_model": {}, "skeleton": skeleton}, probe)
         store.close()
         parsed = parse_json(text)
@@ -194,7 +197,7 @@ async def trial_domain_modeler(model, tmp, index, budget, probe):
 
 
 async def trial_threat_modeler(model, tmp, index, budget, probe):
-    text, _ = await _activate(new_threat_modeler(model, [consult_owasp], budget), "ArchitectureModel", {"architecture_model": ARCH_MODEL}, probe)
+    text, _ = await _activate(_agent("threat_modeler", model, None, SAMPLE, None, budget, only=("consult_owasp",)), "ArchitectureModel", {"architecture_model": ARCH_MODEL}, probe)
     parsed = parse_json(text)
     if parsed is None:
         return False, "final text is not JSON"
@@ -213,7 +216,7 @@ async def trial_threat_modeler(model, tmp, index, budget, probe):
 
 async def trial_verifier(model, tmp, index, budget, probe):
     store, run = _store(tmp, [SQLI, CMDI])
-    _, tools = await _activate(new_verifier(model, verifier_tools(run, SAMPLE, index=index), budget), "Hypothesis",
+    _, tools = await _activate(_agent("verify", model, run, SAMPLE, index, budget), "Hypothesis",
                                {**HYP.model_dump(), "skill": "sql-injection"}, probe)
     fs, refusals = run.findings(), _refusals(run)
     store.close()
@@ -231,7 +234,7 @@ async def trial_critic(model, tmp, index, budget, probe):
                             status=core.CONFIRMED, evidence=['rows, _ := db.Query("SELECT id FROM users WHERE name = $1", name)'], confidence=0.9))
     tp = run.report(Finding(anchor_id=SQLI.id, cwe="CWE-89", file="main.go", line=22, title="SQL injection in searchHandler",
                             status=core.CONFIRMED, evidence=['rows, _ := db.Query("SELECT id FROM users WHERE name = \'" + name + "\'")'], confidence=0.95))
-    critic = new_critic(model, critic_tools(run, SAMPLE, index=index), budget)
+    critic = _agent("critic", model, run, SAMPLE, index, budget)
     for f in (fp, tp):
         await _activate(critic, "Finding", {"finding": f.model_dump(), "anchor": run.anchor(f.anchor_id).model_dump()}, probe)
     st = {f.id: f for f in run.findings()}
@@ -278,7 +281,7 @@ def _fixture(tmp: Path, name: str, files: dict[str, str]) -> Path:
 
 def _pick(spec_name: str, run, target: Path, index, item, model, lang: str = "go", role: str = "investigate", kind: str = ""):
     """Build the roster for this run and return (agent, overlay suffix) the graph's router would use."""
-    agent = sp.build(model, run, target, index)[spec_name]
+    agent = sp.build_specialists(model, run, target, index)[spec_name]
     spec, suffix = sp.route(item, lang, role, kind)
     assert spec.name == spec_name, f"router picked {spec.name} for the {spec_name} trial"
     return agent, suffix
@@ -311,7 +314,7 @@ async def trial_authz(model, tmp, index, budget, probe):
     hyp = Hypothesis(id="h0-1", kind="authz", cwe="CWE-639", consult="domain", anchor_id=IDOR_ANCHOR.id, reads=["main.go"], priority=80,
                      claim="getOrder returns the Order for any id from the query without comparing Order.UserID to currentUser(r)")
     agent, suffix = _pick("authz", run, IDOR, idx, hyp, model)
-    _swap_tool(agent, make_consult_domain(run, idx))  # the map-backed consultant (the runner wires it the same way)
+    _swap_tool(agent, map_only(run))  # the map-only consultant: grades the DomainModeler's map on its own
     _, tools = await _activate(agent, "Hypothesis", {**hyp.model_dump(), "skill": "authz-idor", "specialist": "authz"}, probe, suffix)
     fs, refusals = run.findings(), _refusals(run)
     store.close(); idx.close()
@@ -451,7 +454,7 @@ async def trial_authz_critic(model, tmp, index, budget, probe):
     f = run.report(Finding(anchor_id=a.id, cwe="CWE-639", file="main.go", line=20, title="IDOR: X-Admin header skips the owner check",
                            status=core.CONFIRMED, evidence=["domain:r1", 'if r.Header.Get("X-Admin") == "1" {', "json.NewEncoder(w).Encode(order)"], confidence=0.9))
     agent, suffix = _pick("authz_critic", run, target, idx, f, model, role="critique")
-    _swap_tool(agent, make_consult_domain(run, idx))
+    _swap_tool(agent, map_only(run))
     _, tools = await _activate(agent, "Finding", {"finding": f.model_dump(), "anchor": a.model_dump(), "specialist": "authz_critic"}, probe, suffix)
     st = {x.id: x for x in run.findings()}
     store.close(); idx.close()

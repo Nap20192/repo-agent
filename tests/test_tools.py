@@ -3,6 +3,9 @@ from pathlib import Path
 import pytest
 
 from scanner.adapter import tools
+from scanner.app.agents.architect.tools import ROSTER as ARCHITECT
+from scanner.app.agents.critic.tools import ROSTER as CRITIC
+from scanner.app.agents.verify.tools import ROSTER as VERIFIER
 from scanner.core import Anchor
 from tests.fakes import IDOR, SQL
 from tests.fakes import FakeRun as _FakeRun
@@ -17,7 +20,7 @@ def setup(tmp_path: Path):
         'package main\n\nfunc a() { db.Query("SELECT " + name) }\n\nfunc b() { getOrder(id) }\n'
     )
     run = FakeRun([SQL, IDOR])
-    t = {f.__name__: f for f in tools.verifier_tools(run, tmp_path, reader=lambda f, l: (tmp_path / f).read_text())}
+    t = {f.__name__: f for f in tools.make(VERIFIER, tools.ToolContext(tmp_path, run, reader=lambda f, l: (tmp_path / f).read_text()))}
     return run, t
 
 
@@ -57,7 +60,7 @@ def test_secret_finding_is_redacted(tmp_path):
     (tmp_path / "cfg.py").write_text(f'AWS_KEY = "{key}"\n')
     sec = Anchor(id="a_sec", tool="gitleaks", rule_id="aws", cwe="CWE-798", severity="high", file="cfg.py", line=1)
     run = FakeRun([sec])
-    t = {f.__name__: f for f in tools.verifier_tools(run, tmp_path, reader=lambda f, l: (tmp_path / f).read_text())}
+    t = {f.__name__: f for f in tools.make(VERIFIER, tools.ToolContext(tmp_path, run, reader=lambda f, l: (tmp_path / f).read_text()))}
     out = t["report_finding"]("a_sec", "leaked key", "confirmed", [f'AWS_KEY = "{key}"'])
     assert out["status"] == "confirmed" and key not in "".join(out["evidence"]) and "AKIA…" in out["evidence"][0]
 
@@ -65,7 +68,7 @@ def test_secret_finding_is_redacted(tmp_path):
 def test_critic_disprove_gate(tmp_path):
     run, t = setup(tmp_path)
     f = t["report_finding"]("a_sql", "sqli", "confirmed", ['db.Query("SELECT " + name)'])
-    c = {x.__name__: x for x in tools.critic_tools(run, tmp_path)}["disprove_finding"]
+    c = {x.__name__: x for x in tools.make(CRITIC, tools.ToolContext(tmp_path, run))}["disprove_finding"]
     assert c("f_9", ["x"], "r")["status"] == "error"                       # unknown finding
     assert c(f["id"], ["name = sanitize(name)"], "r")["status"] == "error"  # quote not in code
     out = c(f["id"], ["func b() { getOrder(id) }"], "sanitized upstream")
@@ -100,11 +103,11 @@ class FakeIndex:
 def test_lsp_tools_with_fake_index(tmp_path):
     run, _ = setup(tmp_path)
     idx = FakeIndex()
-    for build in (lambda: tools.verifier_tools(run, tmp_path, index=idx), lambda: tools.critic_tools(run, tmp_path, index=idx),
-                  lambda: tools.architect_tools(run, tmp_path, index=idx)):
+    for build in (lambda: tools.make(VERIFIER, tools.ToolContext(tmp_path, run, index=idx)), lambda: tools.make(CRITIC, tools.ToolContext(tmp_path, run, index=idx)),
+                  lambda: tools.make(ARCHITECT, tools.ToolContext(tmp_path, run, index=idx))):
         t = {f.__name__: f for f in build()}
         assert {"lsp_symbols", "lsp_definition", "lsp_references"} <= set(t)
-    t = {f.__name__: f for f in tools.verifier_tools(run, tmp_path, index=idx)}
+    t = {f.__name__: f for f in tools.make(VERIFIER, tools.ToolContext(tmp_path, run, index=idx))}
     d = t["lsp_definition"]("pingHandler")
     assert d["file"] == "main.go" and d["start"] == 3 and d["end"] == 5
     assert d["text"].splitlines() == ["3: func a() { db.Query(\"SELECT \" + name) }", "4: ", "5: func b() { getOrder(id) }"]
@@ -123,7 +126,7 @@ def test_lsp_definition_caps_body(tmp_path):
     idx = FakeIndex()
     from scanner.core.ports import Symbol
     idx.syms["Big"] = Symbol(name="Big", file="big.go", line=1, end_line=300)
-    t = {f.__name__: f for f in tools.verifier_tools(run, tmp_path, index=idx)}
+    t = {f.__name__: f for f in tools.make(VERIFIER, tools.ToolContext(tmp_path, run, index=idx))}
     d = t["lsp_definition"]("Big")
     assert d["end"] == tools.DEF_CAP and d["truncated"] is True and d["text"].count("\n") == tools.DEF_CAP - 1
 
@@ -143,18 +146,18 @@ def test_synthetic_anchor_takes_model_cwe(tmp_path):
     (tmp_path / "s.js").write_text('app.get("/ping", (req, res) => exec("ping " + req.query.h));\n')
     ep = Anchor(id="ep1", tool="entrypoint", rule_id="GET /ping", cwe="", severity="low", file="s.js", line=1)
     run = FakeRun([ep])
-    t = {f.__name__: f for f in tools.verifier_tools(run, tmp_path, reader=lambda f, l: (tmp_path / f).read_text())}
+    t = {f.__name__: f for f in tools.make(VERIFIER, tools.ToolContext(tmp_path, run, reader=lambda f, l: (tmp_path / f).read_text()))}
     out = t["report_finding"]("ep1", "cmdi", "confirmed", ['exec("ping " + req.query.h)'], cwe="CWE-78")
     assert out["status"] == "confirmed" and out["cwe"] == "CWE-78"
     sql = Anchor(id="a1", tool="gosec", cwe="CWE-89", severity="high", file="s.js", line=1)
     run2 = FakeRun([sql])
-    t2 = {f.__name__: f for f in tools.verifier_tools(run2, tmp_path, reader=lambda f, l: (tmp_path / f).read_text())}
+    t2 = {f.__name__: f for f in tools.make(VERIFIER, tools.ToolContext(tmp_path, run2, reader=lambda f, l: (tmp_path / f).read_text()))}
     assert t2["report_finding"]("a1", "x", "confirmed", ["exec("], cwe="CWE-78")["status"] == "error"  # real anchors still fixed
 
 
 def test_subset_filters_by_name_and_rejects_typos(tmp_path):
     run, _ = setup(tmp_path)
-    all_ = tools.verifier_tools(run, tmp_path)
+    all_ = tools.make(VERIFIER, tools.ToolContext(tmp_path, run))
     chosen = tools.subset(all_, {"report_finding", "grep"})
     assert [f.__name__ for f in chosen] == ["report_finding", "grep"]
     with pytest.raises(KeyError):
@@ -174,7 +177,7 @@ def test_report_finding_discovery_off_a_synthetic_anchor(tmp_path):
     (tmp_path / "benefits.js").write_text("a\nb\nconst q = db.find({$where: req.body.f});\nd\n")
     ep = Anchor(id="a_ep", tool="entrypoint", rule_id="GET /benefits", severity="info", file="index.js", line=55)
     run = FakeRun([ep])
-    t = {f.__name__: f for f in tools.verifier_tools(run, tmp_path, reader=lambda f, l: (tmp_path / f).read_text())}
+    t = {f.__name__: f for f in tools.make(VERIFIER, tools.ToolContext(tmp_path, run, reader=lambda f, l: (tmp_path / f).read_text()))}
     rf = t["report_finding"]
     assert "confirmed finding with a cwe" in rf("a_ep", "x", "rejected", ["benefits.js:3: const q"], file="benefits.js", line=3)["reason"]
     assert "does not match the code" in rf("a_ep", "x", "confirmed", ["made up"], cwe="CWE-943", file="benefits.js", line=3)["reason"]

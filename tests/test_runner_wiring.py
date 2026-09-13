@@ -4,8 +4,8 @@ Workflow; `wiring` is the inspectable kwargs dict behind it."""
 from pathlib import Path
 
 from scanner.app import runner
+from scanner.app.agents.registry import REGISTRY, route_name
 from scanner.app.pipeline import ScanWorkflow
-from scanner.app.specialists import REGISTRY, route_name
 from tests.fakes import FakeRun
 
 
@@ -46,8 +46,8 @@ def test_build_agent_returns_the_workflow_with_its_index(tmp_path, monkeypatch):
 
 
 def test_new_architect_overlay_is_appended():
-    from scanner.app.agents import new_architect
-    a = new_architect("gemini-flash-lite-latest", [], 5, overlay="GO OVERLAY")
+    from scanner.app.agents import new_agent
+    a = new_agent("architect", "d", "i", [], 5, model="gemini-flash-lite-latest", overlay="GO OVERLAY")
     assert a.instruction.endswith("GO OVERLAY")
 
 

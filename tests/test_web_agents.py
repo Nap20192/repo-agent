@@ -10,7 +10,7 @@ from google.adk.agents import LlmAgent
 
 from scanner.adapter.static import ScanResult
 from scanner.app import runner
-from scanner.app.specialists import REGISTRY
+from scanner.app.agents.registry import REGISTRY
 from tests.fakes import A1, FakeRun
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -88,7 +88,7 @@ def test_standalone_names_cover_the_roster(tmp_path, monkeypatch):
     kw = runner.wiring(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
     try:
         built = {a.name for a in kw.values() if isinstance(a, LlmAgent)} | set(kw["specialists"])
-        assert built | set(runner.EXTRA_AGENTS) == set(runner.ROSTER)
+        assert built | {"triage", "critic", "knowledge"} == set(runner.ROSTER)  # the graph does not run these three
     finally:
         kw["index"].close()
 
