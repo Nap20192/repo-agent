@@ -10,6 +10,7 @@ SPEC = AgentSpec(
     description='reviews one confirmed finding against the 13-rule checklist; annotates, disproves via the gate',
     instruction=INSTRUCTION,
     tools=ROSTER,
+    consults=('knowledge', 'domain'),
     budget='review_max_calls',
     node="worker",
     output_schema=ReviewVerdict,

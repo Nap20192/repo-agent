@@ -3,7 +3,7 @@
 from scanner.app.agents.shared import INVESTIGATOR_CORE, OPERATING_PRINCIPLES
 
 SECTION = """## Specialisation: authorization, IDOR, authentication and session (A01, A07)
-- consult_domain(entity) is MANDATORY: cite 'domain:<entity>' in evidence for authz/IDOR verdicts (the gate
+- domain(request: the entity) is MANDATORY: cite 'domain:<entity>' in evidence for authz/IDOR verdicts (the gate
   requires it) and decide "hole vs intended business rule" from the rules it returns.
 - Reachability is the question: lsp_callers / lsp_path_to_entry from the handler to the object access; which
   middleware or decorator guards the route (read_file / grep for the auth chain, shell if needed).

@@ -52,6 +52,7 @@ class Settings:
     critic_max_calls: int = 20
     architect_max_calls: int = 40
     domain_modeler_max_calls: int = 12
+    domain_max_calls: int = 8  # the Domain consultant, per question (card 49)
     threat_modeler_max_calls: int = 6
     knowledge_max_calls: int = 10
     triage_max_calls: int = 4
@@ -107,6 +108,7 @@ class Settings:
             critic_max_calls=_int(e, "CRITIC_MAX_MODEL_CALLS", 20),
             architect_max_calls=_int(e, "ARCHITECT_MAX_MODEL_CALLS", 40),
             domain_modeler_max_calls=_int(e, "DOMAIN_MODELER_MAX_MODEL_CALLS", 12),
+            domain_max_calls=_int(e, "DOMAIN_MAX_MODEL_CALLS", 8),
             threat_modeler_max_calls=_int(e, "THREAT_MODELER_MAX_MODEL_CALLS", 6),
             knowledge_max_calls=_int(e, "KNOWLEDGE_MAX_MODEL_CALLS", 10),
             triage_max_calls=_int(e, "TRIAGE_MAX_CALLS", 4),

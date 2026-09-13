@@ -38,7 +38,7 @@ def test_every_agent_folder_follows_the_template():
         assert set(spec.tools) <= set(TOOLS), (name, set(spec.tools) - set(TOOLS))
         assert isinstance(spec.budget, int) or hasattr(Settings(), spec.budget), name
         assert spec.node in ("", "stage", "worker", "tool") and spec.role in ("", "investigate", "critique"), name
-        assert spec.instruction.startswith(ins.OPERATING_PRINCIPLES) or name == "knowledge"
+        assert spec.instruction.startswith(ins.OPERATING_PRINCIPLES) or name in sp.CONSULTANTS  # consultants answer one question, never report
 
 
 # Pre-existing gaps the template test surfaced (card 47 follow-up): the instruction names a tool the roster lacks.

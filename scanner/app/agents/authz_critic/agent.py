@@ -9,6 +9,7 @@ SPEC = AgentSpec(
     description='disproves authz findings: intended business rules',
     instruction=INSTRUCTION,
     tools=ROSTER,
+    consults=('domain',),
     budget=20,
     node="worker",
     role='critique',

@@ -30,7 +30,7 @@ class AgentSpec:
     window: bool = True  # tool-window digest callback
     per_branch: bool = True  # budget scope
     per_invocation: bool = False
-    consults_knowledge: bool = False  # gets the Knowledge agent as an AgentTool
+    consults: tuple[str, ...] = ()  # consultant agents this agent gets as sub-agents (AgentTools): "knowledge", "domain"
     flag: str = ""  # Settings switch that turns the agent off (None in the graph): "critic", "triage", "threat_model", ...
     folder: str = field(default="", compare=False)  # web/<folder>; differs from name only when the name shadows stdlib
 

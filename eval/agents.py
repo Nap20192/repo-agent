@@ -31,7 +31,6 @@ from scanner import core
 from scanner.adapter.index import build_index
 from scanner.adapter.store import Store
 from scanner.adapter.tools import ToolContext
-from scanner.adapter.tools.consult.domain import map_only
 from scanner.app.agents import build
 from scanner.app.agents import registry as sp
 from scanner.app.agents.registry import AGENTS
@@ -314,11 +313,10 @@ async def trial_authz(model, tmp, index, budget, probe):
     hyp = Hypothesis(id="h0-1", kind="authz", cwe="CWE-639", consult="domain", anchor_id=IDOR_ANCHOR.id, reads=["main.go"], priority=80,
                      claim="getOrder returns the Order for any id from the query without comparing Order.UserID to currentUser(r)")
     agent, suffix = _pick("authz", run, IDOR, idx, hyp, model)
-    _swap_tool(agent, map_only(run))  # the map-only consultant: grades the DomainModeler's map on its own
     _, tools = await _activate(agent, "Hypothesis", {**hyp.model_dump(), "skill": "authz-idor", "specialist": "authz"}, probe, suffix)
     fs, refusals = run.findings(), _refusals(run)
     store.close(); idx.close()
-    if "consult_domain" not in tools:
+    if "domain" not in tools:
         return False, f"never consulted the domain map (tools: {tools})"
     ok = [f for f in fs if f.anchor_id == IDOR_ANCHOR.id and f.status == core.CONFIRMED and any(e.lower().startswith("domain:") for e in f.evidence)]
     return (True, "") if ok else (False, f"no confirmed IDOR with a domain: ref (findings: {[(f.status, f.evidence[:1]) for f in fs]}; refused: {refusals})")
@@ -338,7 +336,7 @@ async def trial_dependency(model, tmp, index, budget, probe):
     store.close(); idx.close()
     if "shell" in tools:
         return False, "dependency specialist must not have/use shell"
-    if not ({"consult_knowledge", "knowledge"} & set(tools)):
+    if "knowledge" not in tools:
         return False, f"never consulted knowledge (tools: {tools})"
     ok = [f for f in fs if f.anchor_id == EXPRESS_DEP.id and any(e.lower().startswith("knowledge:") for e in f.evidence)]
     return (True, "") if ok else (False, f"no verdict citing knowledge: (findings: {[(f.status, f.evidence[:1]) for f in fs]}; tools: {tools})")
@@ -454,7 +452,6 @@ async def trial_authz_critic(model, tmp, index, budget, probe):
     f = run.report(Finding(anchor_id=a.id, cwe="CWE-639", file="main.go", line=20, title="IDOR: X-Admin header skips the owner check",
                            status=core.CONFIRMED, evidence=["domain:r1", 'if r.Header.Get("X-Admin") == "1" {', "json.NewEncoder(w).Encode(order)"], confidence=0.9))
     agent, suffix = _pick("authz_critic", run, target, idx, f, model, role="critique")
-    _swap_tool(agent, map_only(run))
     _, tools = await _activate(agent, "Finding", {"finding": f.model_dump(), "anchor": a.model_dump(), "specialist": "authz_critic"}, probe, suffix)
     st = {x.id: x for x in run.findings()}
     store.close(); idx.close()

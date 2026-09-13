@@ -34,7 +34,7 @@ def _inv(text: str = "", calls: list[str] = (), responses: dict[str, dict] | Non
 # --- the files ------------------------------------------------------------------------------------------
 
 def test_every_app_has_a_valid_evalset_and_config():
-    assert len(APPS) == 19
+    assert len(APPS) == 20
     for app in APPS:
         es = EvalSet.model_validate_json((WEB / app / f"{app}.evalset.json").read_text(encoding="utf-8"))
         assert es.eval_set_id == app and es.eval_cases, app
@@ -54,7 +54,7 @@ def test_seed_payloads_are_the_graphs_own_shapes():
     for app in APPS:
         es = EvalSet.model_validate_json((WEB / app / f"{app}.evalset.json").read_text(encoding="utf-8"))
         text = es.eval_cases[0].conversation[0].user_content.parts[0].text
-        if app in ("knowledge",):
+        if app in ("knowledge", "domain"):
             continue
         payload = json.loads(text)
         if app in ("verify", "taint", "authz", "config", "secrets_agent", "dependency"):

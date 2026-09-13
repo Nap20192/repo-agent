@@ -19,5 +19,4 @@ ROSTER = (
     'consult_owasp',
     'load_skill',
     'list_skills',
-    'consult_domain',
 )

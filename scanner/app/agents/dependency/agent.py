@@ -9,12 +9,12 @@ SPEC = AgentSpec(
     description='vulnerable dependencies: advisory + reachability (A06)',
     instruction=INSTRUCTION,
     tools=ROSTER,
+    consults=('knowledge',),
     budget=15,
     node="worker",
     role='investigate',
     kinds=frozenset(('dependency',)),
     cwes=frozenset(),
     skills=('dependency-advisory',),
-    consults_knowledge=True,
     flag="specialists",
 )

@@ -8,7 +8,7 @@
 не из прозы модели. Состояние прогона — SQLite `.state/state.db`; выгрузка — `.runs/<ts>/`.
 
 Не перенесено из Go-версии: Docker-песочница (команды идут на хосте), go/ssa и LSP-индекс
-(символы — LSP или grep-fallback), Domain Map (`consult_domain` — эвристика).
+(символы — LSP или grep-fallback), Domain Map (консультант `domain` — саб-агент).
 
 ## Слои (`scanner/core` / `adapter` / `app`)
 
@@ -108,7 +108,7 @@ stdlib JSON-RPC (`rpc.py`) — gopls (Go), pyright (Python), typescript-language
 (Go / Node / Python) — суффикс инструкции по расширению файла. У каждого свой набор тулов (`subset()`),
 скиллы и бюджет `SPECIALIST_<NAME>_MAX_CALLS`; `SPECIALISTS=0` возвращает одиночных Verifier/Critic.
 Консультанты: **Domain** — стадия DomainModeler (после Architect) строит `domain_map` из схем, guard'ов и
-правил (`scanner/adapter/domain.py`), `consult_domain` отвечает по карте (grep-эвристика как fallback;
+правил (`scanner/adapter/domain.py`); консультант `domain` — саб-агент (AgentTool) инвестигаторов/критиков: тул `domain_map` по карте, затем grep/read_file/lsp по коду (карта 49;
 `DOMAIN_MODEL=0` выключает стадию); **Knowledge** — пре-пасс обогащает osv-якоря через OSV/GHSA/NVD/EPSS/KEV с
 SQLite-кэшем (`KNOWLEDGE_ENRICH=0` выключает, `GHSA_DIR` для офлайна, `GITHUB_TOKEN`/`NVD_API_KEY` снимают лимиты),
 плюс AgentTool `knowledge` (веб-поиск: `WEB_SEARCH=tavily` + `TAVILY_API_KEY`) инъектируется в `dependency` и
@@ -151,7 +151,8 @@ uv run pytest -q
 | `STAGE_TIMEOUT` | таймаут стадии в секундах | 600 |
 | `SPECIALISTS` | использовать специалистов (0 = одиночные Verifier/Critic) | on |
 | `THREAT_MODEL` | включить Architect/ThreatModeler | on |
-| `DOMAIN_MODEL` | включить DomainModeler и `consult_domain` | on |
+| `DOMAIN_MODEL` | включить DomainModeler (карта для консультанта `domain`) | on |
+| `DOMAIN_MAX_MODEL_CALLS` | бюджет консультанта `domain` на один вопрос | 8 |
 | `CRITIC` | включить адверсариальный проход Critic | on |
 | `TRIAGE` | дешёвый triage-проход по baseline'ам перед аудитом | on |
 | `TRIAGE_MAX_CALLS` | бюджет вызовов Triage на элемент | 4 |

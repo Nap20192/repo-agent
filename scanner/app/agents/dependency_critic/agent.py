@@ -9,12 +9,12 @@ SPEC = AgentSpec(
     description='disproves dependency findings: patched, uncalled',
     instruction=INSTRUCTION,
     tools=ROSTER,
+    consults=('knowledge',),
     budget=12,
     node="worker",
     role='critique',
     kinds=frozenset(('dependency',)),
     cwes=frozenset(),
     skills=('counterevidence', 'severity-calibration'),
-    consults_knowledge=True,
     flag="specialists",
 )

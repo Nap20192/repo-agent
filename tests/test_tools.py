@@ -52,7 +52,6 @@ def test_fs_tools_stay_inside_target(tmp_path):
     assert "3: func a()" in t["read_file"]("main.go", 3, 3)["text"]
     assert "main.go:3" in t["grep"]("db.Query")["output"]
     assert t["shell"]("cat main.go")["exit_code"] == 0
-    assert t["consult_domain"]("Order")["ref"] == "domain:Order"
 
 
 def test_secret_finding_is_redacted(tmp_path):

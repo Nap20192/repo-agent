@@ -28,8 +28,8 @@ def _target(tmp_path: Path) -> Path:
 
 def test_roster_is_every_named_factory_plus_every_specialist():
     named = {"triage", "triage_batch", "verify", "critic", "architect", "threat_modeler", "review", "viability",
-             "confirm", "knowledge", "domain_modeler"}
-    assert set(runner.ROSTER) == named | {s.name for s in REGISTRY} and len(runner.ROSTER) == 19
+             "confirm", "knowledge", "domain", "domain_modeler"}
+    assert set(runner.ROSTER) == named | {s.name for s in REGISTRY} and len(runner.ROSTER) == 20
 
 
 def test_one_web_app_per_roster_name_next_to_fullscan():
@@ -88,7 +88,7 @@ def test_standalone_names_cover_the_roster(tmp_path, monkeypatch):
     kw = runner.wiring(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
     try:
         built = {a.name for a in kw.values() if isinstance(a, LlmAgent)} | set(kw["specialists"])
-        assert built | {"triage", "critic", "knowledge"} == set(runner.ROSTER)  # the graph does not run these three
+        assert built | {"triage", "critic", "knowledge", "domain"} == set(runner.ROSTER)  # not on a graph edge: triage, critic, the consultants
     finally:
         kw["index"].close()
 

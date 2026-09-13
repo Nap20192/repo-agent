@@ -25,6 +25,8 @@ def test_wiring_has_specialists_router_overlay_and_knowledge(tmp_path, monkeypat
         names = {getattr(t, "name", getattr(t, "__name__", "")) for t in kw["specialists"]["dependency"].tools}
         assert "knowledge" in names and "shell" not in names
         assert "knowledge" in {getattr(t, "name", "") for t in kw["specialists"]["dependency_critic"].tools}
+        assert "domain" in {getattr(t, "name", "") for t in kw["specialists"]["authz"].tools}  # the Domain consultant as a sub-agent
+        assert {"knowledge", "domain"} <= {getattr(t, "name", "") for t in kw["verifier"].tools}
     finally:
         kw["index"].close()
 

@@ -67,14 +67,14 @@ def test_build_makes_one_agent_per_specialist(tmp_path):
 
 
 @pytest.mark.parametrize("name,must,must_not", [
-    ("authz", {"consult_domain", "report_finding"}, set()),
-    ("dependency", {"consult_knowledge", "report_finding"}, {"shell"}),
+    ("authz", {"report_finding"}, {"consult_domain"}),
+    ("dependency", {"report_finding"}, {"shell", "consult_knowledge"}),
     ("secrets", {"report_finding"}, {"shell"}),
-    ("config", {"report_finding", "consult_owasp", "lsp_references"}, {"shell", "consult_domain"}),
+    ("config", {"report_finding", "consult_owasp", "lsp_references"}, {"shell", "domain_map"}),
     ("taint", {"report_finding", "shell", "lsp_definition"}, {"disprove_finding"}),
     ("taint_critic", {"disprove_finding", "check_dominance"}, {"report_finding"}),
-    ("authz_critic", {"disprove_finding", "consult_domain"}, set()),
-    ("dependency_critic", {"disprove_finding", "consult_knowledge", "lsp_path_to_entry"}, {"shell"}),
+    ("authz_critic", {"disprove_finding"}, {"consult_domain"}),
+    ("dependency_critic", {"disprove_finding", "lsp_path_to_entry"}, {"shell", "consult_knowledge"}),
 ])
 def test_tool_subsets(name, must, must_not):
     s = next(x for x in sp.REGISTRY if x.name == name)

@@ -9,6 +9,7 @@ SPEC = AgentSpec(
     description='authorization, IDOR, authentication and session (A01, A07)',
     instruction=INSTRUCTION,
     tools=ROSTER,
+    consults=('domain',),
     budget=30,
     node="worker",
     role='investigate',

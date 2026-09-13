@@ -2,7 +2,6 @@
 
 ROSTER = (
     'disprove_finding',
-    'consult_knowledge',
     'read_file',
     'grep',
     'lsp_definition',

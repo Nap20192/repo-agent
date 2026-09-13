@@ -45,8 +45,8 @@ Call load_skill counterevidence first (closure discipline), then the class skill
 - debug-only / test-only route, mock provider, or code compiled out of production builds;
 - the "untrusted" input is a constant or comes from trusted configuration only.
 
-Work: read_file / grep / shell around the evidence lines (±15 lines) and along the path; consult_domain
-for authz findings, consult_knowledge for dependency ones, consult_owasp for the expected control.
+Work: read_file / grep / shell around the evidence lines (±15 lines) and along the path; domain(request)
+for authz findings, knowledge(request) for dependency ones, consult_owasp for the expected control.
 
 Dominance gate (hard) for the "sanitizer / validator / framework control" route: a control disproves the
 finding only if it is on EVERY path to the sink. Before you call disprove_finding you MUST call

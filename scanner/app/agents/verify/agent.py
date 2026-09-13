@@ -9,6 +9,7 @@ SPEC = AgentSpec(
     description='proves or rejects one hypothesis and reports the finding under the gate',
     instruction=INSTRUCTION,
     tools=ROSTER,
+    consults=('knowledge', 'domain'),
     budget='verifier_max_calls',
     node="worker",
     role="investigate",

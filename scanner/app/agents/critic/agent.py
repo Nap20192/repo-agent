@@ -9,6 +9,7 @@ SPEC = AgentSpec(
     description='adversarial pass: tries to disprove each confirmed finding; survivors stay confirmed',
     instruction=INSTRUCTION,
     tools=ROSTER,
+    consults=('knowledge', 'domain'),
     budget='critic_max_calls',
     role="critique",
 )

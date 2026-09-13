@@ -100,7 +100,7 @@ async def run_session(agent, target: str, run_id: int, settings: Settings | None
 
 def build_agents(model, run, target: Path, index: Index, s: Settings) -> dict[str, LlmAgent | None]:
     """Every agent of the registry for one run, by name — None when its Settings flag is off (the graph keeps the
-    node as a no-op of the same name). One Knowledge AgentTool per consults_knowledge specialist (own budget each);
+    node as a no-op of the same name). One fresh consultant AgentTool (knowledge / domain) per agent that consults it (own budget each);
     the Architect gets the stack overlay of the target's languages."""
     ctx = ToolContext(target, run, index=index, settings=s)
     overlay = architect_overlay(fs.detect_langs(target))
@@ -109,7 +109,7 @@ def build_agents(model, run, target: Path, index: Index, s: Settings) -> dict[st
         if spec.flag and not getattr(s, spec.flag):
             out[spec.name] = None
             continue
-        extra = [AgentTool(build(AGENTS["knowledge"], model, ctx, s))] if spec.consults_knowledge else None
+        extra = [AgentTool(build(AGENTS[c], model, ctx, s)) for c in spec.consults] or None
         out[spec.name] = build(spec, model, ctx, s, overlay=overlay if spec.name == "architect" else "", extra_tools=extra)
     return out
 

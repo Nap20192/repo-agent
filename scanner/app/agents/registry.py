@@ -23,6 +23,7 @@ from scanner.app.agents import (
     critic,
     dependency,
     dependency_critic,
+    domain,
     domain_modeler,
     knowledge,
     review,
@@ -42,7 +43,7 @@ from scanner.core.settings import Settings
 
 AGENTS: dict[str, AgentSpec] = {s.name: s for s in (
     architect.SPEC, domain_modeler.SPEC, threat_modeler.SPEC, triage.SPEC, triage_batch.SPEC, verify.SPEC, critic.SPEC,
-    review.SPEC, viability.SPEC, confirm.SPEC, knowledge.SPEC,
+    review.SPEC, viability.SPEC, confirm.SPEC, knowledge.SPEC, domain.SPEC,
     taint.SPEC, authz.SPEC, dependency.SPEC, secrets_agent.SPEC, config.SPEC, taint_critic.SPEC, authz_critic.SPEC, dependency_critic.SPEC,
 )}
 ROSTER: tuple[str, ...] = tuple(AGENTS)
@@ -51,7 +52,7 @@ ROSTER: tuple[str, ...] = tuple(AGENTS)
 REGISTRY: tuple[AgentSpec, ...] = tuple(s for s in AGENTS.values() if s.role and (s.kinds or s.cwes))
 BY_NAME = {s.name: s for s in REGISTRY}
 FALLBACK = {"investigate": AGENTS["verify"], "critique": AGENTS["critic"]}
-KNOWLEDGE_USERS = frozenset(s.name for s in REGISTRY if s.consults_knowledge)
+CONSULTANTS = ("knowledge", "domain")  # agents other agents call as sub-agents (AgentTool), never on a graph edge
 
 # OWASP Top 10 (2021) → who covers it; A04 (insecure design) is the Domain/ThreatModeler path, not an investigator.
 TOP10_COVERAGE = {
@@ -94,14 +95,14 @@ def architect_overlay(langs: set[str]) -> str:
     return "\n".join(ARCHITECT_OVERLAYS[k] for k in keys)
 
 
-def build_specialists(model, run, target, index=None, knowledge_factory: Callable[[], Any] | None = None,
+def build_specialists(model, run, target, index=None, consultant: Callable[[str], Any] | None = None,
                       settings: Settings | None = None) -> dict[str, LlmAgent]:
     """One LlmAgent per REGISTRY entry, built once per run (clones per activation happen in the graph).
-    `knowledge_factory()` returns a fresh Knowledge AgentTool for each consults_knowledge specialist (own budget each)."""
+    `consultant(name)` returns a fresh AgentTool of that consultant for each spec that `consults` it (own budget each)."""
     ctx = ToolContext(target, run, index=index, settings=settings or Settings())
     return {
         spec.name: build(spec, model, ctx, settings,
-                         extra_tools=[knowledge_factory()] if knowledge_factory is not None and spec.consults_knowledge else None)
+                         extra_tools=[consultant(c) for c in spec.consults] if consultant is not None else None)
         for spec in REGISTRY
     }
 
@@ -109,8 +110,8 @@ def build_specialists(model, run, target, index=None, knowledge_factory: Callabl
 __all__ = [
     "AGENTS",
     "BY_NAME",
+    "CONSULTANTS",
     "FALLBACK",
-    "KNOWLEDGE_USERS",
     "REGISTRY",
     "ROSTER",
     "TOP10_COVERAGE",
