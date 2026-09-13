@@ -6,30 +6,20 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 
 from scanner.adapter.tools.code import grep, read_file, shell
-from scanner.adapter.tools.consult import (
-    domain,
-    dominance,
-    entry_points,
-    list_skills,
-    load_skill,
-    owasp,
-)
+from scanner.adapter.tools.consult import list_skills, load_skill, owasp
 from scanner.adapter.tools.context import ToolContext
 from scanner.adapter.tools.gates import disprove_finding, report_finding
-from scanner.adapter.tools.knowledge import deps_dev, epss, ghsa, kev, nvd_cve, osv_query, web_search
+from scanner.adapter.tools.knowledge import deps_dev, epss, ghsa, kev, nvd_cve, osv_query
 from scanner.adapter.tools.lsp import callees, callers, definition, path_to_entry, references, symbols
-from scanner.adapter.tools.store import list_anchors, list_findings, note_add, note_list
+from scanner.adapter.tools.store import list_anchors
 
 # name → factory(ctx). Order matters: it is the order tools are listed to the model.
 TOOLS: dict[str, Callable[[ToolContext], Callable]] = {
     "report_finding": report_finding.make,
     "disprove_finding": disprove_finding.make,
-    "check_dominance": dominance.make,
-    "list_entry_points": entry_points.make,
     "read_file": read_file.make,
     "grep": grep.make,
     "shell": shell.make,
-    "domain_map": domain.make,  # the Domain consultant's own lookup
     "lsp_symbols": symbols.make,
     "lsp_definition": definition.make,
     "lsp_references": references.make,
@@ -37,9 +27,6 @@ TOOLS: dict[str, Callable[[ToolContext], Callable]] = {
     "lsp_callees": callees.make,
     "lsp_path_to_entry": path_to_entry.make,
     "list_anchors": list_anchors.make,
-    "list_findings": list_findings.make,
-    "note_add": note_add.make,
-    "note_list": note_list.make,
     "consult_owasp": owasp.make,
     "list_skills": list_skills.make,
     "load_skill": load_skill.make,
@@ -50,7 +37,6 @@ TOOLS: dict[str, Callable[[ToolContext], Callable]] = {
     "epss": epss.make,
     "kev": kev.make,
     "deps_dev": deps_dev.make,
-    "web_search": web_search.make,
 }
 
 

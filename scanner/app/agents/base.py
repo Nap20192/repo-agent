@@ -4,7 +4,6 @@ tool-window digest, tool-call logging). `build()` turns a spec into a wired LlmA
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 
 from google.adk.agents import LlmAgent
@@ -23,10 +22,6 @@ class AgentSpec:
     budget: str | int  # a Settings field name, or a literal (specialists; SPECIALIST_<NAME>_MAX_CALLS overrides it)
     node: str = ""  # how the graph runs it: "stage" (document, timeout+degrade), "worker" (parallel items), "tool" (AgentTool), "" (not in the graph)
     output_schema: type | None = None  # the document the FINAL answer must validate as (tools stay usable)
-    role: str = ""  # "" | "investigate" | "critique" — the router's axis; verify/critic are the generic fallbacks
-    kinds: frozenset[str] = frozenset()  # hypothesis kinds this specialist takes
-    cwes: frozenset[str] = frozenset()  # CWEs this specialist takes (win over kinds)
-    skills: tuple[str, ...] = ()
     window: bool = True  # tool-window digest callback
     per_branch: bool = True  # budget scope
     per_invocation: bool = False
@@ -74,18 +69,14 @@ def new_agent(
 
 
 def max_calls(spec: AgentSpec, settings: Settings | None = None) -> int:
-    """The budget of one activation: a Settings field, or the spec's literal with the SPECIALIST_<NAME>_MAX_CALLS override."""
-    if isinstance(spec.budget, str):
-        return getattr(settings or Settings(), spec.budget)
-    v = os.environ.get(f"SPECIALIST_{spec.name.upper()}_MAX_CALLS", "")  # ponytail: the one env read outside Settings
-    return int(v) if v.isdigit() and int(v) > 0 else spec.budget
+    """The budget of one activation: a Settings field, or the spec's literal."""
+    return getattr(settings or Settings(), spec.budget) if isinstance(spec.budget, str) else spec.budget
 
 
 def build(spec: AgentSpec, model, ctx: ToolContext, settings: Settings | None = None, *, overlay: str = "",
           extra_tools: list | None = None) -> LlmAgent:
     """A wired LlmAgent for one run: the spec's roster built from `ctx`, its budget from `settings`."""
-    names = [n for n in spec.tools if n != "web_search" or (ctx.settings.web_search == "tavily" and ctx.settings.tavily_api_key)]
-    tools = make(names, ctx) + list(extra_tools or [])
+    tools = make(spec.tools, ctx) + list(extra_tools or [])
     return new_agent(spec.name, spec.description, spec.instruction, tools, max_calls(spec, settings), model=model,
                      per_branch=spec.per_branch, per_invocation=spec.per_invocation, window=spec.window, overlay=overlay,
                      output_schema=spec.output_schema)

@@ -1,0 +1,31 @@
+{
+  "eval_set_id": "model",
+  "name": "model",
+  "description": "seed case for the `model` stage on samples/02-vulnshop",
+  "eval_cases": [
+    {
+      "eval_id": "vulnshop-skeleton",
+      "conversation": [
+        {
+          "invocation_id": "vulnshop-skeleton-1",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "{\"target\": \"samples/02-vulnshop\", \"entry_points\": [], \"anchors\": []}"
+              }
+            ]
+          },
+          "creation_timestamp": 1789276272.5499337
+        }
+      ],
+      "session_input": {
+        "app_name": "model",
+        "user_id": "user",
+        "state": {}
+      },
+      "creation_timestamp": 1789276272.5499337
+    }
+  ],
+  "creation_timestamp": 1789276272.5499337
+}

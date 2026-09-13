@@ -45,23 +45,23 @@ def _verifier_node(store, fail: bool = False):
     return FunctionNode(func=fake, name="fake_fail" if fail else "fake_ok", rerun_on_resume=True)
 
 
-def _router(item, lang, role):
-    return ("taint", "overlay") if getattr(item, "cwe", "") == "CWE-89" else ("", "")
 
-
-def test_route_and_verify_routes_contains_failures_and_keeps_order():
+def test_route_and_verify_overlays_the_class_contains_failures_and_keeps_order():
+    """One Investigator for every hypothesis; the class section rides in the payload (specialist = the class name);
+    a raising activation yields an error dossier in place, the batch order survives."""
     run = FakeRun([A1, A2])
-    node = graph_nodes.route_and_verify_node(run, verifier=_verifier_node(run, fail=True),
-                                             specialists={"taint": _verifier_node(run)}, router=_router, max_parallel=2)
     hs = [Hypothesis(id="h0-1", kind="sink", cwe="CWE-89", anchor_id="a_1", reads=["main.go"]),
           Hypothesis(id="h0-2", kind="sink", cwe="CWE-78", anchor_id="a_2", reads=["main.go"])]
-    outs = _run_node(node, [h.model_dump() for h in hs])
+    outs = _run_node(graph_nodes.route_and_verify_node(run, _verifier_node(run), max_parallel=2), [h.model_dump() for h in hs])
     ds = [Dossier.model_validate(d) for d in outs[-1]]
     assert [d.hypothesis_id for d in ds] == ["h0-1", "h0-2"]  # batch order, not completion order
     assert ds[0].verdict == core.CONFIRMED and ds[0].finding_id == "f_1" and ds[0].specialist == "taint"
     assert ds[0].notes == "seen taint" and ds[0].new_hypotheses[0].anchor_id == "a_1"
-    assert ds[1].verdict == core.UNCERTAIN and "boom" in ds[1].error and ds[1].specialist == ""
-    assert len(run.findings()) == 1  # the failing generic verifier reported nothing
+    assert ds[1].verdict == core.REJECTED and ds[1].specialist == "taint"  # CWE-78 is taint too; the double rejects it
+    run2 = FakeRun([A1])
+    outs = _run_node(graph_nodes.route_and_verify_node(run2, _verifier_node(run2, fail=True), max_parallel=1), [hs[0].model_dump()])
+    d = Dossier.model_validate(outs[-1][0])
+    assert d.verdict == core.UNCERTAIN and "boom" in d.error and not run2.findings()
 
 
 def test_route_and_verify_verdict_comes_from_the_store_not_the_model_text():
@@ -72,56 +72,9 @@ def test_route_and_verify_verdict_comes_from_the_store_not_the_model_text():
         run.report(Finding(anchor_id="a_1", hypothesis_id="h0-1", cwe="CWE-89", file="main.go", title="t",
                            status=core.CONFIRMED, evidence=["db.Query(x)"]))
         return "I confirmed it but forgot the JSON"
-    node = graph_nodes.route_and_verify_node(run, verifier=FunctionNode(func=prose, name="prose", rerun_on_resume=True),
-                                             specialists={}, router=None, max_parallel=0)
+    node = graph_nodes.route_and_verify_node(run, FunctionNode(func=prose, name="prose", rerun_on_resume=True), max_parallel=0)
     d = Dossier.model_validate(_run_node(node, [Hypothesis(id="h0-1", kind="sink", cwe="CWE-89", anchor_id="a_1").model_dump()])[-1][0])
     assert d.verdict == core.CONFIRMED and d.finding_id == "f_1" and d.error == ""
-
-
-def test_review_worker_routes_to_specialist_critics_and_annotates():
-    run = FakeRun([A1])
-    f = run.report(Finding(anchor_id="a_1", cwe="CWE-89", file="main.go", title="t", status=core.CONFIRMED, evidence=["e"]))
-    from google.adk.workflow import FunctionNode
-
-    async def critic(ctx, node_input: dict) -> dict:
-        assert node_input["finding"]["status"] == core.CONFIRMED and node_input["anchor"]["id"] == "a_1"
-        run.set_status(node_input["finding"]["id"], core.UNCERTAIN, ["critic: parameterized"])  # through the gate in real runs
-        return {"finding_id": node_input["finding"]["id"], "status": "FALSE_POSITIVE", "reasoning": "parameterized"}
-    node = graph_nodes.review_node(FunctionNode(func=critic, name="c", rerun_on_resume=True), run,
-                                   specialists={"taint_critic": FunctionNode(func=critic, name="tc", rerun_on_resume=True)},
-                                   router=lambda item, lang, role: ("taint_critic", ""), max_parallel=1)
-    outs = _run_node(node, [f.model_dump()])
-    assert outs[-1] == [{"finding_id": "f_1", "specialist": "taint_critic", "error": ""}]
-    assert run.findings()[0].status == core.UNCERTAIN  # the agent disproved it → FALSE_POSITIVE stands
-    assert run.findings()[0].review["status"] == "FALSE_POSITIVE"
-
-
-def test_triage_sweep_without_an_agent_flags_every_file():
-    run = FakeRun()
-    outs = _run_node(graph_nodes.triage_sweep_node(None, run, 2), [{"files": ["a.js", "b.js"]}])
-    assert [c["file"] for c in outs[-1][0]["classifications"]] == ["a.js", "b.js"]
-    assert all(c["flagged"] for c in outs[-1][0]["classifications"])
-
-
-# --- shared helpers (scanner/app/graph.py) -------------------------------------------------------------------
-
-def test_parse_json_and_dossier_from_store():
-    from scanner.app.graph.helpers import dossier_from_store, parse_json
-    assert parse_json("junk {\"a\": {\"b\": 1}} tail") == {"a": {"b": 1}}
-    assert parse_json("nope") is None
-    h = Hypothesis(id="h0-1", anchor_id="a_1")
-    fs = [Finding(id="f1", anchor_id="a_1", status=core.REJECTED), Finding(id="f2", anchor_id="a_1", hypothesis_id="h0-1", status=core.CONFIRMED),
-          Finding(id="f3", anchor_id="a_1", hypothesis_id="other", status=core.CONFIRMED)]
-    assert dossier_from_store(fs, h).finding_id == "f2"
-    assert dossier_from_store([], h).verdict == core.UNCERTAIN
-
-
-def test_pick_agent_unknown_name_falls_back_and_no_router_is_generic():
-    from scanner.app.graph.helpers import pick_agent
-    h = Hypothesis(id="h0-1", anchor_id="a_1", cwe="CWE-89", reads=["main.go"])
-    assert pick_agent(h, "investigate", {}, lambda item, lang, role: ("nope", "x"), "generic") == ("generic", "", "")
-    assert pick_agent(h, "investigate", {"taint": "t"}, None, "generic") == ("generic", "", "")
-    assert pick_agent(h, "investigate", {"taint": "t"}, lambda item, lang, role: ("taint", f"OVERLAY:{lang}"), "generic") == ("t", "taint", "OVERLAY:go")
 
 
 def test_skill_lists_for_investigators_and_critics():

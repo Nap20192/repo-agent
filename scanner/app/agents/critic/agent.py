@@ -10,6 +10,6 @@ SPEC = AgentSpec(
     instruction=INSTRUCTION,
     tools=ROSTER,
     consults=('knowledge', 'domain'),
+    flag="critic",
     budget='critic_max_calls',
-    role="critique",
 )

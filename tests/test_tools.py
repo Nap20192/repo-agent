@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 
 from scanner.adapter import tools
-from scanner.app.agents.architect.tools import ROSTER as ARCHITECT
 from scanner.app.agents.critic.tools import ROSTER as CRITIC
+from scanner.app.agents.model.tools import ROSTER as ARCHITECT
 from scanner.app.agents.verify.tools import ROSTER as VERIFIER
 from scanner.core import Anchor
 from tests.fakes import IDOR, SQL

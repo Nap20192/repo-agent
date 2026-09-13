@@ -50,7 +50,7 @@ for authz findings, knowledge(request) for dependency ones, consult_owasp for th
 
 Dominance gate (hard) for the "sanitizer / validator / framework control" route: a control disproves the
 finding only if it is on EVERY path to the sink. Before you call disprove_finding you MUST call
-check_dominance(file, sink_line, control_line) with the anchor's file and line as the sink and the exact
+read the control's lines yourself(file, sink_line, control_line) with the anchor's file and line as the sink and the exact
 line of the control you found. Only if it returns dominates=true may you call disprove_finding, quoting
 that control line as counter_evidence; if it returns dominates=false (a check on another branch, after the
 sink, in an else/except/catch branch, or in another function) the finding stays — note why in your

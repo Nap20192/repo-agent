@@ -1,30 +1,27 @@
-"""plan: the hypothesis queue + file batches (Shannon plan: every file in some investigation) → PlanState artifact."""
+"""plan: anchors + grounded threats + entry-point baselines → the hypothesis queue (reconcile.build_queue)."""
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
 
-from google.adk.workflow import node
+from google.adk.events import Event
+from google.adk.workflow import FunctionNode
 
-from scanner.app.graph import planning
 from scanner.app.graph.reconcile import build_queue, split_direct
-from scanner.core import Candidate, Threat
+from scanner.core import Candidate
 from scanner.core.ports import RunStore
-from scanner.core.workflow import PlanState
+from scanner.core.workflow import QueueState
 
 log = logging.getLogger("scanner.graph.plan")
 
 
-def plan_node(store: RunStore, threats: list[Threat], locate, entry_points_fn: Callable[[], list[Candidate]] | None,
-              source_files_fn: Callable[[], list[str]] | None, triage_batch: int):
-    async def plan(ctx, node_input: dict) -> dict:
-        """Queue + file batches (Shannon plan: every file in some investigation); `grounding_dropped` to state."""
-        ctx.state["grounding_dropped"] = int((node_input or {}).get("dropped", 0))
-        queue, done = build_queue(store, split_direct(store.anchors())[1], threats, locate, entry_points_fn, source_files_fn)
-        files = sorted({h.reads[0] for h in queue if h.kind == "entry" and h.reads})
-        ps = PlanState.model_validate(planning.plan_state(queue, done, files, triage_batch)).model_dump()
-        store.put_artifact("plan", ps)  # fold_triage reads the queue back from here (the sweep's output is per batch)
-        log.info("plan: %d hypotheses, %d files in %d triage batches", len(queue), len(files), len(ps["batches"]))
-        return ps
-    return node(plan, rerun_on_resume=True, name="plan")
+def plan_node(store: RunStore, locate, entry_points_fn: Callable[[], list[Candidate]] | None) -> FunctionNode:
+    def plan(node_input) -> Event:
+        """The queue; route "empty" → export when there is nothing to investigate."""
+        queue, done = build_queue(store, split_direct(store.anchors())[1], None, locate, entry_points_fn, None)
+        qs = QueueState(queue=queue, done=sorted(done)).model_dump()
+        store.put_artifact("plan", qs)
+        log.info("plan: %d hypotheses", len(queue))
+        return Event(route="empty" if not queue else "default", output=qs)
+    return FunctionNode(func=plan, name="plan")

@@ -34,11 +34,10 @@ def test_timings_artifact_and_summary(tmp_path):
     store = Store(str(tmp_path / "s.db"))
     run = store.start_run("/t")
     run.save_anchors([A1])
-    arch = fake_stage_node(run, "architect", {"entities": []})
-    tm = fake_stage_node(run, "threat_modeler", {"intent": "production", "threats": []})
-    _run(_workflow(run, architect=arch, threat_modeler=tm, max_rounds=1, max_parallel=1))
+    stage = fake_stage_node(run, "model", {"architecture_model": {"entities": []}, "threat_model": {"intent": "production", "threats": []}})
+    _run(_workflow(run, model=stage, max_rounds=1, max_parallel=1))
     t = run.artifact("timings")
-    assert set(t) >= {"architecture_model", "threat_model", "verify_0"} and all(v >= 0 for v in t.values())
+    assert set(t) >= {"model", "verify_0"} and all(v >= 0 for v in t.values())
     summary = json.loads(run.write_summary(tmp_path).read_text())
     assert summary["timings"] == t
     store.close()
@@ -51,8 +50,8 @@ def test_slow_stage_is_cancelled_and_pipeline_goes_on():
 
     run = FakeRun()
     t0 = time.monotonic()
-    state = _run(_workflow(run, architect=FunctionNode(func=slow, name="architect", rerun_on_resume=True), max_rounds=1, stage_timeout=0.2))
+    state = _run(_workflow(run, model=FunctionNode(func=slow, name="model", rerun_on_resume=True), max_rounds=1, stage_timeout=0.2))
     assert time.monotonic() - t0 < 0.9
     assert run.artifact("architecture_model") is None
-    assert any("stage architecture_model failed" in t for t, _ in notes_of(run))
+    assert any("stage model failed" in t for t, _ in notes_of(run))
     assert state[core.STATE_STOP_REASON] == "round limit"  # the queue was still investigated

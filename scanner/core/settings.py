@@ -42,29 +42,14 @@ class Settings:
     max_hyps: int = 8
     max_parallel: int = 3
     stage_timeout: float = 600.0
-    specialists: bool = True
-    threat_model: bool = True
-    domain_model: bool = True
-    critic: bool = True
-    triage: bool = True  # cheap classification of baselines before the specialist audit (card 44)
-    # budgets (model calls)
+    threat_model: bool = True  # the model stage (architecture + threats); off → anchors only
+    critic: bool = True  # the critique pass over confirmed findings
+    # budgets (model calls per activation)
+    model_max_calls: int = 40
     verifier_max_calls: int = 30
     critic_max_calls: int = 20
-    architect_max_calls: int = 40
-    domain_modeler_max_calls: int = 12
-    domain_max_calls: int = 8  # the Domain consultant, per question (card 49)
-    threat_modeler_max_calls: int = 6
     knowledge_max_calls: int = 10
-    triage_max_calls: int = 4
-    # card 45: Shannon-graph nodes
-    triage_batch: int = 10  # files per triage classification call
-    triage_parallel: int = 4  # concurrent triage workers
-    review_max_calls: int = 8
-    viability_max_calls: int = 6
-    confirm_max_calls: int = 8
-    calibrate_llm: bool = False  # optional LLM calibration checklist (default: deterministic core.calibrate)
-    recon: bool = True  # deterministic sinks/auth inventory before the modelling stages
-    llm_model_small: str = ""  # cheaper model for triage/calibrate-LLM; "" → the main model
+    domain_max_calls: int = 8
     # state
     state_path: str = ".state/state.db"
     workspace_root: str = "."  # adk web: a chat message may only name targets under this directory (card 48)
@@ -76,16 +61,12 @@ class Settings:
     ghsa_dir: str = ""
     github_token: str = ""
     nvd_api_key: str = ""
-    web_search: str = ""
-    tavily_api_key: str = ""
     # index
     index_max_files: int = 3000
     index_max_bytes: int = 30 * 1024 * 1024
     # observability
     otel_endpoint: str = ""
     otel_service_name: str = "scanner"
-    compaction_interval: int = 0
-    compaction_overlap: int = 2
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -99,27 +80,13 @@ class Settings:
             max_hyps=_int(e, "BUGFINDER_MAX_HYPS", 8),
             max_parallel=_int(e, "BUGFINDER_MAX_PARALLEL", 3),
             stage_timeout=_float(e, "STAGE_TIMEOUT", 600.0),
-            specialists=_on(e, "SPECIALISTS"),
             threat_model=_on(e, "THREAT_MODEL"),
-            domain_model=_on(e, "DOMAIN_MODEL"),
             critic=_on(e, "CRITIC"),
-            triage=_on(e, "TRIAGE"),
+            model_max_calls=_int(e, "MODEL_MAX_MODEL_CALLS", 40),
             verifier_max_calls=_int(e, "VERIFIER_MAX_MODEL_CALLS", 30),
             critic_max_calls=_int(e, "CRITIC_MAX_MODEL_CALLS", 20),
-            architect_max_calls=_int(e, "ARCHITECT_MAX_MODEL_CALLS", 40),
-            domain_modeler_max_calls=_int(e, "DOMAIN_MODELER_MAX_MODEL_CALLS", 12),
-            domain_max_calls=_int(e, "DOMAIN_MAX_MODEL_CALLS", 8),
-            threat_modeler_max_calls=_int(e, "THREAT_MODELER_MAX_MODEL_CALLS", 6),
             knowledge_max_calls=_int(e, "KNOWLEDGE_MAX_MODEL_CALLS", 10),
-            triage_max_calls=_int(e, "TRIAGE_MAX_CALLS", 4),
-            triage_batch=_int(e, "TRIAGE_BATCH", 10),
-            triage_parallel=_int(e, "TRIAGE_PARALLEL", 4),
-            review_max_calls=_int(e, "REVIEW_MAX_CALLS", 8),
-            viability_max_calls=_int(e, "VIABILITY_MAX_CALLS", 6),
-            confirm_max_calls=_int(e, "CONFIRM_MAX_CALLS", 8),
-            calibrate_llm=e.get("CALIBRATE_LLM") == "1",
-            recon=_on(e, "RECON"),
-            llm_model_small=e.get("LLM_MODEL_SMALL", ""),
+            domain_max_calls=_int(e, "DOMAIN_MAX_MODEL_CALLS", 8),
             state_path=e.get("STATE_PATH") or ".state/state.db",
             workspace_root=e.get("WORKSPACE_ROOT") or ".",
             sessions_path=e.get("SESSIONS_PATH") or ".state/sessions.db",
@@ -129,12 +96,8 @@ class Settings:
             ghsa_dir=e.get("GHSA_DIR", ""),
             github_token=e.get("GITHUB_TOKEN", ""),
             nvd_api_key=e.get("NVD_API_KEY", ""),
-            web_search=e.get("WEB_SEARCH", ""),
-            tavily_api_key=e.get("TAVILY_API_KEY", ""),
             index_max_files=_int(e, "INDEX_MAX_FILES", 3000),
             index_max_bytes=_int(e, "INDEX_MAX_BYTES", 30 * 1024 * 1024),
             otel_endpoint=e.get("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
             otel_service_name=e.get("OTEL_SERVICE_NAME") or "scanner",
-            compaction_interval=_int(e, "COMPACTION_INTERVAL", 0),
-            compaction_overlap=_int(e, "COMPACTION_OVERLAP", 2),
         )

@@ -32,7 +32,6 @@ from scanner.adapter.index import build_index
 from scanner.adapter.store import Store
 from scanner.adapter.tools import ToolContext
 from scanner.app.agents import build
-from scanner.app.agents import registry as sp
 from scanner.app.agents.registry import AGENTS
 from scanner.app.graph.helpers import parse_json, text_of
 from scanner.app.graph.reconcile import KNOWN_WSTG
@@ -44,24 +43,27 @@ from scanner.core import (
     ThreatModel,
     new_anchor_id,
 )
-from scanner.core.domain import DomainMap
 
 SAMPLE = Path(__file__).resolve().parent.parent / "samples" / "02-vulnshop"
+
 TRIAL_TIMEOUT = 300  # seconds per activation
 
-# anchors of samples/02-vulnshop as the pre-pass would mint them (gosec G202/G204)
 SQLI = Anchor(id=new_anchor_id("gosec", "G202", "main.go", 22), tool="gosec", rule_id="G202", cwe="CWE-89", severity="high",
               file="main.go", line=22, message="SQL string concatenation", snippet='db.Query("SELECT id FROM users WHERE name = \'" + name + "\'")')
+
 SAFE = Anchor(id=new_anchor_id("gosec", "G202", "main.go", 37), tool="gosec", rule_id="G202", cwe="CWE-89", severity="high",
               file="main.go", line=37, message="SQL string formatting", snippet='db.Query("SELECT id FROM users WHERE name = $1", name)')
+
 CMDI = Anchor(id=new_anchor_id("gosec", "G204", "main.go", 30), tool="gosec", rule_id="G204", cwe="CWE-78", severity="high",
               file="main.go", line=30, message="Subprocess launched with variable", snippet='exec.Command("sh", "-c", "ping -c1 "+host)')
+
 SKELETON = {
     "target": str(SAMPLE),
     "entry_points": [{"kind": "entry", "file": "main.go", "line": 13, "symbol": "searchHandler"},
                      {"kind": "entry", "file": "main.go", "line": 14, "symbol": "pingHandler"}],
     "anchors": [{"id": a.id, "tool": a.tool, "cwe": a.cwe, "file": a.file, "line": a.line, "message": a.message} for a in (SQLI, CMDI)],
 }
+
 ARCH_MODEL = ArchitectureModel(
     entities=[{"name": "http handlers", "files": ["main.go"], "role": "HTTP API", "grounding_symbol": "searchHandler", "criticality": "STANDARD"},
               {"name": "shell runner", "files": ["main.go"], "role": "ping via sh -c", "grounding_symbol": "pingHandler", "criticality": "STANDARD"}],
@@ -70,6 +72,7 @@ ARCH_MODEL = ArchitectureModel(
     vuln_classes=[{"cwe": "CWE-89", "wstg_id": "WSTG-INJT-05", "why": "string-built SQL"}, {"cwe": "CWE-78", "wstg_id": "WSTG-INJT-12", "why": "sh -c"}],
     deployment_signals=["http.ListenAndServe(\":8080\")"],
 ).model_dump()
+
 HYP = Hypothesis(id="h0-1", kind="sink", cwe="CWE-89", claim="user input from r.URL.Query().Get(\"name\") reaches db.Query at main.go:22 "
                  "by string concatenation without parameterization", anchor_id=SQLI.id, reads=["main.go"], priority=80)
 
@@ -137,11 +140,9 @@ def _refusals(run) -> list[str]:
     return [r[:90] for (r,) in run.db.execute("SELECT reason FROM gate_log WHERE run=?", (run.id,))]
 
 
-# --- one trial per agent: returns (passed, reason) ---------------------------------------------------
-
 async def trial_architect(model, tmp, index, budget, probe):
     store, run = _store(tmp, [SQLI, CMDI])
-    text, tools = await _activate(_agent("architect", model, run, SAMPLE, index, budget), "Skeleton", SKELETON, probe)
+    text, tools = await _activate(_agent("model", model, run, SAMPLE, index, budget), "Skeleton", SKELETON, probe)
     store.close()
     if not {"list_entry_points", "grep", "read_file", "lsp_symbols"} & set(tools):
         return False, f"never looked at the code (tools: {sorted(set(tools))})"
@@ -162,37 +163,6 @@ async def trial_architect(model, tmp, index, budget, probe):
     if fake:
         return False, f"fabricated WSTG ids: {fake} (consult_owasp was not used)"
     return True, ""
-
-
-async def trial_domain_modeler(model, tmp, index, budget, probe):
-    """08-idor-go: every rule must be grounded on a real symbol; getOrder's missing owner check must surface."""
-    from scanner.adapter.domain import extract
-    from scanner.adapter.index import build_index
-    from scanner.core.domain import DomainMap
-
-    idor = SAMPLE.parent / "08-idor-go"
-    idx = build_index(idor)
-    try:
-        store, run = _store(tmp, [])
-        skeleton = extract(idor, idx).model_dump()
-        text, _ = await _activate(_agent("domain_modeler", model, run, idor, idx, budget), "DomainInput",
-                                  {"architecture_model": {}, "skeleton": skeleton}, probe)
-        store.close()
-        parsed = parse_json(text)
-        if parsed is None:
-            return False, "final text is not JSON"
-        try:
-            dm = DomainMap.model_validate(parsed)
-        except ValueError as e:
-            return False, f"not a DomainMap: {str(e)[:80]}"
-        ghosts = [r.symbol for r in dm.rules if r.symbol and not idx.has_symbol(r.symbol.split(".")[-1])]
-        if ghosts:
-            return False, f"rules grounded on symbols that do not exist: {ghosts}"
-        if not any("getOrder" in (r.symbol + r.statement) for r in dm.rules) and not any("getOrder" in g for g in dm.gaps):
-            return False, "getOrder without an owner check was not surfaced as a rule or gap"
-        return True, ""
-    finally:
-        idx.close()
 
 
 async def trial_threat_modeler(model, tmp, index, budget, probe):
@@ -252,160 +222,7 @@ def grade_window(probe: Probe, keep: int = 3):
     worst = max(v for _, v in big)
     return (worst <= keep, "" if worst <= keep else f"{worst} verbatim tool responses kept, expected ≤{keep}")
 
-
-# --- specialists (scanner/app/specialists.py): one trial each, routed like the graph does ------------------
-
-IDOR = Path(__file__).resolve().parent.parent / "samples" / "08-idor-go"
-IDOR_ANCHOR = Anchor(id=new_anchor_id("threatmodel", "WSTG-ATHZ-04", "main.go", 30), tool="threatmodel", rule_id="WSTG-ATHZ-04",
-                     cwe="CWE-639", severity="high", file="main.go", line=30, message="getOrder returns any order by id without an owner check")
-DOMAIN_MAP = DomainMap(
-    entities=[{"name": "Order", "fields": ["ID", "UserID"], "owner_field": "UserID", "symbol": "Order", "file": "main.go", "line": 9}],
-    rules=[{"id": "r1", "statement": "An Order is returned only to the user whose UserID equals the session user (currentUser)",
-            "entity": "Order", "symbol": "getMyOrder", "evidence": ["main.go:46"]}],
-).model_dump()
-EXPRESS_DEP = Anchor(id=new_anchor_id("osv", "express@4.17.1", "package.json", 1), tool="osv", rule_id="GHSA-rv95-896h-c2vc",
-                     rule_ids=["GHSA-rv95-896h-c2vc", "CVE-2024-29041"], severity="high", file="package.json", line=1,
-                     message="express@4.17.1: 1 advisories (GHSA-rv95-896h-c2vc) — open redirect in res.location / res.redirect with malformed URLs",
-                     snippet="express 4.17.1")
 FAKE_TOKEN = "ghp_9Q3xL2mV8nB4kT7pW1rY6sD0fH5jZ2aC3eG9"
-
-
-def _fixture(tmp: Path, name: str, files: dict[str, str]) -> Path:
-    t = tmp / name
-    t.mkdir(exist_ok=True)
-    for f, body in files.items():
-        (t / f).write_text(body)
-    return t
-
-
-def _pick(spec_name: str, run, target: Path, index, item, model, lang: str = "go", role: str = "investigate", kind: str = ""):
-    """Build the roster for this run and return (agent, overlay suffix) the graph's router would use."""
-    agent = sp.build_specialists(model, run, target, index)[spec_name]
-    spec, suffix = sp.route(item, lang, role, kind)
-    assert spec.name == spec_name, f"router picked {spec.name} for the {spec_name} trial"
-    return agent, suffix
-
-
-def _swap_tool(agent, fn) -> None:
-    agent.tools = [fn if getattr(t, "__name__", "") == fn.__name__ else t for t in agent.tools]
-
-
-async def trial_taint(model, tmp, index, budget, probe):
-    store, run = _store(tmp, [SQLI, CMDI])
-    agent, suffix = _pick("taint", run, SAMPLE, index, HYP, model)
-    if suffix != sp.LANG_OVERLAYS["go"] or not suffix:
-        return False, "go overlay missing from the routed activation"
-    _, tools = await _activate(agent, "Hypothesis", {**HYP.model_dump(), "skill": "sql-injection", "specialist": "taint"}, probe, suffix)
-    fs, refusals = run.findings(), _refusals(run)
-    store.close()
-    ok = [f for f in fs if f.anchor_id == SQLI.id and f.status == core.CONFIRMED and any("db.Query" in e for e in f.evidence)]
-    if not ok:
-        return False, f"no confirmed finding quoting db.Query (findings: {[(f.status, f.anchor_id[:8]) for f in fs]}; refused: {refusals}; tools: {tools})"
-    return True, ""
-
-
-async def trial_authz(model, tmp, index, budget, probe):
-    idx = build_index(IDOR)
-    store = Store(str(tmp / f"state-{time.time_ns()}.db"))
-    run = store.start_run(str(IDOR))
-    run.save_anchors([IDOR_ANCHOR])
-    run.put_artifact("domain_map", DOMAIN_MAP)
-    hyp = Hypothesis(id="h0-1", kind="authz", cwe="CWE-639", consult="domain", anchor_id=IDOR_ANCHOR.id, reads=["main.go"], priority=80,
-                     claim="getOrder returns the Order for any id from the query without comparing Order.UserID to currentUser(r)")
-    agent, suffix = _pick("authz", run, IDOR, idx, hyp, model)
-    _, tools = await _activate(agent, "Hypothesis", {**hyp.model_dump(), "skill": "authz-idor", "specialist": "authz"}, probe, suffix)
-    fs, refusals = run.findings(), _refusals(run)
-    store.close(); idx.close()
-    if "domain" not in tools:
-        return False, f"never consulted the domain map (tools: {tools})"
-    ok = [f for f in fs if f.anchor_id == IDOR_ANCHOR.id and f.status == core.CONFIRMED and any(e.lower().startswith("domain:") for e in f.evidence)]
-    return (True, "") if ok else (False, f"no confirmed IDOR with a domain: ref (findings: {[(f.status, f.evidence[:1]) for f in fs]}; refused: {refusals})")
-
-
-async def trial_dependency(model, tmp, index, budget, probe):
-    target = Path(__file__).resolve().parent.parent / "samples" / "11-expressshop"
-    idx = build_index(target)
-    store = Store(str(tmp / f"state-{time.time_ns()}.db"))
-    run = store.start_run(str(target))
-    run.save_anchors([EXPRESS_DEP])
-    hyp = Hypothesis(id="h0-1", kind="dependency", consult="knowledge", anchor_id=EXPRESS_DEP.id, reads=["package.json", "server.js"], priority=70,
-                     claim="express@4.17.1 is affected by GHSA-rv95-896h-c2vc and the app calls res.redirect with user input")
-    agent, suffix = _pick("dependency", run, target, idx, hyp, model, lang="node")
-    _, tools = await _activate(agent, "Hypothesis", {**hyp.model_dump(), "skill": "dependency-advisory", "specialist": "dependency"}, probe, suffix)
-    fs = run.findings()
-    store.close(); idx.close()
-    if "shell" in tools:
-        return False, "dependency specialist must not have/use shell"
-    if "knowledge" not in tools:
-        return False, f"never consulted knowledge (tools: {tools})"
-    ok = [f for f in fs if f.anchor_id == EXPRESS_DEP.id and any(e.lower().startswith("knowledge:") for e in f.evidence)]
-    return (True, "") if ok else (False, f"no verdict citing knowledge: (findings: {[(f.status, f.evidence[:1]) for f in fs]}; tools: {tools})")
-
-
-async def trial_secrets(model, tmp, index, budget, probe):
-    target = _fixture(tmp, "secrets", {"config.js": f'const GITHUB_TOKEN = "{FAKE_TOKEN}"; // used by deploy.js\nmodule.exports = {{ GITHUB_TOKEN }};\n'})
-    idx = build_index(target)
-    store = Store(str(tmp / f"state-{time.time_ns()}.db"))
-    run = store.start_run(str(target))
-    sec = Anchor(id=new_anchor_id("gitleaks", "github-pat", "config.js", 1), tool="gitleaks", rule_id="github-pat", cwe="CWE-798", severity="high",
-                 file="config.js", line=1, message="GitHub personal access token", snippet=core.redact_secrets(f'const GITHUB_TOKEN = "{FAKE_TOKEN}"'))
-    run.save_anchors([sec])
-    hyp = Hypothesis(id="h0-1", kind="secret", cwe="CWE-798", anchor_id=sec.id, reads=["config.js"], priority=60,
-                     claim="config.js commits a live GitHub token that the code uses")
-    agent, suffix = _pick("secrets", run, target, idx, hyp, model, lang="node")
-    _, tools = await _activate(agent, "Hypothesis", {**hyp.model_dump(), "skill": "information-disclosure", "specialist": "secrets"}, probe, suffix)
-    fs = run.findings()
-    store.close(); idx.close()
-    if "shell" in tools:
-        return False, "secrets specialist must not use shell"
-    mine = [f for f in fs if f.anchor_id == sec.id]
-    if not mine:
-        return False, f"no verdict recorded (tools: {tools})"
-    leaked = [e for f in mine for e in f.evidence if FAKE_TOKEN in e]
-    return (False, "raw token in evidence") if leaked else (True, "")
-
-
-async def trial_config(model, tmp, index, budget, probe):
-    target = _fixture(tmp, "config", {"server.js": 'const express = require("express");\nconst app = express();\n'
-                                       'app.post("/login", (req, res) => {\n  const sid = newSession(req.body.user);\n'
-                                       '  res.cookie("sid", sid);\n  res.send("ok");\n});\n'})
-    idx = build_index(target)
-    store = Store(str(tmp / f"state-{time.time_ns()}.db"))
-    run = store.start_run(str(target))
-    a = Anchor(id=new_anchor_id("semgrep", "express-cookie-session-no-httponly", "server.js", 5), tool="semgrep", rule_id="express-cookie-session-no-httponly",
-               cwe="CWE-614", severity="medium", file="server.js", line=5, message="Session cookie set without httpOnly/secure/sameSite", snippet='res.cookie("sid", sid);')
-    run.save_anchors([a])
-    hyp = Hypothesis(id="h0-1", kind="sink", cwe="CWE-614", anchor_id=a.id, reads=["server.js"], priority=40,
-                     claim="the session cookie is set without HttpOnly/Secure/SameSite")
-    agent, suffix = _pick("config", run, target, idx, hyp, model, lang="node")
-    _, tools = await _activate(agent, "Hypothesis", {**hyp.model_dump(), "skill": "information-disclosure", "specialist": "config"}, probe, suffix)
-    fs = run.findings()
-    store.close(); idx.close()
-    mine = [f for f in fs if f.anchor_id == a.id]
-    return (True, "") if mine else (False, f"no verdict recorded (tools: {tools})")
-
-
-async def trial_taint_critic(model, tmp, index, budget, probe):
-    store, run = _store(tmp, [SQLI, SAFE])
-    fp = run.report(Finding(anchor_id=SAFE.id, cwe="CWE-89", file="main.go", line=37, title="SQL injection in safeHandler",
-                            status=core.CONFIRMED, evidence=['rows, _ := db.Query("SELECT id FROM users WHERE name = $1", name)'], confidence=0.9))
-    tp = run.report(Finding(anchor_id=SQLI.id, cwe="CWE-89", file="main.go", line=22, title="SQL injection in searchHandler",
-                            status=core.CONFIRMED, evidence=['rows, _ := db.Query("SELECT id FROM users WHERE name = \'" + name + "\'")'], confidence=0.95))
-    agent, suffix = _pick("taint_critic", run, SAMPLE, index, fp, model, role="critique")
-    tools_all = []
-    for f in (fp, tp):
-        _, tools = await _activate(agent, "Finding", {"finding": f.model_dump(), "anchor": run.anchor(f.anchor_id).model_dump(), "specialist": "taint_critic"}, probe, suffix)
-        tools_all += tools
-    st = {f.id: f for f in run.findings()}
-    store.close()
-    if st[tp.id].status != core.CONFIRMED:
-        return False, f"real SQLi did not survive (status {st[tp.id].status})"
-    if st[fp.id].status == core.CONFIRMED:
-        return False, f"parameterized /safe query still confirmed (tools: {tools_all})"
-    if "check_dominance" not in tools_all:
-        return False, "disproved without calling check_dominance"
-    return True, ""
-
 
 ELSE_BRANCH_GO = """package main
 
@@ -439,52 +256,8 @@ func getOrder(w http.ResponseWriter, r *http.Request) {
 func main() { http.HandleFunc("/order", getOrder) }
 """
 
-
-async def trial_authz_critic(model, tmp, index, budget, probe):
-    target = _fixture(tmp, "authz_critic", {"main.go": ELSE_BRANCH_GO, "go.mod": "module fixture\n\ngo 1.22\n"})
-    idx = build_index(target)
-    store = Store(str(tmp / f"state-{time.time_ns()}.db"))
-    run = store.start_run(str(target))
-    a = Anchor(id=new_anchor_id("threatmodel", "WSTG-ATHZ-04", "main.go", 20), tool="threatmodel", rule_id="WSTG-ATHZ-04", cwe="CWE-639",
-               severity="high", file="main.go", line=20, message="admin header bypasses the owner check")
-    run.save_anchors([a])
-    run.put_artifact("domain_map", DOMAIN_MAP)
-    f = run.report(Finding(anchor_id=a.id, cwe="CWE-639", file="main.go", line=20, title="IDOR: X-Admin header skips the owner check",
-                           status=core.CONFIRMED, evidence=["domain:r1", 'if r.Header.Get("X-Admin") == "1" {', "json.NewEncoder(w).Encode(order)"], confidence=0.9))
-    agent, suffix = _pick("authz_critic", run, target, idx, f, model, role="critique")
-    _, tools = await _activate(agent, "Finding", {"finding": f.model_dump(), "anchor": a.model_dump(), "specialist": "authz_critic"}, probe, suffix)
-    st = {x.id: x for x in run.findings()}
-    store.close(); idx.close()
-    if st[f.id].status != core.CONFIRMED:
-        return False, f"finding wrongly disproved: the owner check sits in the else branch (tools: {tools}; evidence: {st[f.id].evidence[-2:]})"
-    return True, ""
-
-
-async def trial_dependency_critic(model, tmp, index, budget, probe):
-    target = _fixture(tmp, "dep_critic", {"package.json": '{"name": "x", "dependencies": {"express": "4.17.1"}}\n',
-                                          "server.js": 'const express = require("express");\nconst app = express();\n'
-                                                       'app.get("/", (req, res) => res.send("hi"));\napp.listen(3000);\n'})
-    idx = build_index(target)
-    store = Store(str(tmp / f"state-{time.time_ns()}.db"))
-    run = store.start_run(str(target))
-    run.save_anchors([EXPRESS_DEP])
-    f = run.report(Finding(anchor_id=EXPRESS_DEP.id, cwe="", file="package.json", line=1, title="express open redirect GHSA-rv95-896h-c2vc reachable",
-                           status=core.CONFIRMED, evidence=["knowledge:GHSA-rv95-896h-c2vc", '"express": "4.17.1"'], confidence=0.8))
-    agent, suffix = _pick("dependency_critic", run, target, idx, f, model, lang="node", role="critique", kind="dependency")
-    _, tools = await _activate(agent, "Finding", {"finding": f.model_dump(), "anchor": EXPRESS_DEP.model_dump(), "specialist": "dependency_critic"}, probe, suffix)
-    st = {x.id: x for x in run.findings()}
-    store.close(); idx.close()
-    if st[f.id].status == core.CONFIRMED:
-        return False, f"still confirmed although res.redirect/res.location is never called (tools: {tools})"
-    if not ({"lsp_path_to_entry", "lsp_references", "grep"} & set(tools)):
-        return False, f"disproved without checking reachability (tools: {tools})"
-    return True, ""
-
-
 TRIALS = {
-    "architect": trial_architect, "domain_modeler": trial_domain_modeler, "threat_modeler": trial_threat_modeler, "investigator": trial_verifier, "critic": trial_critic,
-    "taint": trial_taint, "authz": trial_authz, "dependency": trial_dependency, "secrets": trial_secrets, "config": trial_config,
-    "taint_critic": trial_taint_critic, "authz_critic": trial_authz_critic, "dependency_critic": trial_dependency_critic,
+    "model": trial_architect, "threat_modeler": trial_threat_modeler, "investigator": trial_verifier, "critic": trial_critic,
 }
 
 
@@ -546,7 +319,6 @@ def main(argv=None) -> int:
     Path(a.out).write_text(json.dumps(card, indent=1, ensure_ascii=False))
     print_table(card)
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

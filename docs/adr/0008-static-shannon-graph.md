@@ -1,6 +1,6 @@
 # ADR-0008: Shannon's Capella stages as a static ADK Workflow graph
 
-Status: accepted (2026-09-12). Extends ADR-0007 (the Workflow root) — the four dynamic nodes of ADR-0007
+Status: superseded by ADR-0010 (2026-09-12) — the small graph. Extends ADR-0007 (the Workflow root) — the four dynamic nodes of ADR-0007
 become the 24-node static graph of `docs/plans/shannon-graph.md`.
 
 ## Context

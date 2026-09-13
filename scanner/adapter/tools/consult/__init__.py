@@ -1,1 +1,1 @@
-"""Consultants and side knowledge: OWASP tables, the domain map, skills, dominance, entry points."""
+"""Consultants that are plain tables: OWASP, the skills corpus."""

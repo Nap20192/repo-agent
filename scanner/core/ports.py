@@ -1,6 +1,6 @@
 """Ports declared by the core (Cockburn's hexagon): what the graph and the tools need from the outside.
 
-`RunStore` is the run-scoped State; `Router` picks a specialist; `Index` is the code index, split by
+`RunStore` is the run-scoped State; `Index` is the code index, split by
 consumer (ISP): `SymbolLocator` (gate, synthetic anchors), `Definitions` (bodies), `CallGraph` (reachability).
 
 `Index` is language-agnostic. Adapters live in scanner/adapter/index: one LSP-backed adapter per
@@ -11,7 +11,7 @@ adapter by file extension. Symbols are addressed by fully-qualified-ish names as
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -100,10 +100,3 @@ class RunStore(Protocol):
     def notes(self) -> list[dict]: ...
     def put_artifact(self, stage: str, obj: dict) -> None: ...
     def artifact(self, stage: str) -> dict | None: ...
-
-
-@runtime_checkable
-class Router(Protocol):
-    """Picks a specialist for a hypothesis/finding: (specialist name or "" for the generic fallback, instruction suffix)."""
-
-    def __call__(self, item: Any, lang: str, role: str) -> tuple[str, str]: ...

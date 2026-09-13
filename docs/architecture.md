@@ -68,8 +68,8 @@ validate» [King] — порты принимают уже проверенны�
 
 ## Отображение на Google ADK [ADK]
 
-- Граф — статический `Workflow` ADK 2.9 (`scanner/app/graph/workflow.py`, ADR-0008): стадии Capella (Shannon) как
-  рёбра графа, 24 узла + 2 служебных (`batches`, `provisional`). Конструкции выбраны по сути узла и проверены
+- Граф — статический `Workflow` ADK 2.9 (`scanner/app/graph/workflow.py`, ADR-0010): семь узлов
+  (scan → build_skeleton → direct_findings → model → plan → audit → critique → export); ADR-0008 (24 узла) — история. Конструкции выбраны по сути узла и проверены
   спайком (`tests/test_adk_spike.py`, план §6):
 
   | Конструкция | Узлы | Почему |

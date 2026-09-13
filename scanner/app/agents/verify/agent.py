@@ -11,6 +11,4 @@ SPEC = AgentSpec(
     tools=ROSTER,
     consults=('knowledge', 'domain'),
     budget='verifier_max_calls',
-    node="worker",
-    role="investigate",
 )

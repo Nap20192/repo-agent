@@ -11,9 +11,8 @@ from collections.abc import Callable
 from google.adk.events import Event
 
 from scanner import core
-from scanner.adapter import fs
 from scanner.core import Dossier, Finding, Hypothesis
-from scanner.core.ports import Router, RunStore
+from scanner.core.ports import RunStore
 
 log = logging.getLogger("scanner.graph")
 
@@ -40,22 +39,6 @@ def text_of(ev: Event) -> str:
     return "".join(p.text or "" for p in ev.content.parts)
 
 _RANK = {core.CONFIRMED: 2, core.REJECTED: 1}
-
-def pick_agent(item, role: str, specialists: dict, router: Router | None, fallback):
-    """(agent, specialist name or "", instruction suffix): the router's choice for `item` (a Hypothesis for
-    role "investigate", a Finding for "critique") among `specialists`, else the generic `fallback`."""
-    if router is None:
-        return fallback, "", ""
-    files = list(getattr(item, "reads", None) or []) or [getattr(item, "file", "") or ""]
-    lang = next((fs.LANG_EXT[s] for f in files if (s := "." + f.rsplit(".", 1)[-1]) in fs.LANG_EXT), "")
-    name, suffix = router(item, lang, role)
-    agent = specialists.get(name) if name else None
-    if agent is None:
-        if name:
-            log.warning("router: unknown specialist %r for %s — using the generic %s", name, role, getattr(fallback, "name", "?"))
-        return fallback, "", ""
-    return agent, name, suffix
-
 
 def gate_hypotheses(hs: list[Hypothesis], rnd: int, store: RunStore, has_anchor: Callable[[str], bool],
                     has_symbol: Callable[[str], bool], max_hyps: int) -> list[Hypothesis]:

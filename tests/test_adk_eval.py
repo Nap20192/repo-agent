@@ -34,7 +34,7 @@ def _inv(text: str = "", calls: list[str] = (), responses: dict[str, dict] | Non
 # --- the files ------------------------------------------------------------------------------------------
 
 def test_every_app_has_a_valid_evalset_and_config():
-    assert len(APPS) == 20
+    assert len(APPS) == 5
     for app in APPS:
         es = EvalSet.model_validate_json((WEB / app / f"{app}.evalset.json").read_text(encoding="utf-8"))
         assert es.eval_set_id == app and es.eval_cases, app
@@ -54,21 +54,21 @@ def test_seed_payloads_are_the_graphs_own_shapes():
     for app in APPS:
         es = EvalSet.model_validate_json((WEB / app / f"{app}.evalset.json").read_text(encoding="utf-8"))
         text = es.eval_cases[0].conversation[0].user_content.parts[0].text
-        if app in ("knowledge", "domain"):
+        if app in ("knowledge", "domain", "model"):
             continue
         payload = json.loads(text)
-        if app in ("verify", "taint", "authz", "config", "secrets_agent", "dependency"):
+        if app == "verify":
             h = Hypothesis.model_validate(payload)
-            assert payload["skill"] and payload["specialist"] == ("" if app == "verify" else app.removesuffix("_agent"))
+            assert payload["skill"] and payload["specialist"] == ""
             sqli = sqli or h.anchor_id
-        elif app in ("critic", "taint_critic", "authz_critic", "dependency_critic", "review", "viability", "confirm"):
+        elif app == "critic":
             f = Finding.model_validate(payload["finding"])
             assert payload["anchor"]["id"] == f.anchor_id and payload["skills"]
     assert sqli == "a_f62a1e0787ee"  # new_anchor_id("gosec", "G202", "main.go", 22)
 
 
 def test_app_names_match_the_roster():
-    assert {a.removesuffix("_agent") for a in APPS} == set(runner.ROSTER)
+    assert set(APPS) == set(runner.ROSTER)
 
 
 # --- the graders ----------------------------------------------------------------------------------------
@@ -103,11 +103,3 @@ def test_investigator_and_critic_configs_guard_against_vacuous_passes():
         cfg = json.loads((WEB / app / "test_config.json").read_text(encoding="utf-8"))
         if "verdict_via_gate" in cfg["criteria"] and "read_before_report" in cfg["criteria"]:
             assert cfg["criteria"]["gate_attempted"] == 1.0, app
-
-
-def test_schema_metrics_validate_the_stage_document():
-    ok = _inv(text='Here it is:\n{"finding_id": "f_1", "status": "VALID", "checklist": {}, "notes": ""}')
-    bad = _inv(text="I think it is valid")
-    r = m.schema_review_verdict(METRIC, [ok, bad])
-    assert [p.score for p in r.per_invocation_results] == [1.0, 0.0]
-    assert m.schema_architecture_model(METRIC, [_inv(text="{}")]).overall_eval_status == EvalStatus.PASSED

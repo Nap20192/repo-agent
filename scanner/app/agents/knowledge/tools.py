@@ -7,5 +7,4 @@ ROSTER = (
     'epss',
     'kev',
     'deps_dev',
-    'web_search',
 )

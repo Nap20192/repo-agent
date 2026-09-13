@@ -9,16 +9,9 @@ finds no anchor and never reaches the gate, which `gate_attempted` reports as a 
 
 from __future__ import annotations
 
-import json
-
 from google.adk.evaluation.eval_case import Invocation
 from google.adk.evaluation.eval_metrics import EvalMetric, EvalStatus
 from google.adk.evaluation.evaluator import EvaluationResult, PerInvocationResult
-from pydantic import BaseModel, ValidationError
-
-from scanner.core import ArchitectureModel, ThreatModel
-from scanner.core.domain import DomainMap
-from scanner.core.workflow import Confirmation, ReviewVerdict, TriageBatch, Viability
 
 VERDICT_TOOLS = {"report_finding", "disprove_finding"}
 READ_TOOLS = {"read_file", "lsp_definition", "grep", "lsp_references", "lsp_callers", "lsp_callees"}
@@ -79,30 +72,3 @@ def gate_attempted(metric: EvalMetric, actual: list[Invocation], expected=None, 
     """The activation reached a verdict tool at all (report_finding / disprove_finding, accepted or refused). Guards the
     two metrics above from passing vacuously when the target has no such anchor (wrong BUGFINDER_TARGET)."""
     return _result([1.0 if any(c in VERDICT_TOOLS for c in _calls(inv)) else 0.0 for inv in actual], actual)
-
-
-def _schema_metric(model: type[BaseModel]):
-    def metric(metric_: EvalMetric, actual: list[Invocation], expected=None, scenario=None) -> EvaluationResult:
-        scores = []
-        for inv in actual:
-            text = _final_text(inv).strip()
-            text = text[text.find("{"):text.rfind("}") + 1] if "{" in text else text
-            try:
-                model.model_validate(json.loads(text))
-                scores.append(1.0)
-            except (ValueError, ValidationError):
-                scores.append(0.0)
-        return _result(scores, actual)
-    metric.__name__ = f"schema_{model.__name__}"
-    metric.__doc__ = f"Document stage contract: the final answer is JSON that validates as {model.__name__}."
-    return metric
-
-
-# document stages (output_schema agents): the final answer must be the stage's document
-schema_architecture_model = _schema_metric(ArchitectureModel)
-schema_domain_map = _schema_metric(DomainMap)
-schema_threat_model = _schema_metric(ThreatModel)
-schema_triage_batch = _schema_metric(TriageBatch)
-schema_review_verdict = _schema_metric(ReviewVerdict)
-schema_viability = _schema_metric(Viability)
-schema_confirmation = _schema_metric(Confirmation)

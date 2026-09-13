@@ -10,12 +10,11 @@ from google.adk.agents import LlmAgent
 
 from scanner.adapter.scanners import ScanResult
 from scanner.app import runner
-from scanner.app.agents.registry import REGISTRY
 from tests.fakes import A1, FakeRun
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
-FOLDER_OF = {"secrets": "secrets_agent"}  # stdlib `secrets` must not be shadowed by the loader's sys.path insert
+FOLDER_OF: dict[str, str] = {}  # web folder per agent when it differs from the name (none today)
 
 
 def _target(tmp_path: Path) -> Path:
@@ -26,10 +25,8 @@ def _target(tmp_path: Path) -> Path:
 
 # --- the roster -------------------------------------------------------------------------------------------
 
-def test_roster_is_every_named_factory_plus_every_specialist():
-    named = {"triage", "triage_batch", "verify", "critic", "architect", "threat_modeler", "review", "viability",
-             "confirm", "knowledge", "domain", "domain_modeler"}
-    assert set(runner.ROSTER) == named | {s.name for s in REGISTRY} and len(runner.ROSTER) == 20
+def test_roster_is_the_five_agents():
+    assert set(runner.ROSTER) == {"model", "verify", "critic", "knowledge", "domain"}
 
 
 def test_one_web_app_per_roster_name_next_to_fullscan():
@@ -47,10 +44,9 @@ def test_web_apps_do_not_shadow_stdlib():
 
 # --- standalone -------------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("name", ["verify", "viability", "triage_batch", "taint", "critic", "triage", "knowledge"])
+@pytest.mark.parametrize("name", ["verify", "critic", "model", "knowledge"])
 def test_standalone_builds_the_named_agent_with_its_run_tools(name, tmp_path, monkeypatch):
     monkeypatch.setenv("STATE_PATH", str(tmp_path / "state.db"))
-    monkeypatch.setenv("SPECIALISTS", "0")  # forced back on by standalone: a specialist must still come out
     monkeypatch.setenv("CRITIC", "0")
     monkeypatch.setattr(runner, "model_from_env", lambda s: "gemini-flash-lite-latest")
     monkeypatch.setattr(runner, "_shared", {})
@@ -61,9 +57,9 @@ def test_standalone_builds_the_named_agent_with_its_run_tools(name, tmp_path, mo
         tools = {getattr(t, "__name__", getattr(t, "name", "")) for t in agent.tools}
         if name == "knowledge":
             assert "osv_query" in tools
-        elif name in ("triage", "triage_batch"):
-            assert tools == {"read_file", "grep", "lsp_symbols"}  # classification only: no gate, no shell
-        elif name in ("critic", "viability"):
+        elif name == "model":
+            assert "read_file" in tools and not ({"report_finding", "disprove_finding", "shell"} & tools)  # a document stage
+        elif name == "critic":
             assert {"read_file", "disprove_finding"} <= tools and "report_finding" not in tools
         else:
             assert {"read_file", "report_finding"} <= tools  # investigators report only through the gate
@@ -84,11 +80,10 @@ def test_standalone_rejects_unknown_names_and_missing_targets(tmp_path, monkeypa
 
 def test_standalone_names_cover_the_roster(tmp_path, monkeypatch):
     """Every ROSTER name resolves to an agent of that name out of one `wiring` (no roster member is None)."""
-    monkeypatch.delenv("SPECIALISTS", raising=False)
     kw = runner.wiring(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
     try:
-        built = {a.name for a in kw.values() if isinstance(a, LlmAgent)} | set(kw["specialists"])
-        assert built | {"triage", "critic", "knowledge", "domain"} == set(runner.ROSTER)  # not on a graph edge: triage, critic, the consultants
+        built = {a.name for a in kw.values() if isinstance(a, LlmAgent)}
+        assert built | {"knowledge", "domain"} == set(runner.ROSTER)  # the consultants are sub-agents, not on a graph edge
     finally:
         kw["index"].close()
 
@@ -118,9 +113,8 @@ def _load(monkeypatch, app: str, target_env: str | None):
 
 def test_app_root_agent_is_lazy_and_names_its_agent(monkeypatch):
     assert _load(monkeypatch, "verify", None) == {"name": "verify", "target": ROOT / "samples/02-vulnshop"}
-    assert _load(monkeypatch, "secrets_agent", "")["name"] == "secrets"
 
 
 def test_app_target_from_env(monkeypatch, tmp_path):
-    assert _load(monkeypatch, "taint_critic", str(tmp_path))["target"] == tmp_path  # absolute: as is
-    assert _load(monkeypatch, "taint_critic", "ewq/bakery")["target"] == ROOT / "ewq/bakery"  # relative: from the repo root
+    assert _load(monkeypatch, "critic", str(tmp_path))["target"] == tmp_path  # absolute: as is
+    assert _load(monkeypatch, "critic", "ewq/bakery")["target"] == ROOT / "ewq/bakery"  # relative: from the repo root

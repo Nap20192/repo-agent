@@ -37,36 +37,24 @@
 
 ## Пайплайн
 
-Staged-конвейер по мотивам Shannon capella: `Architect → ThreatModeler → Reconciler → Investigator ⇄
-очередь → Critic → Reporter`. Architect интерпретирует скелет (entry points, якоря) в
-ArchitectureModel; ThreatModeler выдаёт заземлённые threats и deployment intent; Reconciler
-сливает якоря сканеров и threats в одну очередь без дублей, чеканя синтетический якорь
-(`tool=threatmodel`, file:line определения символа) для угроз без якоря сканера, чтобы гейт
-`report_finding` остался единственным и якорным. Артефакты стадий — в таблице `artifacts` State
-(resume пропускает готовые стадии). Граф — статический ADK 2.9 `Workflow` из 24 узлов по стадиям Capella (Shannon): `scan → build_skeleton →
-direct_findings → (architect ∥ recon) → join_model → domain_modeler → threat_modeler → ground → plan → route_plan →
-triage_sweep → fold_triage → audit → route_research → dedupe → review → route_survivors → route_intent →
-critic → confirm → calibrate → export` (ADR-0008; fan-out/JoinNode, route-карты, parallel-worker для triage/review/
-critic/confirm, динамический цикл только в `audit`; `docs/workflow-nodes.md` описывает каждый узел). `THREAT_MODEL=0` — без Architect/ThreatModeler.
-Инструкции стадий адаптированы из Mantis/Shannon (Apache-2.0), см. THIRD_PARTY_NOTICES.md.
+Один статический ADK Workflow из семи узлов (`scanner/app/graph/workflow.py`, ADR-0010):
 
-**Прямые находки (direct lane).** Якоря, которые точно случились — osv-зависимости, gitleaks-секреты,
-semgrep уровня ERROR — не идут в очередь и к Critic: `split_direct` отделяет их до стадий, `direct_finding`
-делает из каждого confirmed-находку (`source=direct`) через дедуп стора, с advisory/CVSS/EPSS/KEV/fixed
-из knowledge-кэша и подсчётом «пакет импортируется в N файлах» (`knowledge.imported_by`); секреты
-редактируются. Модель занимается только кодом.
+```
+START → scan → build_skeleton → direct_findings → model → plan ─(пусто)→ export
+                                                          └(иначе)→ audit → critique → export
+```
 
-**Planner и Triage (Shannon-стиль поиска, карта 44).** Планировщик детерминирован (`reconcile.coverage`):
-каждая непокрытая точка входа получает baseline-гипотезу с классами для охоты по словам маршрута, файла и
-обработчика (`hunt_classes`: login → CWE-287/307/522, profile → 79/639, `:id` → 639/862, admin → 862/285,
-search → 89/943, file → 22, redirect → 601, eval/template → 95/1336, regex → 1333), поэтому роутер отдаёт её
-нужному специалисту с нужным скиллом; 25 % baseline'ов (детерминированно) несут adversarial-формулировку;
-каждый production-файл, который никто не читает (`fs.source_files`, без тестов/фикстур), получает
-file-baseline (приоритет 8, не больше 60). У каждого baseline свой якорь `entrypoint`, а гейт разрешает с
-такого якоря подтвердить sink в другом месте (чеканится якорь `investigator`). Перед аудитом специалистом
-батч baseline'ов проходит дешёвый **Triage** (`read_file`/`grep`/`lsp_symbols`, 4 вызова): непомеченные
-становятся rejected-досье с причиной (покрытие доказуемо), помеченные несут класс и причину триажа в аудит;
-сбой триажа помечает элемент (fail open). `TRIAGE=0` выключает.
+- `scan` — сканеры (gosec/semgrep/osv/gitleaks) → якоря в SQLite State; `direct_findings` — osv/gitleaks/semgrep-ERROR
+  становятся находками без модели и без гейта (card 42).
+- `model` — один LLM-этап: архитектура + угрозы одним ответом, заземлённые по индексу (символ должен существовать).
+- `plan` — якоря + угрозы + baseline по точкам входа → очередь гипотез; пустая → сразу export.
+- `audit` — раунды: гейт заземления → fan-out агента `verify`; к каждой активации подмешивается секция класса
+  (taint / authz / dependency / secrets / config по CWE → kind) и языковой overlay; вердикт — только через `report_finding`.
+- `critique` — dedupe, затем `critic` по каждой подтверждённой находке: опровергнуть можно только `disprove_finding`
+  с контр-цитатой; JSON критика — аннотация `review`.
+- `export` — детерминированная калибровка, тайминги, стоп-причина → SARIF + summary в `.runs/<ts>/`.
+
+Консультанты `knowledge` (OSV/GHSA/NVD/EPSS/KEV) и `domain` (владение/правила по коду) — саб-агенты `verify`/`critic`.
 
 ## Сессии и трассировка
 
@@ -149,20 +137,13 @@ uv run pytest -q
 | `BUGFINDER_MAX_HYPS` | гипотез за раунд | 8 |
 | `BUGFINDER_MAX_PARALLEL` | параллельных Investigator'ов | 3 |
 | `STAGE_TIMEOUT` | таймаут стадии в секундах | 600 |
-| `SPECIALISTS` | использовать специалистов (0 = одиночные Verifier/Critic) | on |
 | `THREAT_MODEL` | включить Architect/ThreatModeler | on |
-| `DOMAIN_MODEL` | включить DomainModeler (карта для консультанта `domain`) | on |
 | `DOMAIN_MAX_MODEL_CALLS` | бюджет консультанта `domain` на один вопрос | 8 |
 | `CRITIC` | включить адверсариальный проход Critic | on |
-| `TRIAGE` | дешёвый triage-проход по baseline'ам перед аудитом | on |
-| `TRIAGE_MAX_CALLS` | бюджет вызовов Triage на элемент | 4 |
 | `VERIFIER_MAX_MODEL_CALLS` | бюджет вызовов Investigator'а | 30 |
 | `CRITIC_MAX_MODEL_CALLS` | бюджет вызовов Critic'а | 20 |
-| `ARCHITECT_MAX_MODEL_CALLS` | бюджет вызовов Architect | 40 |
-| `DOMAIN_MODELER_MAX_MODEL_CALLS` | бюджет вызовов DomainModeler | 12 |
-| `THREAT_MODELER_MAX_MODEL_CALLS` | бюджет вызовов ThreatModeler | 6 |
+| `MODEL_MAX_MODEL_CALLS` | бюджет вызовов Architect | 40 |
 | `KNOWLEDGE_MAX_MODEL_CALLS` | бюджет вызовов Knowledge AgentTool | 10 |
-| `SPECIALIST_<NAME>_MAX_CALLS` | переопределить бюджет специалиста по имени | — |
 | `STATE_PATH` | SQLite State (якоря, гипотезы, досье, находки, artifacts) | `.state/state.db` |
 | `SESSIONS_PATH` | SQLite ADK-сессий (видны через `adk web`) | `.state/sessions.db` |
 | `SKIP_DEPS` | пропустить osv-scanner (SKIP_DEPS=1) | off |
@@ -171,15 +152,11 @@ uv run pytest -q
 | `GHSA_DIR` | директория офлайн GHSA (вместо GitHub API) | — |
 | `GITHUB_TOKEN` | токен GitHub (снять лимит GHSA) | — |
 | `NVD_API_KEY` | ключ NVD API | — |
-| `WEB_SEARCH` | веб-поиск для Knowledge (`tavily`) | — |
-| `TAVILY_API_KEY` | ключ Tavily API | — |
 | `INDEX_MAX_FILES` | лимит файлов индекса | 3000 |
 | `INDEX_MAX_BYTES` | лимит памяти индекса в байтах | 30M |
 | `WORKSPACE_ROOT` | adk web `fullscan`: цель из сообщения только под этим каталогом; клоны GitHub — в `.targets/` под ним | cwd |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP-экспорт трассировки (например, http://localhost:4318) | — |
 | `OTEL_SERVICE_NAME` | имя сервиса в OTLP | `scanner` |
-| `COMPACTION_INTERVAL` | сжатие ADK-сессии каждые N вызовов (0 = off) | 0 |
-| `COMPACTION_OVERLAP` | последние N событий — дословно | 2 |
 
 osv-scanner сканирует явные манифесты (`-L <manifest>` на каждый go.mod/package-lock.json/…) —
 git-aware обход osv-scanner ничего не находит в мелком клоне без `.git`.

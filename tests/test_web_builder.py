@@ -12,7 +12,7 @@ from tests.fakes import FakeRun, _workflow, fake_verifier_node
 
 def test_builder_serialization_survives_specialists_and_callables():
     run = FakeRun()
-    wf = _workflow(run, specialists={"taint": fake_verifier_node(run, "taint")}, router=lambda item, lang, role: ("taint", ""))
+    wf = _workflow(run, critic=fake_verifier_node(run, "critic"), model=fake_verifier_node(run, "model"))
     info = serialize_app_info(App(name="fullscan", root_agent=wf))
     TypeAdapter(Any).dump_json(info)  # what the /dev/apps/{app}/build_graph endpoint does; must not raise
     assert info["root_agent"]["name"] == "scan"

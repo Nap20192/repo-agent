@@ -22,16 +22,15 @@ from google.genai import types
 
 from scanner import core
 from scanner.adapter import entrypoints, fs, scanners
-from scanner.adapter import recon as recon_adapter
 from scanner.adapter.index import build_index
 from scanner.adapter.knowledge import KnowledgeConfig
 from scanner.adapter.store import Store
 from scanner.adapter.tools import ToolContext
 from scanner.app.agents import build
-from scanner.app.agents.registry import AGENTS, ROSTER, architect_overlay, route_name
+from scanner.app.agents.registry import AGENTS, ROSTER, architect_overlay
 from scanner.app.graph.helpers import why
 from scanner.app.graph.workflow import build_workflow
-from scanner.app.observe import compaction_config, setup_tracing
+from scanner.app.observe import setup_tracing
 from scanner.app.settings import Settings, apply_dotenv
 from scanner.app.target import resolve_target
 from scanner.core import Candidate
@@ -87,7 +86,7 @@ async def run_session(agent, target: str, run_id: int, settings: Settings | None
     s = settings or Settings.from_env()
     svc = ScanSessionService(s.sessions_path)
     sid = f"run-{run_id}-{Path(target).name}"
-    app = App(name=APP_NAME, root_agent=agent, events_compaction_config=compaction_config(model_from_env(s), s))
+    app = App(name=APP_NAME, root_agent=agent)
     runner = Runner(app=app, session_service=svc)
     await svc.create_session(app_name=APP_NAME, user_id=SESSION_USER, session_id=sid)
     log.info("session %s (user %s): adk web → /dev-ui/?app=%s", sid, SESSION_USER, APP_NAME)
@@ -100,8 +99,8 @@ async def run_session(agent, target: str, run_id: int, settings: Settings | None
 
 def build_agents(model, run, target: Path, index: Index, s: Settings) -> dict[str, LlmAgent | None]:
     """Every agent of the registry for one run, by name — None when its Settings flag is off (the graph keeps the
-    node as a no-op of the same name). One fresh consultant AgentTool (knowledge / domain) per agent that consults it (own budget each);
-    the Architect gets the stack overlay of the target's languages."""
+    node as a no-op of the same name). One fresh consultant AgentTool (knowledge / domain) per agent that consults it
+    (own budget each); the Model agent gets the stack overlay of the target's languages."""
     ctx = ToolContext(target, run, index=index, settings=s)
     overlay = architect_overlay(fs.detect_langs(target))
     out: dict[str, LlmAgent | None] = {}
@@ -110,44 +109,29 @@ def build_agents(model, run, target: Path, index: Index, s: Settings) -> dict[st
             out[spec.name] = None
             continue
         extra = [AgentTool(build(AGENTS[c], model, ctx, s)) for c in spec.consults] or None
-        out[spec.name] = build(spec, model, ctx, s, overlay=overlay if spec.name == "architect" else "", extra_tools=extra)
+        out[spec.name] = build(spec, model, ctx, s, overlay=overlay if spec.name == "model" else "", extra_tools=extra)
     return out
 
 
 def wiring(run, target: Path, entries: list[Candidate], model, index: Index | None = None,
            settings: Settings | None = None, deps: bool = False) -> dict:
-    """Everything the graph needs for one run, by keyword: agents (Architect → DomainModeler → ThreatModeler,
-    Investigator + specialists, the verdict ladder), the store, the index-backed callables and the budgets."""
+    """Everything the graph needs for one run, by keyword: the agents, the store, the index-backed callables, the knobs."""
     s = settings or Settings.from_env()
     index = index or build_index(target, max_files=s.index_max_files, max_bytes=s.index_max_bytes)  # LSP per language, grep fallback
-    has_symbol = index.has_symbol
-    langs = fs.detect_langs(target)
     agents = build_agents(model, run, target, index, s)
     return {
         "index": index,
         "scan_fn": lambda: scanners.scan(target, skip_deps=not deps and s.skip_deps, knowledge_cfg=run.knowledge),
-        "architect": agents["architect"],
-        "domain_modeler": agents["domain_modeler"] if s.threat_model else None,  # the domain stage rides on the threat model
-        "threat_modeler": agents["threat_modeler"],
-        "specialists": {n: a for n, a in agents.items() if AGENTS[n].role and (AGENTS[n].kinds or AGENTS[n].cwes) and a is not None},
-        "router": route_name,
+        "model": agents["model"],
         "verifier": agents["verify"],
-        # the verdict ladder (Shannon review → critic → confirm); CRITIC=0 turns all three off, the nodes stay
-        "review": agents["review"],
-        "critic": agents["viability"],
-        "confirm": agents["confirm"],
-        "triage": agents["triage_batch"],
-        "recon_fn": (lambda: recon_adapter.recon(target, entries, langs, index)) if s.recon else None,
+        "critic": agents["critic"],
         "knowledge_cfg": getattr(run, "knowledge", None),
-        "triage_batch": s.triage_batch,
-        "triage_parallel": s.triage_parallel,
         "store": run,
         "target": str(target),
         "has_anchor": lambda i: run.anchor(i) is not None,
-        "has_symbol": has_symbol,
+        "has_symbol": index.has_symbol,
         "locate": index.find_symbol,
         "entry_points_fn": lambda: entries,
-        "source_files_fn": lambda: fs.source_files(target),  # planner: file baselines for what nobody reads
         "max_rounds": s.max_rounds,
         "max_hyps": s.max_hyps,
         "max_parallel": s.max_parallel,
@@ -191,8 +175,7 @@ def standalone(name: str, target: Path, settings: Settings | None = None):
     investigators reported). Returns (store, run, agent) like `prepare`; the store lives as long as the process."""
     if name not in ROSTER:
         raise KeyError(f"{name!r} is not a roster agent: {', '.join(ROSTER)}")
-    s = dataclasses.replace(settings or Settings.from_env(), specialists=True, threat_model=True, domain_model=True,
-                            critic=True, triage=True)
+    s = dataclasses.replace(settings or Settings.from_env(), threat_model=True, critic=True)
     target = target.resolve()
     if not target.is_dir():
         raise FileNotFoundError(f"target {target} is not a directory")

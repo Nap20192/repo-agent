@@ -5,15 +5,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from scanner.app import observe
 
 
-def test_compaction_config(monkeypatch):
-    monkeypatch.delenv("COMPACTION_INTERVAL", raising=False)
-    assert observe.compaction_config("gemini-flash-lite-latest") is None
-    monkeypatch.setenv("COMPACTION_INTERVAL", "3")
-    monkeypatch.setenv("COMPACTION_OVERLAP", "1")
-    cfg = observe.compaction_config("gemini-flash-lite-latest")
-    assert (cfg.compaction_interval, cfg.overlap_size) == (3, 1) and cfg.summarizer is not None
-
-
 def test_setup_tracing(monkeypatch):
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     assert observe.setup_tracing() is False
