@@ -26,7 +26,7 @@
   fallback: `lsp.py`, `grep.py`, `rpc.py`, `languages.py`, `callgraph.py`).
 - `scanner/app` — пакет `agents/` (одна папка на агента: `agent.py` с `SPEC = AgentSpec(...)`, `instruction.py`,
   `tools.py` с ростером имён; `base.py` — единственная фабрика `new_agent` + `build(spec, ...)`; `shared.py` — общие
-  секции промптов; `registry.py` — `AGENTS`, специалисты `REGISTRY` и роутер CWE → kind → fallback); пакет `graph/`
+  секции промптов и секции классов; `registry.py` — `AGENTS` и `overlay()` CWE → kind → класс); пакет `graph/`
   (`nodes/` — один узел на файл с фабрикой `<node>_node(...)`, `stage.py` и `workers.py` — две обёртки, через которые
   агент становится узлом, `workflow.py` — `NODES` и список рёбер, `helpers.py`, `planning.py`, `reconcile.py`);
   колбэки (`callbacks.py`), трассировка и сжатие (`observe.py`), сборка и прогон (`runner.py`: `build_agents()` —
@@ -87,20 +87,15 @@ stdlib JSON-RPC (`rpc.py`) — gopls (Go), pyright (Python), typescript-language
 (≤50 мест); `has_symbol`/`locate` для гейта идут через индекс. `read_file` по умолчанию 60 строк, grep ≤4k.
 `tool_window_callback(keep=3)` заменяет старые результаты однострочным дайджестом.
 
-## Специалисты и консультанты
+## Классы, overlay и консультанты
 
-Один Investigator и один Critic заменены реестром специалистов (`scanner/app/specialists.py`): investigators
-`taint` (A03/A08/A10), `authz` (A01/A07), `dependency` (A06/A08), `secrets` (A02), `config` (A02/A05/A09) и критики
-`taint_critic`, `authz_critic`, `dependency_critic`; `TOP10_COVERAGE` закрывает OWASP Top 10 2021 целиком (A04 —
-через Domain-карту и ThreatModeler). Роутер детерминированный: CWE → kind → generic fallback; языковой оверлей
-(Go / Node / Python) — суффикс инструкции по расширению файла. У каждого свой набор тулов (`subset()`),
-скиллы и бюджет `SPECIALIST_<NAME>_MAX_CALLS`; `SPECIALISTS=0` возвращает одиночных Verifier/Critic.
-Консультанты: **Domain** — стадия DomainModeler (после Architect) строит `domain_map` из схем, guard'ов и
-правил (`scanner/adapter/domain.py`); консультант `domain` — саб-агент (AgentTool) инвестигаторов/критиков: тул `domain_map` по карте, затем grep/read_file/lsp по коду (карта 49;
-`DOMAIN_MODEL=0` выключает стадию); **Knowledge** — пре-пасс обогащает osv-якоря через OSV/GHSA/NVD/EPSS/KEV с
-SQLite-кэшем (`KNOWLEDGE_ENRICH=0` выключает, `GHSA_DIR` для офлайна, `GITHUB_TOKEN`/`NVD_API_KEY` снимают лимиты),
-плюс AgentTool `knowledge` (веб-поиск: `WEB_SEARCH=tavily` + `TAVILY_API_KEY`) инъектируется в `dependency` и
-`dependency_critic` через `specialists.build(knowledge_factory=)`.
+Один `verify` и один `critic` вместо восьми специалистов (ADR-0010): к каждой активации `registry.overlay()`
+подмешивает секцию класса — `taint` (A03/A08/A10), `authz` (A01/A07), `dependency` (A06/A08), `secrets` (A02),
+`config` (A02/A05/A09) — по CWE, затем по kind; критик получает `*_critic`-секции того же класса; языковой overlay
+(Go / Node / Python) — по расширению файла. `TOP10_COVERAGE` закрывает OWASP Top 10 2021 целиком (A04 — этап `model`).
+Консультанты — саб-агенты (AgentTool) `verify`/`critic`: **`domain`** отвечает про владение и бизнес-правила по коду
+(grep / read_file / lsp), **`knowledge`** — по базам OSV/GHSA/NVD/EPSS/KEV/deps.dev (`KNOWLEDGE_ENRICH=0` выключает
+обогащение osv-якорей в пре-пассе, `GHSA_DIR` для офлайна, `GITHUB_TOKEN`/`NVD_API_KEY` снимают лимиты).
 OWASP-карта (`scanner/adapter/owasp.py`) покрывает 58 CWE: WSTG, Top 10 2021 и 2025, ASVS 5.0 с уровнем, cheat
 sheet и remediation; SARIF несёт таксономии и `fixes[]`.
 
@@ -165,7 +160,7 @@ git-aware обход osv-scanner ничего не находит в мелко�
 (core ← ничего, adapter ← core only, test модули не импортируют друг друга); маркер `tests/live` для live-eval.
 
 Модули: `scanner/core/{types,rules,calibrate,settings,ports,domain}.py` (доменный лист), `scanner/adapter/static.py`
-(сканеры → якоря), `scanner/adapter/{store,owasp,domain,dominance,knowledge,entrypoints,fs,skills}.py` (адаптеры),
-`scanner/adapter/tools/{common,code,lsp,gates,rosters}.py` (агент-тулы), `scanner/adapter/index/{lsp,grep,rpc,languages,callgraph}.py`
-(код индекс), `scanner/app/{agents,specialists,knowledge_agent,pipeline,graph_nodes,graph,reconcile,domain}.py` (специалисты и граф),
+(сканеры → якоря), `scanner/adapter/{store,owasp,knowledge,entrypoints,fs,skills,git}.py` (адаптеры),
+`scanner/adapter/tools/` (агент-тулы по файлам), `scanner/adapter/index/{lsp,grep,rpc,languages,callgraph}.py`
+(код индекс), `scanner/app/agents/` (5 агентов) и `scanner/app/graph/` (7 узлов),
 `scanner/app/{callbacks,observe,runner,settings}.py` (исполнение), `scanner/main.py` (CLI, eval), `web/fullscan/agent.py` (`adk web`).

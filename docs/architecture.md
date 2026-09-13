@@ -8,7 +8,7 @@
 ```mermaid
 flowchart LR
     main[main.py / web/ — CLI и adk web] --> app
-    app[scanner/app — use-cases: граф PipelineV2, агенты, reconcile, runner] --> core
+    app[scanner/app — use-cases: граф из 7 узлов, 5 агентов, reconcile, runner] --> core
     app --> adapter
     adapter[scanner/adapter — static, store, index/, tools, owasp, skills, knowledge, domain] --> core
     core[scanner/core — types, rules, calibrate, ports]
@@ -23,7 +23,7 @@ flowchart LR
 |---|---|---|---|
 | `core` | Типы (`Anchor`, `Hypothesis`, `Dossier`, `Finding`, `Threat`, `DomainMap`), чистые правила (`ground_hypothesis`, `validate_finding`, `check_consulted`, `calibrate`), порты (`ports.py`) | **DIP**: порты объявлены там, где их потребляют [CA, гл. 11]; **SRP** леса домена [DDD, гл. 4 «Isolating the Domain»] | инварианты в комментариях, а не в типах (`Literal`, `model_validator`) [types.md §1–2]; один порт (`Index`) на весь «шестиугольник» |
 | `adapter` | Вторичные адаптеры (сканеры, SQLite State, LSP/grep-индекс, OWASP/skills/knowledge/domain) и первичный (`tools` — то, чем LLM дёргает систему) | **OCP** там, где есть таблицы (`LANGUAGES`, `REGISTRY`, `_WSTG`) [CA, гл. 8]; **LSP** у реализаций `Index` | `static.py` и `tools.py` — «God modules» [REF, Large Class/Divergent Change]; `Index` толстый — нарушение **ISP** [CA, гл. 10]; неявный порт `Index + failed` |
-| `app` | Оркестрация ADK: граф `PipelineV2`, фабрики агентов, реестр специалистов и роутер, Reconciler, runner, наблюдаемость | **SRP** по модулям-стадиям; **OCP** реестра специалистов (новый специалист = запись в таблице) | `graph.py` смешивает fan-out, JSON, досье, критика; `store: Any`/`router: Any` вместо портов; env-флаги читаются в глубине [architecture.md §2–3] |
+| `app` | Оркестрация ADK: граф из 7 узлов (ADR-0010), реестр агентов + overlay классов, Reconciler, runner, наблюдаемость | **SRP** по модулям-стадиям; **OCP** реестра агентов и секций классов (новый класс = секция + строка в CLASSES) | `graph.py` смешивает fan-out, JSON, досье, критика; `store: Any`/`router: Any` вместо портов; env-флаги читаются в глубине [architecture.md §2–3] |
 | `main.py`, `web/` | Транспорт: argparse и `adk web`; никакой логики прогона | **SRP** транспорта | `score`/`_ensure_target` в CLI; `sys.path`-хак в `web/` |
 
 ## Порты (целевое состояние, см. `docs/plans/quality.md`, ADR-0002/0003)
@@ -35,7 +35,7 @@ flowchart LR
 | `CallGraph` | `references`, `callers`, `callees`, `path_to_entry` | те же | `lsp_*`-тулы taint/dependency, критики |
 | `Closeable`, `Degradable` | `close`; `failed` | `LspIndex` (`failed`), все (`close`) | runner, `FallbackIndex` |
 | `Index` | объединение четырёх | — | места, которым нужно всё |
-| `RunStore` | `anchors`, `anchor`, `save_anchors`, `report`, `findings`, `put_hypotheses`, `put_dossiers`, `put_artifact`, `artifact`, `add_note`, `log_gate` | `store.Run`, `tests/fakes.FakeRun` | `_Graph`, `PipelineV2`, тулы |
+| `RunStore` | `anchors`, `anchor`, `save_anchors`, `report`, `findings`, `put_hypotheses`, `put_dossiers`, `put_artifact`, `artifact`, `add_note`, `log_gate` | `store.Run`, `tests/fakes.FakeRun` | узлы графа, тулы |
 | `Router` | `(item, lang, role) -> (name, suffix)` | `specialists.route_name` | `_Graph._pick` |
 
 Разделение `Index` — ISP [CA, гл. 10]: каждый потребитель объявляет только то, чем пользуется; «Parse, don't
@@ -81,16 +81,16 @@ validate» [King] — порты принимают уже проверенны�
   | динамический цикл | `audit` | единственный узел, форма которого зависит от данных: раунды до пустой очереди, лимита или бюджета; в раунде fan-out через `route_and_verify` |
   | обычный узел с несколькими входами | `export`, `calibrate` | `JoinNode` ждал бы ветку, которую маршрут пропустил (спайк Q2) |
 
-  Лестница вердиктов Shannon → наши статусы: review VALID = confirmed; FALSE_POSITIVE только через
-  `disprove_finding` с контр-цитатой; PROVISIONALLY_VALID / NEEDS_RESEARCH и viability — аннотации через
-  `RunStore.annotate` (отказывает для status/evidence/confidence); promotion в `confirm` — повторный
-  `report_finding` с большей confidence. Гейт SARIF остаётся `status == confirmed`, аннотации в `properties`.
+  Вердикты: `report_finding` — единственный способ создать находку (плюс direct lane); критик может только
+  `disprove_finding` с контр-цитатой (confirmed → uncertain); его JSON — аннотация `review`
+  (VALID / NEEDS_RESEARCH — заявил опровержение без гейта / UNCERTAIN) через `RunStore.annotate`, который
+  отказывает для status/evidence/confidence. Гейт SARIF остаётся `status == confirmed`, аннотации в `properties`.
 
 - Узлы живут в `scanner/app/graph/nodes/<node>.py`, строятся фабриками на прогон (замыкание на `RunStore` и агентов).
   Параллельность — `@node(parallel_worker=True, max_parallel_workers=k)`: ADK раскладывает список элементов по
-  воркерам; ошибка одного элемента ловится внутри узла (иначе ADK отменяет всю пачку). Роутер CWE → специалист
-  остаётся в коде (`graph.pick_agent`), не в графе.
-- Один `LlmAgent` на специалиста строится раз на прогон; активация — `ctx.run_node(agent, payload)`: payload
+  воркерам; ошибка одного элемента ловится внутри узла (иначе ADK отменяет всю пачку). Выбор секции класса
+  CWE → kind (`agents.registry.overlay`) остаётся в коде, не в графе.
+- Один `LlmAgent` на роль (`model`, `verify`, `critic`) строится раз на прогон; активация — `ctx.run_node(agent, payload)`: payload
   (гипотеза/находка + скиллы + overlay) приходит моделью как user-ход, `include_contents="none"` не даёт истории
   расти между раундами. Клонов и подмены инструкций больше нет.
 - `before_model_callback`: бюджет вызовов (per-branch, per-invocation для `AgentTool`, глобальный стоп только у
