@@ -17,17 +17,23 @@
 
 - `scanner/core` — типы (`types.py`), чистые правила (`rules.py`), calibrate (`calibrate.py`),
   settings (`settings.py`), порты (`ports.py`), domain-карта (`domain.py`): доменный лист без ADK и I/O.
-- `scanner/adapter` — сканеры → якоря (`static.py`), SQLite State (`store.py`), OWASP (`owasp.py`),
-  domain-модель (`domain.py`), dominance (`dominance.py`), knowledge-кэш (`knowledge.py`),
-  entry points (`entrypoints.py`), файловая система (`fs.py`), скиллы (`skills.py`);
-  пакет `tools/` (агент-тулы: `common.py`, `code.py`, `lsp.py`, `gates.py`, `rosters.py`);
-  пакет `index/` (LSP-адаптеры и grep fallback: `lsp.py`, `grep.py`, `rpc.py`, `languages.py`, `callgraph.py`).
-- `scanner/app` — инструкции (`instructions.py`), колбэки (`callbacks.py`), агенты (`agents.py`),
-  специалисты и роутер (`specialists.py`), knowledge AgentTool (`knowledge_agent.py`),
-  граф Workflow (`pipeline.py`, узлы в `graph_nodes.py`, общие помощники в `graph.py`), Reconciler (`reconcile.py`), domain-модель (`domain.py`),
-  трассировка и сжатие (`observe.py`), сборка и прогон (`runner.py`), settings (`settings.py`).
+- `scanner/adapter` — SQLite State (`store.py`), OWASP (`owasp.py`), domain-модель (`domain.py`), dominance
+  (`dominance.py`), knowledge-кэш (`knowledge.py`), entry points (`entrypoints.py`), файловая система (`fs.py`),
+  скиллы (`skills.py`); пакет `scanners/` (один сканер — один файл: `gosec.py`, `semgrep.py`, `osv.py`, `gitleaks.py`,
+  `sarif.py`, `process.py` — единственная точка запуска подпроцессов, `scan.py`); пакет `tools/` (один инструмент —
+  один файл с `make(ctx: ToolContext)`: `code/`, `lsp/`, `gates/`, `store/`, `consult/`, `knowledge/`; `registry.py` —
+  имя → фабрика в порядке, который видит модель; `context.py` — ToolContext); пакет `index/` (LSP-адаптеры и grep
+  fallback: `lsp.py`, `grep.py`, `rpc.py`, `languages.py`, `callgraph.py`).
+- `scanner/app` — пакет `agents/` (одна папка на агента: `agent.py` с `SPEC = AgentSpec(...)`, `instruction.py`,
+  `tools.py` с ростером имён; `base.py` — единственная фабрика `new_agent` + `build(spec, ...)`; `shared.py` — общие
+  секции промптов; `registry.py` — `AGENTS`, специалисты `REGISTRY` и роутер CWE → kind → fallback); пакет `graph/`
+  (`nodes/` — один узел на файл с фабрикой `<node>_node(...)`, `stage.py` и `workers.py` — две обёртки, через которые
+  агент становится узлом, `workflow.py` — `NODES` и список рёбер, `helpers.py`, `planning.py`, `reconcile.py`);
+  колбэки (`callbacks.py`), трассировка и сжатие (`observe.py`), сборка и прогон (`runner.py`: `build_agents()` —
+  один цикл по `AGENTS`), settings (`settings.py`). Шаблон «добавить агента» — `docs/adr/0009-feature-folders.md`.
 - `scanner/main.py` — только CLI, вся логика в `scanner/app/runner.py`.
-- `web/fullscan/agent.py` — точка входа `adk web` (тот же граф, установка via `uv sync`).
+- `web/fullscan/agent.py` — точка входа `adk web` (тот же граф); `web/<agent>/agent.py` — каждый агент отдельно
+  (`runner.standalone`), с seed-кейсами `*.evalset.json` и code-грейдерами `eval/adk_metrics.py` для `adk eval`.
 
 ## Пайплайн
 

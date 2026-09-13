@@ -6,12 +6,18 @@ Read `README.md` for the pipeline, `BOARD.md` for the cards/contract, `docs/rnd/
 
 ```
 scanner/core      domain leaf: types (Literal vocabularies), rules, calibrate, settings, ports (Index parts, RunStore, Router)
-scanner/adapter   fs, entrypoints, static scanners, SQLite State, OWASP, skills, knowledge, domain, dominance, tools/ (package), index/ (LSP per language + grep)
-scanner/app       ADK agents (one `new_agent` factory), specialists registry + router, the ADK Workflow graph (pipeline + graph_nodes, helpers in graph), reconcile, callbacks, observe, runner (composition root)
-scanner/main.py   CLI only            eval/dataset.py  eval logic            web/fullscan/agent.py   adk web entrypoint (lazy)
+scanner/adapter   fs, entrypoints, scanners/ (one scanner per file), SQLite State, OWASP, skills, knowledge, domain, dominance,
+                  tools/ (one tool per file: make(ctx) + registry), index/ (LSP per language + grep)
+scanner/app       agents/ (one folder per agent: agent.py SPEC, instruction.py, tools.py; base.py = the one factory;
+                  registry.py = AGENTS + router), graph/ (nodes/ one per file, stage.py + workers.py wrappers, workflow.py
+                  edges, helpers/planning/reconcile), callbacks, observe, runner (composition root)
+scanner/main.py   CLI only            eval/dataset.py  eval logic            web/<agent>/agent.py   adk web entrypoints (lazy)
 ```
-Arrows point inward: `core` imports nothing of ours; `adapter` never imports `app`; only `runner.py` wires adapter
-concretes. Env is read once in `core/settings.py` (`Settings.from_env`), never deep in modules. Shared test fakes live
+Adding an agent = a folder from the template + one line in `registry.AGENTS` (+ a node file and one edge if it runs in
+the graph) — see docs/adr/0009-feature-folders.md. Adding a tool = `tools/<group>/<tool>.py` with `make(ctx)` + one line in
+`registry.TOOLS`.
+Arrows point inward: `core` imports nothing of ours; `adapter` never imports `app`; inside `app`, `agents/` never imports
+`graph/` or `runner`, `graph/` never imports `runner`; only `runner.py` wires adapter concretes. Env is read once in `core/settings.py` (`Settings.from_env`), never deep in modules. Shared test fakes live
 in `tests/fakes.py`; test modules never import each other. Architecture rationale and sources: docs/architecture.md,
 decisions: docs/adr/.
 

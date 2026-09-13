@@ -55,9 +55,20 @@ validate» [King] — порты принимают уже проверенны�
    `notes`/`gaps`, выдуманные `wstg_id` заменяются по таблице OWASP.
 5. **Вердикт — из стора**, не из прозы модели (`dossier_from_store`).
 
+## Раскладка после карты 47 (ADR-0009)
+
+| Было | Стало |
+|---|---|
+| `adapter/static.py` | `adapter/scanners/{process,sarif,gosec,semgrep,osv,gitleaks,scan}.py` |
+| `adapter/tools/{code,lsp,gates,rosters}.py` | `adapter/tools/<group>/<tool>.py` (`make(ctx)`), `registry.py` (`TOOLS`, `make(names, ctx)`), `context.py` |
+| `app/{agents,instructions,specialists,knowledge_agent,domain}.py` | `app/agents/<name>/{agent,instruction,tools}.py`, `base.py`, `shared.py`, `registry.py` |
+| `app/{pipeline,graph_nodes,graph,plan,reconcile}.py` | `app/graph/{workflow,stage,workers,helpers,planning,reconcile}.py`, `nodes/<node>.py` |
+
+Направление внутри `app`: `agents/` ← `graph/` ← `runner`; guard — `tests/test_layers.py`.
+
 ## Отображение на Google ADK [ADK]
 
-- Граф — статический `Workflow` ADK 2.9 (`scanner/app/pipeline.py`, ADR-0008): стадии Capella (Shannon) как
+- Граф — статический `Workflow` ADK 2.9 (`scanner/app/graph/workflow.py`, ADR-0008): стадии Capella (Shannon) как
   рёбра графа, 24 узла + 2 служебных (`batches`, `provisional`). Конструкции выбраны по сути узла и проверены
   спайком (`tests/test_adk_spike.py`, план §6):
 
@@ -75,7 +86,7 @@ validate» [King] — порты принимают уже проверенны�
   `RunStore.annotate` (отказывает для status/evidence/confidence); promotion в `confirm` — повторный
   `report_finding` с большей confidence. Гейт SARIF остаётся `status == confirmed`, аннотации в `properties`.
 
-- Узлы живут в `scanner/app/graph_nodes.py`, строятся фабриками на прогон (замыкание на `RunStore` и агентов).
+- Узлы живут в `scanner/app/graph/nodes/<node>.py`, строятся фабриками на прогон (замыкание на `RunStore` и агентов).
   Параллельность — `@node(parallel_worker=True, max_parallel_workers=k)`: ADK раскладывает список элементов по
   воркерам; ошибка одного элемента ловится внутри узла (иначе ADK отменяет всю пачку). Роутер CWE → специалист
   остаётся в коде (`graph.pick_agent`), не в графе.

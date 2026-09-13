@@ -18,6 +18,10 @@ confirm-вердикты), отдают JSON по схеме из `scanner/core`
 `grounding_dropped`; `scanner/core/types.py:29-33`, `pipeline.py:147,165-166,179,208`), без `state_schema`
 (`pipeline.py:214`).
 
+> Карта 47 (ADR-0009): код узлов теперь в `scanner/app/graph/nodes/<узел>.py` (фабрика `<узел>_node`), обёртки —
+> `graph/stage.py` и `graph/workers.py`, рёбра — `graph/workflow.py`. Ссылки `pipeline.py:<строка>` /
+> `graph_nodes.py:<строка>` ниже — исторические (код перенесён без изменений).
+
 ## 2. Граф и оглавление
 
 Диаграмма — план §2 (строки 46-63) с маршрутами route-узлов; `export` — единственный терминал.
