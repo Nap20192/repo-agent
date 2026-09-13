@@ -13,28 +13,24 @@ from scanner.app.agents import critic, domain, knowledge, model, verify
 from scanner.app.agents.base import AgentSpec, build, max_calls
 from scanner.app.agents.shared import ARCHITECT_OVERLAYS, LANG_OVERLAYS, SPECIALIST_SECTIONS
 from scanner.core import Finding, Hypothesis
+from scanner.core.types import CWE_CLASSES
 
 AGENTS: dict[str, AgentSpec] = {s.name: s for s in (model.SPEC, verify.SPEC, critic.SPEC, knowledge.SPEC, domain.SPEC)}
 ROSTER: tuple[str, ...] = tuple(AGENTS)
 CONSULTANTS = ("knowledge", "domain")  # agents other agents call as sub-agents (AgentTool), never on a graph edge
 
 
-def _cwes(*nums: int) -> frozenset[str]:
-    return frozenset(f"CWE-{n}" for n in nums)
+def _class(name: str) -> frozenset[str]:
+    return frozenset(c for c, k in CWE_CLASSES.items() if k == name)
 
 
-TAINT_CWES = _cwes(89, 78, 77, 88, 22, 79, 80, 918, 94, 95, 1336, 943, 611, 502, 601)
-AUTHZ_CWES = _cwes(284, 285, 639, 862, 863, 840, 352, 287, 347, 915, 306, 307, 384, 613)
-SECRETS_CWES = _cwes(798, 312, 321)
-CONFIG_CWES = _cwes(614, 1004, 942, 16, 209, 532, 778, 327, 328, 338, 295, 319, 1357)
-
-# class → (CWEs, kinds); most specific first: CWE, then kind, then no section
+# class → (CWEs from the one taxonomy, kinds); most specific first: CWE, then kind, then no section
 CLASSES = (
-    ("taint", TAINT_CWES, frozenset({"entry", "sink"})),
-    ("authz", AUTHZ_CWES, frozenset({"authz"})),
+    ("taint", _class("taint"), frozenset({"entry", "sink"})),
+    ("authz", _class("authz"), frozenset({"authz"})),
     ("dependency", frozenset(), frozenset({"dependency"})),
-    ("secrets", SECRETS_CWES, frozenset({"secret"})),
-    ("config", CONFIG_CWES, frozenset()),
+    ("secrets", _class("secret"), frozenset({"secret"})),
+    ("config", _class("config"), frozenset()),
 )
 CRITIC_SECTIONS = {"taint": "taint_critic", "authz": "authz_critic", "dependency": "dependency_critic"}
 

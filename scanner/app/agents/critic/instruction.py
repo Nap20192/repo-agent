@@ -49,13 +49,13 @@ Work: read_file / grep / shell around the evidence lines (±15 lines) and along 
 for authz findings, knowledge(request) for dependency ones, consult_owasp for the expected control.
 
 Dominance gate (hard) for the "sanitizer / validator / framework control" route: a control disproves the
-finding only if it is on EVERY path to the sink. Before you call disprove_finding you MUST call
-read the control's lines yourself(file, sink_line, control_line) with the anchor's file and line as the sink and the exact
-line of the control you found. Only if it returns dominates=true may you call disprove_finding, quoting
-that control line as counter_evidence; if it returns dominates=false (a check on another branch, after the
-sink, in an else/except/catch branch, or in another function) the finding stays — note why in your
-answer, do not disprove. For the "unreachable" route use lsp_references (and any caller / path-to-entry
-tool you have) to show no entry point reaches the sink; grep alone is not proof.
+finding only if it is on EVERY path to the sink. Before you call disprove_finding, read the function that
+contains the sink (lsp_definition, or read_file around the anchor line) and locate the control line yourself:
+it must execute before the sink on every branch — not on another branch, not after the sink, not in an
+else/except/catch arm, not in another function that some callers skip. If it does, call disprove_finding
+quoting that control line as counter_evidence; if it does not, the finding stays — note why in your answer,
+do not disprove. For the "unreachable" route use lsp_references (and any caller / path-to-entry tool you
+have) to show no entry point reaches the sink; grep alone is not proof.
 
 If a route or rule applies, call disprove_finding(finding_id, counter_evidence=[exact lines], reason). A
 disproved finding becomes uncertain, never deleted. If you cannot disprove it, do nothing — "I could not

@@ -29,10 +29,10 @@ def _fake_v1(run, target, entries, model, index=None, settings=None, deps=False)
 
 
 def _fake_v2(run, target, entries, model, index=None, settings=None, deps=False):
-    arch = fake_stage_node(run, "architect", {"entities": [{"name": "shop"}], "vuln_classes": [{"cwe": "CWE-89"}]})
-    tm = fake_stage_node(run, "threat_modeler", {"intent": "production", "threats": [
-        {"cwe": "CWE-639", "claim": "ghost", "symbol": "nowhere", "priority": 80}]})
-    return build_workflow(architect=arch, threat_modeler=tm, verifier=fake_verifier_node(run), store=run, target=str(target),
+    stage = fake_stage_node(run, "model", {"architecture_model": {"entities": [{"name": "shop"}], "vuln_classes": [{"cwe": "CWE-89"}]},
+                                           "threat_model": {"intent": "production", "threats": [
+                                               {"cwe": "CWE-639", "claim": "ghost", "symbol": "nowhere", "priority": 80}]}})
+    return build_workflow(model=stage, verifier=fake_verifier_node(run), store=run, target=str(target),
                           has_anchor=lambda i: run.anchor(i) is not None, has_symbol=lambda s: False, entry_points_fn=list,
                           scan_fn=lambda: scanners.scan(target, skip_deps=True), max_parallel=1, max_hyps=2, max_rounds=1)
 

@@ -36,7 +36,6 @@ flowchart LR
 | `Closeable`, `Degradable` | `close`; `failed` | `LspIndex` (`failed`), все (`close`) | runner, `FallbackIndex` |
 | `Index` | объединение четырёх | — | места, которым нужно всё |
 | `RunStore` | `anchors`, `anchor`, `save_anchors`, `report`, `findings`, `put_hypotheses`, `put_dossiers`, `put_artifact`, `artifact`, `add_note`, `log_gate` | `store.Run`, `tests/fakes.FakeRun` | узлы графа, тулы |
-| `Router` | `(item, lang, role) -> (name, suffix)` | `specialists.route_name` | `_Graph._pick` |
 
 Разделение `Index` — ISP [CA, гл. 10]: каждый потребитель объявляет только то, чем пользуется; «Parse, don't
 validate» [King] — порты принимают уже проверенные модели.
@@ -74,12 +73,11 @@ validate» [King] — порты принимают уже проверенны�
 
   | Конструкция | Узлы | Почему |
   |---|---|---|
-  | `FunctionNode` | `scan`, `build_skeleton`, `direct_findings`, `recon`, `ground`, `batches`, `fold_triage`, `dedupe`, `mark_sample`, `provisional`, `calibrate`, `export`, четыре `route_*` | детерминированная работа; route-узлы отдают `Event(route=…)`, карта рёбер выбирает ветку |
-  | `JoinNode` | `join_model` | единственный настоящий fan-in: Architect ∥ recon |
-  | `@node(rerun_on_resume=True)` с `LlmAgent`-ребёнком | `architect`, `domain_modeler`, `threat_modeler`, `plan` | голый агент на статическом ребре не умеет деградировать (исключение валит Workflow); обёртка даёт таймаут, заметку и resume по артефакту |
-  | `@node(parallel_worker=True)` над `LlmAgent` | `triage_sweep`, `review`, `critic` (viability), `confirm` | список → список, ADK раскладывает элементы; ошибка элемента ловится внутри |
-  | динамический цикл | `audit` | единственный узел, форма которого зависит от данных: раунды до пустой очереди, лимита или бюджета; в раунде fan-out через `route_and_verify` |
-  | обычный узел с несколькими входами | `export`, `calibrate` | `JoinNode` ждал бы ветку, которую маршрут пропустил (спайк Q2) |
+  | `FunctionNode` | `scan` (async, сканеры в потоке), `build_skeleton`, `direct_findings`, `plan` (отдаёт `Event(route=…)`) | детерминированная работа; `plan` выбирает ветку `empty → export` |
+  | `@node(rerun_on_resume=True)` с `LlmAgent`-ребёнком | `model` | голый агент на статическом ребре не умеет деградировать (исключение валит Workflow); обёртка даёт таймаут, заметку и resume по артефакту |
+  | динамический цикл | `audit` | раунды до пустой очереди, лимита или бюджета; в раунде fan-out `route_and_verify` (`parallel_worker`) |
+  | `@node(parallel_worker=True)` над `LlmAgent` | `critic` внутри `critique` | список находок → список аннотаций; ошибка элемента ловится внутри |
+  | обычный узел с несколькими входами | `export` | `JoinNode` ждал бы ветку, которую маршрут пропустил |
 
   Вердикты: `report_finding` — единственный способ создать находку (плюс direct lane); критик может только
   `disprove_finding` с контр-цитатой (confirmed → uncertain); его JSON — аннотация `review`

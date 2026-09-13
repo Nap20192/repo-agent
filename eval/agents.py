@@ -40,7 +40,6 @@ from scanner.core import (
     ArchitectureModel,
     Finding,
     Hypothesis,
-    ThreatModel,
     new_anchor_id,
 )
 
@@ -140,7 +139,7 @@ def _refusals(run) -> list[str]:
     return [r[:90] for (r,) in run.db.execute("SELECT reason FROM gate_log WHERE run=?", (run.id,))]
 
 
-async def trial_architect(model, tmp, index, budget, probe):
+async def trial_model(model, tmp, index, budget, probe):
     store, run = _store(tmp, [SQLI, CMDI])
     text, tools = await _activate(_agent("model", model, run, SAMPLE, index, budget), "Skeleton", SKELETON, probe)
     store.close()
@@ -163,24 +162,6 @@ async def trial_architect(model, tmp, index, budget, probe):
     if fake:
         return False, f"fabricated WSTG ids: {fake} (consult_owasp was not used)"
     return True, ""
-
-
-async def trial_threat_modeler(model, tmp, index, budget, probe):
-    text, _ = await _activate(_agent("threat_modeler", model, None, SAMPLE, None, budget, only=("consult_owasp",)), "ArchitectureModel", {"architecture_model": ARCH_MODEL}, probe)
-    parsed = parse_json(text)
-    if parsed is None:
-        return False, "final text is not JSON"
-    try:
-        tm = ThreatModel.model_validate(parsed)
-    except ValueError as e:
-        return False, f"not a ThreatModel: {str(e)[:80]}"
-    if not tm.threats:
-        return False, "no threats"
-    known = {"searchHandler", "pingHandler"}
-    bad = [t for t in tm.threats if not t.cwe.startswith("CWE-") or t.symbol.split(".")[-1] not in known]
-    if bad:
-        return False, f"{len(bad)}/{len(tm.threats)} threats without cwe or with a symbol not in the model"
-    return (True, "") if tm.intent in ("production", "sample") else (False, f"intent={tm.intent}")
 
 
 async def trial_verifier(model, tmp, index, budget, probe):
@@ -257,7 +238,7 @@ func main() { http.HandleFunc("/order", getOrder) }
 """
 
 TRIALS = {
-    "model": trial_architect, "threat_modeler": trial_threat_modeler, "investigator": trial_verifier, "critic": trial_critic,
+    "model": trial_model, "investigator": trial_verifier, "critic": trial_critic,
 }
 
 

@@ -43,7 +43,7 @@ Tool = Literal["gosec", "semgrep", "osv", "gitleaks", "threatmodel", "entrypoint
 SYNTHETIC_TOOLS = ("threatmodel", "entrypoint")  # anchors minted from a stage, not a scanner: they only say "start here"
 Intent = Literal["production", "sample"]
 
-# One CWE taxonomy (ADR 0006): cwe → class family. The specialists' router and the consult gate derive from it;
+# One CWE taxonomy (ADR 0006): cwe → class family. The class overlay (agents.registry.CLASSES) and the consult gate derive from it;
 # AUTHZ_CWES/TAINT_CWES above stay as the gate's historical subsets (CWE-352 routes to authz but needs no domain: ref).
 def _cwes(*ns: int) -> frozenset[str]:
     return frozenset(f"CWE-{n}" for n in ns)

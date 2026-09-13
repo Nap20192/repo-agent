@@ -162,13 +162,13 @@ SPECIALIST_SECTIONS = {
   block, or a value overridden by the production config you can cite, rejects. consult_owasp for the expected
   control; read_file/grep/lsp_definition/lsp_references to find where the setting is applied. You have no command-line tool.""",
     'taint_critic': """## Specialisation: taint findings
-- For a "sanitizer / validator / framework control" disproof you MUST call check_dominance(file, sink_line,
-  control_line); disprove only when dominates is true, quoting the control line. For "unreachable" use
-  lsp_path_to_entry / lsp_callers; read_file/grep/shell to re-trace ±15 lines around the evidence.""",
+- For a "sanitizer / validator / framework control" disproof read the sink's function (lsp_definition / read_file)
+  and show the control line runs before the sink on every path; disprove only then, quoting the control line.
+  For "unreachable" use lsp_path_to_entry / lsp_callers; read_file/grep/shell to re-trace ±15 lines around the evidence.""",
     'authz_critic': """## Specialisation: authorization / authentication findings
 - domain(request: the entity): an access the business rules intend is not a hole — cite 'domain:<rule>'. Re-check
-  the guard chain with lsp_callers / lsp_path_to_entry, check_dominance for a guard clause before the access,
-  read_file/grep/shell around the evidence.""",
+  the guard chain with lsp_callers / lsp_path_to_entry, read the handler to see the guard clause runs before the
+  access on every path, read_file/grep/shell around the evidence.""",
     'dependency_critic': """## Specialisation: dependency findings
 - knowledge(request) for patched_in vs the manifest version; lsp_references / lsp_path_to_entry for the vulnerable
   symbol — an uncalled symbol or a patched version disproves (quote the manifest or import line). You have no command-line tool.""",
