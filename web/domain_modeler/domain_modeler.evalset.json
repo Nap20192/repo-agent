@@ -1,0 +1,32 @@
+{
+  "eval_set_id": "domain_modeler",
+  "name": "domain_modeler",
+  "description": "seed cases for the `domain_modeler` agent on samples/02-vulnshop: the payloads the graph sends it",
+  "eval_cases": [
+    {
+      "eval_id": "vulnshop-domain",
+      "conversation": [
+        {
+          "invocation_id": "vulnshop-domain-1",
+          "user_content": {
+            "parts": [
+              {
+                "text": "{\"architecture_model\": {\"entities\": [], \"trust_boundaries\": [], \"vuln_classes\": [], \"deployment_signals\": [], \"notes\": []}, \"skeleton\": {}, \"recon\": {}}"
+              }
+            ],
+            "role": "user"
+          },
+          "creation_timestamp": 1789256994.36233
+        }
+      ],
+      "session_input": {
+        "app_name": "domain_modeler",
+        "user_id": "user",
+        "state": {}
+      },
+      "creation_timestamp": 1789256994.36233,
+      "final_session_state": {}
+    }
+  ],
+  "creation_timestamp": 1789256994.36233
+}

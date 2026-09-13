@@ -1,0 +1,20 @@
+{
+  "criteria": {
+    "schema_viability": 1.0,
+    "verdict_via_gate": 1.0
+  },
+  "custom_metrics": {
+    "schema_viability": {
+      "code_config": {
+        "name": "eval.adk_metrics.schema_viability"
+      },
+      "description": "deterministic grader eval.adk_metrics.schema_viability"
+    },
+    "verdict_via_gate": {
+      "code_config": {
+        "name": "eval.adk_metrics.verdict_via_gate"
+      },
+      "description": "deterministic grader eval.adk_metrics.verdict_via_gate"
+    }
+  }
+}

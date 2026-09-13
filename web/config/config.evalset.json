@@ -1,0 +1,32 @@
+{
+  "eval_set_id": "config",
+  "name": "config",
+  "description": "seed cases for the `config` agent on samples/02-vulnshop: the payloads the graph sends it",
+  "eval_cases": [
+    {
+      "eval_id": "verbose-ping-output",
+      "conversation": [
+        {
+          "invocation_id": "verbose-ping-output-1",
+          "user_content": {
+            "parts": [
+              {
+                "text": "{\"id\": \"h0-4\", \"kind\": \"sink\", \"cwe\": \"CWE-209\", \"claim\": \"pingHandler writes the raw command output (including errors) back to the HTTP response\", \"anchor_id\": \"a_b67d7f06d653\", \"symbol\": \"\", \"route\": [], \"reads\": [\"main.go\"], \"consult\": \"\", \"priority\": 40, \"wstg_id\": \"\", \"asvs_id\": \"\", \"skill\": \"information-disclosure\", \"skills\": [\"wstg-errh-02-stack-traces\", \"information-disclosure\", \"verifier-proof\"], \"specialist\": \"config\", \"instructions\": \"## Language: Go\\nSources: r.URL.Query().Get, r.FormValue, r.Body, mux.Vars, c.Param/c.Query (gin), chi.URLParam. Sinks: db.Query /\\nExec with string concatenation (safe: $1 / ? placeholders), exec.Command(\\\"sh\\\",\\\"-c\\\",…), os.Open / filepath.Join\\nwithout filepath.Clean + prefix check, http.Get(userURL), template.HTML / text/template (html/template escapes).\"}"
+              }
+            ],
+            "role": "user"
+          },
+          "creation_timestamp": 1789256994.36233
+        }
+      ],
+      "session_input": {
+        "app_name": "config",
+        "user_id": "user",
+        "state": {}
+      },
+      "creation_timestamp": 1789256994.36233,
+      "final_session_state": {}
+    }
+  ],
+  "creation_timestamp": 1789256994.36233
+}

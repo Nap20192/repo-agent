@@ -1,0 +1,56 @@
+{
+  "eval_set_id": "taint",
+  "name": "taint",
+  "description": "seed cases for the `taint` agent on samples/02-vulnshop: the payloads the graph sends it",
+  "eval_cases": [
+    {
+      "eval_id": "sqli-main.go-22",
+      "conversation": [
+        {
+          "invocation_id": "sqli-main.go-22-1",
+          "user_content": {
+            "parts": [
+              {
+                "text": "{\"id\": \"h0-1\", \"kind\": \"sink\", \"cwe\": \"CWE-89\", \"claim\": \"user input from r.URL.Query().Get(\\\"name\\\") reaches db.Query at main.go:22 by string concatenation\", \"anchor_id\": \"a_f62a1e0787ee\", \"symbol\": \"\", \"route\": [], \"reads\": [\"main.go\"], \"consult\": \"\", \"priority\": 90, \"wstg_id\": \"\", \"asvs_id\": \"\", \"skill\": \"sql-injection\", \"skills\": [\"wstg-injt-05-sqli\", \"sql-injection\", \"verifier-proof\"], \"specialist\": \"taint\", \"instructions\": \"## Language: Go\\nSources: r.URL.Query().Get, r.FormValue, r.Body, mux.Vars, c.Param/c.Query (gin), chi.URLParam. Sinks: db.Query /\\nExec with string concatenation (safe: $1 / ? placeholders), exec.Command(\\\"sh\\\",\\\"-c\\\",…), os.Open / filepath.Join\\nwithout filepath.Clean + prefix check, http.Get(userURL), template.HTML / text/template (html/template escapes).\"}"
+              }
+            ],
+            "role": "user"
+          },
+          "creation_timestamp": 1789256994.36233
+        }
+      ],
+      "session_input": {
+        "app_name": "taint",
+        "user_id": "user",
+        "state": {}
+      },
+      "creation_timestamp": 1789256994.36233,
+      "final_session_state": {}
+    },
+    {
+      "eval_id": "cmdi-main.go-30",
+      "conversation": [
+        {
+          "invocation_id": "cmdi-main.go-30-1",
+          "user_content": {
+            "parts": [
+              {
+                "text": "{\"id\": \"h0-2\", \"kind\": \"sink\", \"cwe\": \"CWE-78\", \"claim\": \"the host query parameter is concatenated into `sh -c \\\"ping -c1 \\\"+host` at main.go:30\", \"anchor_id\": \"a_b67d7f06d653\", \"symbol\": \"\", \"route\": [], \"reads\": [\"main.go\"], \"consult\": \"\", \"priority\": 85, \"wstg_id\": \"\", \"asvs_id\": \"\", \"skill\": \"rce\", \"skills\": [\"wstg-injt-12-command-injection\", \"rce\", \"verifier-proof\"], \"specialist\": \"taint\", \"instructions\": \"## Language: Go\\nSources: r.URL.Query().Get, r.FormValue, r.Body, mux.Vars, c.Param/c.Query (gin), chi.URLParam. Sinks: db.Query /\\nExec with string concatenation (safe: $1 / ? placeholders), exec.Command(\\\"sh\\\",\\\"-c\\\",…), os.Open / filepath.Join\\nwithout filepath.Clean + prefix check, http.Get(userURL), template.HTML / text/template (html/template escapes).\"}"
+              }
+            ],
+            "role": "user"
+          },
+          "creation_timestamp": 1789256994.36233
+        }
+      ],
+      "session_input": {
+        "app_name": "taint",
+        "user_id": "user",
+        "state": {}
+      },
+      "creation_timestamp": 1789256994.36233,
+      "final_session_state": {}
+    }
+  ],
+  "creation_timestamp": 1789256994.36233
+}

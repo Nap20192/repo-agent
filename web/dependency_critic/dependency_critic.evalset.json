@@ -1,0 +1,32 @@
+{
+  "eval_set_id": "dependency_critic",
+  "name": "dependency_critic",
+  "description": "seed cases for the `dependency_critic` agent on samples/02-vulnshop: the payloads the graph sends it",
+  "eval_cases": [
+    {
+      "eval_id": "sqli-as-dependency-review",
+      "conversation": [
+        {
+          "invocation_id": "sqli-as-dependency-review-1",
+          "user_content": {
+            "parts": [
+              {
+                "text": "{\"finding\": {\"id\": \"f_sqli\", \"anchor_id\": \"a_f62a1e0787ee\", \"hypothesis_id\": \"\", \"cwe\": \"CWE-89\", \"file\": \"main.go\", \"line\": 22, \"title\": \"SQL injection in searchHandler\", \"severity\": \"\", \"status\": \"confirmed\", \"evidence\": [\"db.Query(\\\"SELECT id FROM users WHERE name = '\\\" + name + \\\"'\\\")\"], \"confidence\": 0.95, \"remediation\": \"\", \"remediation_url\": \"\", \"wstg_id\": \"\", \"asvs_id\": \"\", \"top10\": \"\", \"source\": \"llm\", \"review\": {}, \"viability\": \"\", \"repro_status\": \"\", \"calibration\": {}}, \"anchor\": {\"id\": \"a_f62a1e0787ee\", \"tool\": \"gosec\", \"rule_id\": \"G202\", \"cwe\": \"CWE-89\", \"severity\": \"high\", \"file\": \"main.go\", \"line\": 22, \"message\": \"SQL string concatenation\", \"snippet\": \"db.Query(\\\"SELECT id FROM users WHERE name = '\\\" + name + \\\"'\\\")\", \"tools\": [], \"rule_ids\": []}, \"specialist\": \"dependency_critic\", \"skills\": [\"control-parameterization\", \"counterevidence\"], \"instructions\": \"## Language: Go\\nSources: r.URL.Query().Get, r.FormValue, r.Body, mux.Vars, c.Param/c.Query (gin), chi.URLParam. Sinks: db.Query /\\nExec with string concatenation (safe: $1 / ? placeholders), exec.Command(\\\"sh\\\",\\\"-c\\\",…), os.Open / filepath.Join\\nwithout filepath.Clean + prefix check, http.Get(userURL), template.HTML / text/template (html/template escapes).\"}"
+              }
+            ],
+            "role": "user"
+          },
+          "creation_timestamp": 1789256994.36233
+        }
+      ],
+      "session_input": {
+        "app_name": "dependency_critic",
+        "user_id": "user",
+        "state": {}
+      },
+      "creation_timestamp": 1789256994.36233,
+      "final_session_state": {}
+    }
+  ],
+  "creation_timestamp": 1789256994.36233
+}

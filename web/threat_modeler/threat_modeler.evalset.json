@@ -1,0 +1,32 @@
+{
+  "eval_set_id": "threat_modeler",
+  "name": "threat_modeler",
+  "description": "seed cases for the `threat_modeler` agent on samples/02-vulnshop: the payloads the graph sends it",
+  "eval_cases": [
+    {
+      "eval_id": "vulnshop-threats",
+      "conversation": [
+        {
+          "invocation_id": "vulnshop-threats-1",
+          "user_content": {
+            "parts": [
+              {
+                "text": "{\"architecture_model\": {\"entities\": [], \"trust_boundaries\": [], \"vuln_classes\": [], \"deployment_signals\": [], \"notes\": []}, \"domain_map\": {}, \"auth\": []}"
+              }
+            ],
+            "role": "user"
+          },
+          "creation_timestamp": 1789256994.36233
+        }
+      ],
+      "session_input": {
+        "app_name": "threat_modeler",
+        "user_id": "user",
+        "state": {}
+      },
+      "creation_timestamp": 1789256994.36233,
+      "final_session_state": {}
+    }
+  ],
+  "creation_timestamp": 1789256994.36233
+}

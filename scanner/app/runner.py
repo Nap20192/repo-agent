@@ -4,11 +4,13 @@ ADK run in a persistent session (`scan_full`). The CLI (scanner/main.py) and `ad
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import time
 from pathlib import Path
 
+from google.adk.agents import LlmAgent
 from google.adk.apps import App
 from google.adk.errors._stale_session_error import StaleSessionError
 from google.adk.runners import Runner
@@ -24,6 +26,7 @@ from scanner.adapter.store import Store
 from scanner.adapter.tools import (
     architect_tools,
     confirm_tools,
+    critic_tools,
     review_tools,
     subset,
     triage_tools,
@@ -33,18 +36,20 @@ from scanner.adapter.tools import (
 from scanner.app.agents import (
     new_architect,
     new_confirm,
+    new_critic,
     new_review,
     new_threat_modeler,
+    new_triage,
     new_triage_batch,
     new_verifier,
     new_viability,
 )
 from scanner.app.domain import new_domain_modeler
-from scanner.app.knowledge_agent import make_consult_knowledge
+from scanner.app.knowledge_agent import make_consult_knowledge, new_knowledge_agent
 from scanner.app.observe import compaction_config, setup_tracing
 from scanner.app.pipeline import build_workflow
 from scanner.app.settings import Settings, apply_dotenv
-from scanner.app.specialists import architect_overlay, route_name
+from scanner.app.specialists import REGISTRY, architect_overlay, route_name
 from scanner.app.specialists import build as build_specialists
 from scanner.core import Candidate
 from scanner.core.ports import Index
@@ -53,6 +58,12 @@ log = logging.getLogger("scanner.runner")
 
 APP_NAME = "fullscan"  # = the agent folder under web/, so CLI sessions show in the same app of the ADK UI
 SESSION_USER = "user"  # the ADK dev UI lists this user's sessions
+
+# Agents `wiring` does not build (the graph uses their batch / viability siblings): `standalone` builds them itself.
+EXTRA_AGENTS = ("triage", "critic", "knowledge")
+# Every LlmAgent of the project by its `.name`: one `adk create` app each under web/ (card 46).
+ROSTER = ("architect", "domain_modeler", "threat_modeler", "triage_batch", "verify", "review", "viability", "confirm",
+          *EXTRA_AGENTS, *(spec.name for spec in REGISTRY))
 
 
 def load_env(path: str = ".env") -> None:
@@ -179,6 +190,51 @@ def prepare(target: Path, deps: bool = False, settings: Settings | None = None):
         raise
     agent.index = index  # closed by scan_full (the web agent lives as long as the server)
     return store, run, agent
+
+_shared: dict[tuple[str, str], tuple] = {}  # ponytail: one wired run per (state_path, target) per process, for adk web
+
+
+def standalone(name: str, target: Path, settings: Settings | None = None):
+    """One ROSTER agent alone, for `adk web web` (web/<name>/agent.py): the real tools against `target`, every stage
+    switch forced on so no roster member comes back None. All apps of one `adk web` process share one run per
+    target (one Store run, one Index, one pre-pass so investigators find anchors and critics find the findings the
+    investigators reported). Returns (store, run, agent) like `prepare`; the store lives as long as the process."""
+    if name not in ROSTER:
+        raise KeyError(f"{name!r} is not a roster agent: {', '.join(ROSTER)}")
+    s = dataclasses.replace(settings or Settings.from_env(), specialists=True, threat_model=True, domain_model=True,
+                            critic=True, triage=True)
+    target = target.resolve()
+    if not target.is_dir():
+        raise FileNotFoundError(f"target {target} is not a directory")
+    key = (s.state_path, str(target))
+    if key not in _shared:
+        _shared[key] = _shared_run(target, s)
+    store, run, agents = _shared[key]
+    return store, run, agents[name]
+
+
+def _shared_run(target: Path, s: Settings) -> tuple:
+    """Store run + index + pre-pass + every ROSTER agent for `target`, built once per process."""
+    store = Store(s.state_path)
+    run = store.start_run(str(target))
+    try:
+        run.knowledge = KnowledgeConfig.from_settings(s)
+        index = build_index(target, max_files=s.index_max_files, max_bytes=s.index_max_bytes)
+        model = model_from_env(s)
+        w = wiring(run, target, entrypoints.entry_points(target), model, index, s)
+        res = w["scan_fn"]()  # the graph's `scan` node, once: anchors are what the investigators and gates work on
+        run.save_anchors(res.anchors)
+        run.put_artifact("scan", {"anchors": len(res.anchors), "ran": res.ran, "failed": res.failed})
+        agents = {a.name: a for a in w.values() if isinstance(a, LlmAgent)} | dict(w["specialists"])
+        agents["triage"] = new_triage(model, triage_tools(run, target, index=index), s.triage_max_calls)
+        agents["critic"] = new_critic(model, critic_tools(run, target, index=index), s.critic_max_calls)
+        agents["knowledge"] = new_knowledge_agent(model, s.knowledge_max_calls)
+    except Exception as e:
+        run.finish("failed", str(e))
+        store.close()
+        raise
+    return store, run, agents
+
 
 def scan_full(target: Path, deps: bool = False, runs_dir: Path = Path(".runs"), settings: Settings | None = None) -> dict:
     """One full run. Returns the summary dict (+ 'stop_reason', 'summary_path', 'sarif_path')."""

@@ -1,0 +1,27 @@
+{
+  "criteria": {
+    "read_before_report": 1.0,
+    "verdict_via_gate": 1.0,
+    "gate_attempted": 1.0
+  },
+  "custom_metrics": {
+    "read_before_report": {
+      "code_config": {
+        "name": "eval.adk_metrics.read_before_report"
+      },
+      "description": "deterministic grader eval.adk_metrics.read_before_report"
+    },
+    "verdict_via_gate": {
+      "code_config": {
+        "name": "eval.adk_metrics.verdict_via_gate"
+      },
+      "description": "deterministic grader eval.adk_metrics.verdict_via_gate"
+    },
+    "gate_attempted": {
+      "code_config": {
+        "name": "eval.adk_metrics.gate_attempted"
+      },
+      "description": "deterministic grader eval.adk_metrics.gate_attempted"
+    }
+  }
+}

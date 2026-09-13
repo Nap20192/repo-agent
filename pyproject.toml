@@ -20,8 +20,12 @@ package = true
 
 [dependency-groups]
 dev = [
+    "google-cloud-aiplatform>=2.1",
+    "pandas>=3.0.5",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "rouge-score>=0.1.2",
+    "tabulate>=0.10.0",
 ]
 
 [tool.pytest.ini_options]

@@ -1,0 +1,32 @@
+{
+  "eval_set_id": "dependency",
+  "name": "dependency",
+  "description": "seed cases for the `dependency` agent on samples/02-vulnshop: the payloads the graph sends it",
+  "eval_cases": [
+    {
+      "eval_id": "lib-pq-advisory",
+      "conversation": [
+        {
+          "invocation_id": "lib-pq-advisory-1",
+          "user_content": {
+            "parts": [
+              {
+                "text": "{\"id\": \"h0-6\", \"kind\": \"dependency\", \"cwe\": \"\", \"claim\": \"github.com/lib/pq pinned in go.mod has a known advisory reachable from main.go\", \"anchor_id\": \"a_f62a1e0787ee\", \"symbol\": \"\", \"route\": [], \"reads\": [\"go.mod\"], \"consult\": \"knowledge\", \"priority\": 50, \"wstg_id\": \"\", \"asvs_id\": \"\", \"skill\": \"dependency-advisory\", \"skills\": [\"dependency-advisory\"], \"specialist\": \"dependency\", \"instructions\": \"## Language: Go\\nSources: r.URL.Query().Get, r.FormValue, r.Body, mux.Vars, c.Param/c.Query (gin), chi.URLParam. Sinks: db.Query /\\nExec with string concatenation (safe: $1 / ? placeholders), exec.Command(\\\"sh\\\",\\\"-c\\\",…), os.Open / filepath.Join\\nwithout filepath.Clean + prefix check, http.Get(userURL), template.HTML / text/template (html/template escapes).\"}"
+              }
+            ],
+            "role": "user"
+          },
+          "creation_timestamp": 1789256994.36233
+        }
+      ],
+      "session_input": {
+        "app_name": "dependency",
+        "user_id": "user",
+        "state": {}
+      },
+      "creation_timestamp": 1789256994.36233,
+      "final_session_state": {}
+    }
+  ],
+  "creation_timestamp": 1789256994.36233
+}
