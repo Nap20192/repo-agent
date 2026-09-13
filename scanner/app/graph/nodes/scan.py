@@ -7,7 +7,7 @@ from collections.abc import Callable
 
 from google.adk.workflow import FunctionNode
 
-from scanner.adapter.static import ScanResult
+from scanner.adapter.scanners import ScanResult
 from scanner.core.ports import RunStore
 
 log = logging.getLogger("scanner.graph.scan")

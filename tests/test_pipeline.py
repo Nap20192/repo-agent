@@ -348,7 +348,7 @@ def test_no_triage_agent_flags_everything_and_coverage_is_complete():
 
 
 def test_scan_node_is_the_first_edge_when_scan_fn_is_given():
-    from scanner.adapter.static import ScanResult
+    from scanner.adapter.scanners import ScanResult
     run = FakeRun(anchors=[])  # an empty store: the scan node is what fills it
     wf = _workflow(run, scan_fn=lambda: ScanResult(anchors=[A1], ran=["gosec"]))
     assert [n.name for n in wf.graph.nodes][:3] == ["__START__", "scan", "build_skeleton"]

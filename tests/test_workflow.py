@@ -11,7 +11,7 @@ import pytest
 from google.adk.sessions.sqlite_session_service import SqliteSessionService
 
 from scanner import core, main
-from scanner.adapter import static
+from scanner.adapter import scanners
 from scanner.adapter.store import Run, Store
 from scanner.app import runner
 from scanner.app.graph.workflow import build_workflow
@@ -25,7 +25,7 @@ def _fake_v1(run, target, entries, model, index=None, settings=None, deps=False)
     """Stages off: the queue is the real pre-pass anchors; the fake verifier confirms CWE-89 and rejects the rest."""
     return build_workflow(verifier=fake_verifier_node(run), store=run, target=str(target),
                           has_anchor=lambda i: run.anchor(i) is not None, has_symbol=lambda s: False, entry_points_fn=list,
-                          scan_fn=lambda: static.scan(target, skip_deps=True), max_parallel=1, max_hyps=8, max_rounds=1)
+                          scan_fn=lambda: scanners.scan(target, skip_deps=True), max_parallel=1, max_hyps=8, max_rounds=1)
 
 
 def _fake_v2(run, target, entries, model, index=None, settings=None, deps=False):
@@ -34,7 +34,7 @@ def _fake_v2(run, target, entries, model, index=None, settings=None, deps=False)
         {"cwe": "CWE-639", "claim": "ghost", "symbol": "nowhere", "priority": 80}]})
     return build_workflow(architect=arch, threat_modeler=tm, verifier=fake_verifier_node(run), store=run, target=str(target),
                           has_anchor=lambda i: run.anchor(i) is not None, has_symbol=lambda s: False, entry_points_fn=list,
-                          scan_fn=lambda: static.scan(target, skip_deps=True), max_parallel=1, max_hyps=2, max_rounds=1)
+                          scan_fn=lambda: scanners.scan(target, skip_deps=True), max_parallel=1, max_hyps=2, max_rounds=1)
 
 
 @pytest.fixture

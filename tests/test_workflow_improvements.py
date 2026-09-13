@@ -7,7 +7,7 @@ import time
 from google.adk.workflow import FunctionNode
 
 from scanner import core
-from scanner.adapter import static
+from scanner.adapter import scanners
 from scanner.adapter.store import Store
 from scanner.core import Anchor
 from tests.fakes import A1, FakeRun, _run, _workflow, fake_stage_node, notes_of
@@ -24,7 +24,7 @@ def test_run_jobs_parallel_ordered_and_failures_recorded(tmp_path):
 
     jobs = [(t, job(t)) for t in ("a", "bb", "bad", "ccc")]  # job names are free; Anchor.tool is a Literal
     t0 = time.monotonic()
-    res = static._run_jobs(tmp_path, jobs)
+    res = scanners.run_jobs(tmp_path, jobs)
     assert time.monotonic() - t0 < 0.6  # 4 × 0.2 s sequentially would be ≥ 0.8
     assert [a.rule_id for a in res.anchors] == ["a", "bb", "ccc"] and res.ran == ["a", "bb", "ccc"]
     assert "RuntimeError: boom" in res.failed["bad"]

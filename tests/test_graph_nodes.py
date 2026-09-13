@@ -135,7 +135,7 @@ def test_skill_lists_for_investigators_and_critics():
 def test_scan_node_saves_anchors_and_writes_the_scan_artifact():
     """The pre-pass is a graph node: scanners run inside the Workflow, anchors land in the store, the
     artifact records what ran and what failed (visible in adk web, replayed on resume)."""
-    from scanner.adapter.static import ScanResult
+    from scanner.adapter.scanners import ScanResult
     run = FakeRun()
     res = ScanResult(anchors=[A1, A2], ran=["gosec", "semgrep"], failed={"osv": "no manifests"})
     outs = _run_node(graph_nodes.scan_node(run, lambda: res))
@@ -145,7 +145,7 @@ def test_scan_node_saves_anchors_and_writes_the_scan_artifact():
 
 
 def test_scan_node_is_skipped_on_resume_when_anchors_exist():
-    from scanner.adapter.static import ScanResult
+    from scanner.adapter.scanners import ScanResult
     run = FakeRun([A1])
     run.put_artifact("scan", {"anchors": 1, "by_tool": {"gosec": 1}, "ran": ["gosec"], "failed": {}})
     calls = []

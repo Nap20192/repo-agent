@@ -1,7 +1,7 @@
 """Untrusted-target guards of the index: symlink escapes, tsserver plugins, gopls toolchain env."""
 
 
-from scanner.adapter import static
+from scanner.adapter import fs
 from scanner.adapter.index.grep import GrepIndex
 from scanner.adapter.index.languages import JAVASCRIPT, TYPESCRIPT, ts_plugins_declared
 from scanner.adapter.index.lsp import LspIndex
@@ -13,7 +13,7 @@ def test_symlink_outside_target_is_invisible(tmp_path):
     t.mkdir()
     (t / "ok.py").write_text("def root():\n    return 1\n")
     (t / "evil.py").symlink_to(tmp_path / "secret.txt")
-    assert [p.name for p in static.files(t)] == ["ok.py"]
+    assert [p.name for p in fs.files(t)] == ["ok.py"]
     idx = GrepIndex(t)
     assert all(f == "ok.py" for f, _, _ in idx.references("root"))
     assert idx._lines("evil.py") == []  # even when asked directly

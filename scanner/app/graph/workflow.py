@@ -21,7 +21,7 @@ from collections.abc import Callable
 from google.adk.workflow import DEFAULT_ROUTE, START, JoinNode, Workflow
 from pydantic import ConfigDict
 
-from scanner.adapter.static import ScanResult
+from scanner.adapter.scanners import ScanResult
 from scanner.app.graph.nodes import (
     architect_node,
     audit_node,

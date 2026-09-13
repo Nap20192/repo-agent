@@ -19,7 +19,7 @@ from google.adk.tools.agent_tool import AgentTool
 from google.genai import types
 
 from scanner import core
-from scanner.adapter import entrypoints, fs, static
+from scanner.adapter import entrypoints, fs, scanners
 from scanner.adapter import recon as recon_adapter
 from scanner.adapter.index import build_index
 from scanner.adapter.knowledge import KnowledgeConfig
@@ -121,7 +121,7 @@ def wiring(run, target: Path, entries: list[Candidate], model, index: Index | No
     agents = build_agents(model, run, target, index, s)
     return {
         "index": index,
-        "scan_fn": lambda: static.scan(target, skip_deps=not deps and s.skip_deps, knowledge_cfg=run.knowledge),
+        "scan_fn": lambda: scanners.scan(target, skip_deps=not deps and s.skip_deps, knowledge_cfg=run.knowledge),
         "architect": agents["architect"],
         "domain_modeler": agents["domain_modeler"] if s.threat_model else None,  # the domain stage rides on the threat model
         "threat_modeler": agents["threat_modeler"],
@@ -207,7 +207,7 @@ def _shared_run(target: Path, s: Settings) -> tuple:
         run.knowledge = KnowledgeConfig.from_settings(s)
         index = build_index(target, max_files=s.index_max_files, max_bytes=s.index_max_bytes)
         model = model_from_env(s)
-        res = static.scan(target, skip_deps=s.skip_deps, knowledge_cfg=run.knowledge)  # the graph's `scan` node, once
+        res = scanners.scan(target, skip_deps=s.skip_deps, knowledge_cfg=run.knowledge)  # the graph's `scan` node, once
         run.save_anchors(res.anchors)
         run.put_artifact("scan", {"anchors": len(res.anchors), "ran": res.ran, "failed": res.failed})
         agents = build_agents(model, run, target, index, s)

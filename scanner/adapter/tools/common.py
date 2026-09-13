@@ -6,14 +6,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from scanner.adapter import static
+from scanner.adapter import fs
 from scanner.adapter.fs import (
     inside,
 )
 from scanner.core.ports import Index
 
 OUT_CAP = 20_000
-FILE_CAP = static.FILE_CAP
+FILE_CAP = fs.FILE_CAP
 GREP_CAP = 4_000
 DEF_CAP = 120  # lines of a definition body returned by lsp_definition
 SYM_CAP = 200  # symbols listed by lsp_symbols
@@ -30,7 +30,7 @@ def shell_quote(s: str) -> str:
 
 
 def default_reader(target: Path) -> Callable[[str, int], str]:
-    return lambda file, line: static.read_lines(target, file, line, 3)
+    return lambda file, line: fs.read_lines(target, file, line, 3)
 
 
 def default_index(target: Path) -> Index:
@@ -44,7 +44,7 @@ def default_index(target: Path) -> Index:
 
 def quotes_in_target(target: Path, quotes: list[str]) -> bool:
     """Is at least one quote present verbatim somewhere in the target? One pass over the files."""
-    for f in static.files(target):
+    for f in fs.files(target):
         try:
             text = f.read_text(errors="replace")
         except OSError:

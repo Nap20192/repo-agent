@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from google.adk.agents import LlmAgent
 
-from scanner.adapter.static import ScanResult
+from scanner.adapter.scanners import ScanResult
 from scanner.app import runner
 from scanner.app.agents.registry import REGISTRY
 from tests.fakes import A1, FakeRun
@@ -54,7 +54,7 @@ def test_standalone_builds_the_named_agent_with_its_run_tools(name, tmp_path, mo
     monkeypatch.setenv("CRITIC", "0")
     monkeypatch.setattr(runner, "model_from_env", lambda s: "gemini-flash-lite-latest")
     monkeypatch.setattr(runner, "_shared", {})
-    monkeypatch.setattr(runner.static, "scan", lambda *a, **k: ScanResult(anchors=[A1], ran=["gosec"]))
+    monkeypatch.setattr(runner.scanners, "scan", lambda *a, **k: ScanResult(anchors=[A1], ran=["gosec"]))
     store, run, agent = runner.standalone(name, _target(tmp_path))
     try:
         assert isinstance(agent, LlmAgent) and agent.name == name

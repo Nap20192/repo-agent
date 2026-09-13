@@ -4,15 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from scanner.adapter import static as st
-from scanner.adapter.static import (
-    anchors_from_sarif,
-    entry_points,
-    has_symbol,
-    read_lines,
-    scan,
-)
-from scanner.core import new_anchor_id
+from scanner.adapter import scanners as st
+from scanner.adapter.entrypoints import entry_points, has_symbol
+from scanner.adapter.fs import read_lines
+from scanner.adapter.scanners import anchors_from_sarif, gosec, osv, process, scan, semgrep
+from scanner.core import Anchor, new_anchor_id
 
 SAMPLE = Path(__file__).resolve().parent.parent / "samples" / "02-vulnshop"
 
@@ -71,24 +67,22 @@ def test_js_route_with_named_handler_and_semicolon(tmp_path):
 
 
 def test_osv_anchors_aggregate_per_package(tmp_path, monkeypatch):
-    from scanner.adapter import static as st
     data = {"results": [{"source": {"path": str(tmp_path / "package-lock.json")}, "packages": [
         {"package": {"name": "lodash", "version": "4.17.15"}, "vulnerabilities": [{"id": "CVE-1"}, {"id": "GHSA-a"}, {"id": "GHSA-b"}]},
         {"package": {"name": "express", "version": "4.17.1"}, "vulnerabilities": [{"id": "GHSA-x", "summary": "s"}]},
         {"package": {"name": "clean", "version": "1"}, "vulnerabilities": []}]}]}
-    a = st.anchors_from_osv(data, tmp_path)
+    a = osv.anchors_from_osv(data, tmp_path)
     assert [(x.snippet, x.rule_id, len(x.rule_ids)) for x in a] == [("lodash 4.17.15", "GHSA-a", 3), ("express 4.17.1", "GHSA-x", 1)]
     assert a[0].file == "package-lock.json" and "3 advisories" in a[0].message
-    monkeypatch.setattr(st, "OSV_MAX", 1)
-    assert len(st.anchors_from_osv(data, tmp_path)) == 1
+    monkeypatch.setattr(osv, "OSV_MAX", 1)
+    assert len(osv.anchors_from_osv(data, tmp_path)) == 1
 
 
 def test_secret_class_anchor_snippets_are_redacted(tmp_path):
-    from scanner.adapter import static as st
     key = "MIICXgIBAAKBgQCfn8uP4FuHaaAPrMkcl1fNMQM5EGMT4nnNSVoaEVdiDLc6P0mC"
-    a = st.Anchor(id="x", tool="semgrep", rule_id="detected-private-key", cwe="CWE-798", file="k.pem", line=1,
+    a = Anchor(id="x", tool="semgrep", rule_id="detected-private-key", cwe="CWE-798", file="k.pem", line=1,
                   snippet="-----BEGIN RSA PRIVATE KEY-----\n" + key, message="key " + key)
-    res = st._run_jobs(tmp_path, [("fake", lambda t: [a])])
+    res = st.run_jobs(tmp_path, [("fake", lambda t: [a])])
     assert key not in res.anchors[0].snippet and key not in res.anchors[0].message and "MIIC…" in res.anchors[0].snippet
 
 
@@ -101,7 +95,6 @@ def test_read_lines_refuses_symlink_escape(tmp_path):
 
 
 def test_semgrep_packs_per_language_and_excludes(tmp_path, monkeypatch):
-    from scanner.adapter import static as st
     (tmp_path / "a.py").write_text("x = 1\n")
     (tmp_path / "b.js").write_text("var y = 1;\n")
     seen = {}
@@ -110,9 +103,9 @@ def test_semgrep_packs_per_language_and_excludes(tmp_path, monkeypatch):
         seen["cmd"] = cmd
         return '{"runs": []}'
 
-    monkeypatch.setattr(st, "_run", fake_run)
+    monkeypatch.setattr(process, "run_cmd", fake_run)
     monkeypatch.delenv("SEMGREP_CONFIG", raising=False)
-    st._semgrep(tmp_path)
+    semgrep.run(tmp_path)
     cmd = seen["cmd"]
     cfgs = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--config"]
     assert "p/python" in cfgs and "p/flask" in cfgs and "p/javascript" in cfgs and "p/nodejs" in cfgs and "auto" not in cfgs
@@ -120,7 +113,7 @@ def test_semgrep_packs_per_language_and_excludes(tmp_path, monkeypatch):
     excl = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--exclude"]
     assert {".github", "docs", "artifacts", "*.md", "*.html", "*.yml", "node_modules", "*_test.go", "test_*.py"} <= set(excl)
     monkeypatch.setenv("SEMGREP_CONFIG", "p/custom")
-    st._semgrep(tmp_path)
+    semgrep.run(tmp_path)
     assert [c for i, c in enumerate(seen["cmd"]) if seen["cmd"][i - 1] == "--config"] == ["p/custom"]
 
 
@@ -166,8 +159,8 @@ def test_gosec_runs_per_go_module(tmp_path, monkeypatch):
         return json.dumps({"runs": [{"tool": {"driver": {"name": "gosec", "rules": []}}, "results": [
             {"ruleId": "G101", "level": "error", "message": {"text": "x"},
              "locations": [{"physicalLocation": {"artifactLocation": {"uri": "main.go"}, "region": {"startLine": 1}}}]}]}]})
-    monkeypatch.setattr(st, "_run", fake_run)
-    anchors = st._gosec(tmp_path)
+    monkeypatch.setattr(process, "run_cmd", fake_run)
+    anchors = gosec.run(tmp_path)
     assert calls == [tmp_path / "api"]
     assert [(a.file, a.line, a.rule_id) for a in anchors] == [("api/main.go", 1, "G101")]
     assert anchors[0].id == new_anchor_id("gosec", "G101", "api/main.go", 1)
@@ -176,8 +169,8 @@ def test_gosec_runs_per_go_module(tmp_path, monkeypatch):
 def test_gosec_without_go_mod_runs_at_the_root(tmp_path, monkeypatch):
     (tmp_path / "main.go").write_text("package main\n")
     calls = []
-    monkeypatch.setattr(st, "_run", lambda cmd, cwd, timeout=600: calls.append(cwd) or "{}")
-    assert st._gosec(tmp_path) == [] and calls == [tmp_path]
+    monkeypatch.setattr(process, "run_cmd", lambda cmd, cwd, timeout=600: calls.append(cwd) or "{}")
+    assert gosec.run(tmp_path) == [] and calls == [tmp_path]
 
 
 def test_source_files_skip_tests_fixtures_and_unknown_languages(tmp_path):
