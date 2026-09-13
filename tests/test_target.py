@@ -38,14 +38,40 @@ def test_clone_refuses_everything_else(url, tmp_path, monkeypatch):
 def test_resolve_target_path_url_prefix_and_errors(tmp_path, monkeypatch):
     d = tmp_path / "repo"
     d.mkdir()
-    assert resolve_target(str(d)) == d.resolve()
-    assert resolve_target(f"scan target: {d}") == d.resolve()  # the CLI's own message shape
-    assert resolve_target(f"  {d}\n") == d.resolve()
-    monkeypatch.setattr(git, "clone", lambda url, into=Path(".targets"): tmp_path / "cloned")
-    assert resolve_target("https://github.com/o/r") == tmp_path / "cloned"
+    assert resolve_target(str(d), root=tmp_path) == d.resolve()
+    assert resolve_target("repo", root=tmp_path) == d.resolve()  # relative to the workspace root
+    assert resolve_target(f"scan target: {d}", root=tmp_path) == d.resolve()  # the CLI's own message shape
+    assert resolve_target(f"  {d} ", root=tmp_path) == d.resolve()
+    seen = {}
+    monkeypatch.setattr(git, "clone", lambda url, into=Path(".targets"): seen.update(into=into) or (tmp_path / "cloned"))
+    assert resolve_target("https://github.com/o/r", root=tmp_path) == tmp_path / "cloned" and seen["into"] == tmp_path.resolve() / ".targets"
     with pytest.raises(ValueError, match="directory nor a https://github.com"):
-        resolve_target("hello there")
+        resolve_target("hello there", root=tmp_path)
     with pytest.raises(ValueError, match="directory nor a https://github.com"):
-        resolve_target(str(tmp_path / "missing"))
+        resolve_target(str(tmp_path / "missing"), root=tmp_path)
     with pytest.raises(ValueError, match="say which"):
-        resolve_target("")
+        resolve_target("", root=tmp_path)
+
+
+def test_resolve_target_never_leaves_the_workspace(tmp_path):
+    """The web input is a shared surface: no home directory, no system root, no `..` out of the workspace."""
+    (tmp_path / "ws").mkdir()
+    for text in [str(Path.home()), str(tmp_path), "../", "~", str(tmp_path / "ws" / ".." / "..")]:
+        with pytest.raises(ValueError, match="outside the workspace"):
+            resolve_target(text, root=tmp_path / "ws")
+
+
+def test_clone_is_atomic_and_never_reuses_a_symlink(tmp_path, monkeypatch):
+    into = tmp_path / ".targets"
+
+    def failing_run(cmd, **kw):
+        Path(cmd[-1]).mkdir(parents=True)  # git started writing…
+        raise subprocess.TimeoutExpired(cmd, 300)  # …and hung
+
+    monkeypatch.setattr(subprocess, "run", failing_run)
+    with pytest.raises(subprocess.TimeoutExpired):
+        git.clone("https://github.com/o/r", into=into)
+    assert not (into / "o-r").exists() and not list(into.glob(".o-r.*"))  # nothing half-cloned is left to be reused
+    (into / "o-r").write_text("not a dir")
+    with pytest.raises(ValueError, match="refusing to reuse"):
+        git.clone("https://github.com/o/r", into=into)

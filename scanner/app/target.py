@@ -9,17 +9,22 @@ from scanner.adapter import git
 PREFIX = "scan target:"  # what the CLI sends as its own first message (runner.run_session)
 
 
-def resolve_target(text: str) -> Path:
-    """`text` → an existing directory: a path as given, or https://github.com/<owner>/<repo> cloned into .targets/.
-    Anything else is a ValueError with a message the user can act on."""
+def resolve_target(text: str, root: Path = Path(".")) -> Path:
+    """`text` → an existing directory under `root` (WORKSPACE_ROOT; clones go to .targets/ under it), or
+    https://github.com/<owner>/<repo> cloned there. Anything else is a ValueError with a message the user can act on.
+    The web input is a shared surface, so it never reaches outside the workspace (the CLI's --target still can)."""
+    root = Path(root).resolve()
     t = text.strip()
     if t.lower().startswith(PREFIX):
         t = t[len(PREFIX):].strip()
     if not t:
-        raise ValueError("say which directory or GitHub repository to scan: a path, or https://github.com/<owner>/<repo>")
+        raise ValueError("say which directory or GitHub repository to scan: a path under the workspace, or https://github.com/<owner>/<repo>")
     if git.SAFE_URL.match(t):
-        return git.clone(t).resolve()
+        return git.clone(t, into=root / git.TARGETS).resolve()
     p = Path(t).expanduser()
+    p = (p if p.is_absolute() else root / p).resolve()
+    if not p.is_relative_to(root):
+        raise ValueError(f"{t!r} is outside the workspace {root} — set WORKSPACE_ROOT to scan there")
     if not p.is_dir():
         raise ValueError(f"{t!r} is neither a directory nor a https://github.com/<owner>/<repo> URL")
-    return p.resolve()
+    return p

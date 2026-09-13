@@ -263,12 +263,14 @@ def target_node(runs_dir: Path = Path(".runs")) -> FunctionNode:
     (cloned into .targets/) — the graph is prepared for it and run nested, then the run is closed like `scan full`
     (SARIF + summary). A message that names nothing scannable answers with an error and starts nothing."""
     async def fullscan(ctx, node_input) -> dict:
+        s = Settings.from_env()  # once per message: the workspace root, the flags, the model
         text = "".join(p.text or "" for p in (ctx.user_content.parts or [])) if ctx.user_content else ""
         try:
-            target = await asyncio.to_thread(resolve_target, text)  # a clone may take a while: keep the loop free
-        except (ValueError, subprocess.CalledProcessError) as e:
-            return {"error": str(e)}
-        store, run, agent = prepare(target)
+            target = await asyncio.to_thread(resolve_target, text, Path(s.workspace_root))  # a clone may take a while: keep the loop free
+        except (ValueError, subprocess.SubprocessError, OSError) as e:  # bad input, git timeout/failure, no git binary
+            log.warning("fullscan: %s", e)
+            return {"error": core.redact_secrets(str(e))}
+        store, run, agent = prepare(target, settings=s)
         try:
             await ctx.run_node(agent, None, run_id=f"run-{run.id}")
         except Exception as e:  # noqa: BLE001 — the UI gets the reason as the answer, not a traceback; the run is marked failed
@@ -279,6 +281,6 @@ def target_node(runs_dir: Path = Path(".runs")) -> FunctionNode:
             run.finish("failed", reason)
             store.close()
             log.warning("run %s failed: %s", run.id, reason)
-            return {"error": reason, "target": str(target), "run": run.id}
+            return {"error": core.redact_secrets(reason), "target": str(target), "run": run.id}  # a chat answer: redacted like a finding
         return {**finish_run(store, run, agent, ctx.state, runs_dir), "target": str(target)}
     return FunctionNode(func=fullscan, name=APP_NAME, rerun_on_resume=True)

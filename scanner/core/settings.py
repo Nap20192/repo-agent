@@ -66,6 +66,7 @@ class Settings:
     llm_model_small: str = ""  # cheaper model for triage/calibrate-LLM; "" → the main model
     # state
     state_path: str = ".state/state.db"
+    workspace_root: str = "."  # adk web: a chat message may only name targets under this directory (card 48)
     sessions_path: str = ".state/sessions.db"
     skip_deps: bool = False
     # knowledge
@@ -118,6 +119,7 @@ class Settings:
             recon=_on(e, "RECON"),
             llm_model_small=e.get("LLM_MODEL_SMALL", ""),
             state_path=e.get("STATE_PATH") or ".state/state.db",
+            workspace_root=e.get("WORKSPACE_ROOT") or ".",
             sessions_path=e.get("SESSIONS_PATH") or ".state/sessions.db",
             skip_deps=e.get("SKIP_DEPS") == "1",
             knowledge_cache=e.get("KNOWLEDGE_CACHE") or ".state/knowledge.db",

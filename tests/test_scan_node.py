@@ -21,7 +21,7 @@ def test_root_node_scans_the_target_named_in_the_message(tmp_path, monkeypatch):
     seen: dict = {}
     (tmp_path / "main.go").write_text("package main\n")
 
-    def fake_prepare(target):
+    def fake_prepare(target, settings=None):
         seen["target"] = target
         return "store", SimpleNamespace(id=7, finish=lambda *a: seen.setdefault("failed", a)), _fake_graph(seen)
 
@@ -29,6 +29,7 @@ def test_root_node_scans_the_target_named_in_the_message(tmp_path, monkeypatch):
         seen["finish"] = (store, run.id, state.get("stop_reason"))
         return {"confirmed": 0, "stop_reason": ""}
 
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setattr(runner, "prepare", fake_prepare)
     monkeypatch.setattr(runner, "finish_run", fake_finish)
     outs = _run_node(runner.target_node(), message=str(tmp_path))
@@ -37,9 +38,12 @@ def test_root_node_scans_the_target_named_in_the_message(tmp_path, monkeypatch):
 
 
 def test_root_node_answers_with_an_error_instead_of_scanning(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, "prepare", lambda target: (_ for _ in ()).throw(AssertionError("must not prepare")))
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(runner, "prepare", lambda target, settings=None: (_ for _ in ()).throw(AssertionError("must not prepare")))
     assert "error" in _run_node(runner.target_node(), message="what is this?")[-1]
     assert "error" in _run_node(runner.target_node(), message="")[-1]
+    out = _run_node(runner.target_node(), message=str(Path.home()))[-1]  # outside the workspace: refused, redacted answer
+    assert "outside the workspace" in out["error"]
 
 
 def test_finish_run_closes_the_run_and_writes_the_reports(tmp_path):
@@ -55,11 +59,12 @@ def test_root_node_reports_a_failed_graph_as_an_answer(tmp_path, monkeypatch):
     seen: dict = {}
 
     async def boom(ctx, node_input):
-        raise RuntimeError("verify round 0 failed: no key")
+        raise RuntimeError("verify round 0 failed: token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab leaked")
 
     run = SimpleNamespace(id=9, finish=lambda status, why: seen.update(status=status, why=why))
-    monkeypatch.setattr(runner, "prepare", lambda target: (SimpleNamespace(close=lambda: seen.update(closed=True)), run,
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(runner, "prepare", lambda target, settings=None: (SimpleNamespace(close=lambda: seen.update(closed=True)), run,
                                                          FunctionNode(func=boom, name="scan", rerun_on_resume=True)))
     out = _run_node(runner.target_node(), message=str(tmp_path))[-1]
-    assert "verify round 0 failed" in out["error"] and out["run"] == 9
+    assert "verify round 0 failed" in out["error"] and out["run"] == 9 and "ghp_ABCDEFGHIJKLMNOP" not in out["error"]  # redacted
     assert seen == {"status": "failed", "why": out["error"], "closed": True} or seen["status"] == "failed"

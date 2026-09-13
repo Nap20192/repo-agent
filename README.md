@@ -174,6 +174,7 @@ uv run pytest -q
 | `TAVILY_API_KEY` | ключ Tavily API | — |
 | `INDEX_MAX_FILES` | лимит файлов индекса | 3000 |
 | `INDEX_MAX_BYTES` | лимит памяти индекса в байтах | 30M |
+| `WORKSPACE_ROOT` | adk web `fullscan`: цель из сообщения только под этим каталогом; клоны GitHub — в `.targets/` под ним | cwd |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP-экспорт трассировки (например, http://localhost:4318) | — |
 | `OTEL_SERVICE_NAME` | имя сервиса в OTLP | `scanner` |
 | `COMPACTION_INTERVAL` | сжатие ADK-сессии каждые N вызовов (0 = off) | 0 |
