@@ -11,9 +11,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from scanner.adapter import knowledge
 from scanner.adapter.fs import detect_langs
-from scanner.adapter.knowledge import KnowledgeConfig
 from scanner.adapter.scanners import gitleaks, gosec, osv, semgrep
 from scanner.core import Anchor, merge_duplicates, redact_secrets
 
@@ -26,7 +24,7 @@ class ScanResult(BaseModel):
     failed: dict[str, str] = Field(default_factory=dict)
 
 
-def scan(target: Path, skip_deps: bool = False, knowledge_cfg: KnowledgeConfig | None = None) -> ScanResult:
+def scan(target: Path, skip_deps: bool = False) -> ScanResult:
     """Run every applicable scanner; a failed/missing scanner lands in `failed`, never raises."""
     target = Path(target)
     langs = detect_langs(target)
@@ -39,11 +37,7 @@ def scan(target: Path, skip_deps: bool = False, knowledge_cfg: KnowledgeConfig |
     if not skip_deps:
         jobs.append(("osv", osv.run))
     jobs.append(("gitleaks", gitleaks.run))
-    res = run_jobs(target, jobs)
-    if "osv" in res.ran:  # round 2 of the Knowledge consultant: aliases, CVSS, EPSS, KEV, fixed versions per package
-
-        res.anchors = knowledge.enrich_if_enabled(res.anchors, knowledge_cfg)
-    return res
+    return run_jobs(target, jobs)
 
 
 def run_jobs(target: Path, jobs) -> ScanResult:

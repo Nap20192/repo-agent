@@ -9,15 +9,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from scanner.adapter.fs import LANG_EXT
-from scanner.app.agents import critic, domain, knowledge, model, verify
+from scanner.app.agents import critic, model, verify
 from scanner.app.agents.base import AgentSpec, build, max_calls
 from scanner.app.agents.shared import ARCHITECT_OVERLAYS, LANG_OVERLAYS, SPECIALIST_SECTIONS
 from scanner.core import Finding, Hypothesis
 from scanner.core.types import CWE_CLASSES
 
-AGENTS: dict[str, AgentSpec] = {s.name: s for s in (model.SPEC, verify.SPEC, critic.SPEC, knowledge.SPEC, domain.SPEC)}
+AGENTS: dict[str, AgentSpec] = {s.name: s for s in (model.SPEC, verify.SPEC, critic.SPEC)}
 ROSTER: tuple[str, ...] = tuple(AGENTS)
-CONSULTANTS = ("knowledge", "domain")  # agents other agents call as sub-agents (AgentTool), never on a graph edge
 
 
 def _class(name: str) -> frozenset[str]:
@@ -76,7 +75,6 @@ def architect_overlay(langs: set[str]) -> str:
 __all__ = [
     "AGENTS",
     "CLASSES",
-    "CONSULTANTS",
     "ROSTER",
     "TOP10_COVERAGE",
     "AgentSpec",

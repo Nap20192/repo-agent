@@ -47,7 +47,7 @@ def test_every_agent_folder_and_tool_file_follow_the_template():
     """One folder per agent (4 files), one tool per file exposing `make(ctx)`, one node per file exposing `<name>_node`."""
     agents = ROOT / "scanner" / "app" / "agents"
     folders = [p for p in agents.iterdir() if p.is_dir() and not p.name.startswith("_")]
-    assert len(folders) == 5
+    assert len(folders) == 3
     for f in folders:
         assert {x.name for x in f.glob("*.py")} == {"__init__.py", "agent.py", "instruction.py", "tools.py"}, f.name
     tools = ROOT / "scanner" / "adapter" / "tools"

@@ -5,10 +5,10 @@ Read `README.md` for the pipeline, `BOARD.md` for the cards/contract, `docs/rnd/
 ## Layers (keep the dependency rule — guarded by tests/test_layers.py)
 
 ```
-scanner/core      domain leaf: types (Literal vocabularies), rules, calibrate, settings, ports (Index parts, RunStore, Router)
-scanner/adapter   fs, entrypoints, scanners/ (one scanner per file), SQLite State, OWASP, skills, knowledge, domain, dominance,
+scanner/core      domain leaf: types (Literal vocabularies), rules, settings, ports (Index, RunStore), workflow state keys
+scanner/adapter   fs, entrypoints, git, scanners/ (one scanner per file), SQLite State, OWASP, osv.dev, skills,
                   tools/ (one tool per file: make(ctx) + registry), index/ (LSP per language + grep)
-scanner/app       agents/ (5: model, verify, critic + consultants knowledge, domain — one folder each: agent.py SPEC,
+scanner/app       agents/ (3: model, verify, critic — one folder each: agent.py SPEC,
                   instruction.py, tools.py; base.py = the one factory; registry.py = AGENTS + the class overlay), graph/
                   (nodes/ one per file — scan, build_skeleton, direct_findings, model, plan, audit, critique, export;
                   workflow.py edges; helpers/planning/reconcile), callbacks, observe, runner (composition root)

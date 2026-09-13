@@ -18,7 +18,7 @@ Cite every line; all three are required for `confirmed`.
 ## Counter-facts that reject
 Any one of these, if it dominates the sink on the traced path, makes the claim false:
 - an auth middleware dominates the handler (`ensureAuthenticated`, `@login_required`, `Authenticator.Authenticate`) and the identity used downstream comes from it.
-- the endpoint is intentionally public (Domain Map) and serves no user-specific data.
+- the endpoint is intentionally public (the route has no auth guard by design — cite `domain:<entity>`) and serves no user-specific data.
 
 ## Not enough to confirm
 - a missing auth check on a public read endpoint is not a finding.

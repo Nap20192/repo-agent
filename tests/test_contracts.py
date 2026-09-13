@@ -11,7 +11,6 @@ from scanner import core
 from scanner.adapter.skills import SKILLS, skill_for
 from scanner.adapter.tools import TOOLS, ToolContext, make
 from scanner.app.agents import build
-from scanner.app.agents import registry as sp
 from scanner.app.agents import shared as ins
 from scanner.app.agents.registry import AGENTS
 from scanner.app.agents.shared import SPECIALIST_SECTIONS
@@ -20,16 +19,13 @@ from scanner.core.settings import Settings
 from tests.fakes import FakeRun, _run, _workflow
 
 MODEL = "gemini-flash-lite-latest"  # constructing an LlmAgent never touches the network
-TOOL_RX = re.compile(r"\b(load_skill|list_skills|report_finding|disprove_finding|consult_\w+|lsp_\w+|read_file|grep|shell|"
+TOOL_RX = re.compile(r"\b(load_skill|list_skills|report_finding|disprove_finding|consult_\w+|osv_query|lsp_\w+|read_file|grep|shell|"
                      r"list_anchors|list_findings|note_add|note_list|list_entry_points)\b")
 
 
 def _agents(tmp_path):
-    from google.adk.tools.agent_tool import AgentTool
-
     ctx = ToolContext(tmp_path, FakeRun())
-    return {name: build(spec, MODEL, ctx, extra_tools=[AgentTool(build(AGENTS[c], MODEL, ctx)) for c in spec.consults])
-            for name, spec in AGENTS.items()}
+    return {name: build(spec, MODEL, ctx) for name, spec in AGENTS.items()}
 
 
 def test_every_agent_folder_follows_the_template():
@@ -37,12 +33,12 @@ def test_every_agent_folder_follows_the_template():
     Settings field or a literal; its node kind is one of the graph's wrappers."""
     root = Path(__file__).resolve().parent.parent / "scanner" / "app" / "agents"
     for name, spec in AGENTS.items():
-        folder = root / spec.app
+        folder = root / spec.name
         assert {f.name for f in folder.iterdir() if f.suffix == ".py"} == {"__init__.py", "agent.py", "instruction.py", "tools.py"}, name
         assert set(spec.tools) <= set(TOOLS), (name, set(spec.tools) - set(TOOLS))
         assert isinstance(spec.budget, int) or hasattr(Settings(), spec.budget), name
-        assert spec.node in ("", "stage", "worker", "tool"), name
-        assert spec.instruction.startswith(ins.OPERATING_PRINCIPLES) or name in sp.CONSULTANTS  # consultants answer one question, never report
+        assert spec.node in ("", "stage", "worker"), name
+        assert spec.instruction.startswith(ins.OPERATING_PRINCIPLES)
 
 
 # Pre-existing gaps the template test surfaced (card 47 follow-up): the instruction names a tool the roster lacks.

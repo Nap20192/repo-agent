@@ -77,3 +77,25 @@ def read_lines(target: Path, file: str, line: int, window: int = 3) -> str:
     lines = p.read_text(errors="replace").splitlines()  # raises FileNotFoundError
     lo, hi = max(1, line - window), min(len(lines), line + window)
     return "\n".join(lines[lo - 1:hi])
+
+
+def imported_by(target: Path, package: str, max_files: int = 5000) -> int:
+    """Source files importing `package` (require/from/import in JS/TS, import in Python, quoted module path in
+    Go): the cheap reachability hint of a direct dependency finding. Counts files, capped. Ponytail: a regex,
+    not the LSP — upgrade to the Index when the hint decides priorities."""
+    p, py = re.escape(package), re.escape(package.replace("-", "_"))
+    pat = re.compile(rf"""require\(\s*['"]{p}(?:/|['"])|(?:from|import)\s+['"]{p}(?:/|['"])"""
+                     rf"""|^\s*(?:import\s+)?(?:\w+\s+)?"{p}(?:/[^"]*)?"|^\s*(?:from|import)\s+{py}\b""", re.MULTILINE)
+    n = 0
+    for i, f in enumerate(files(target)):
+        if i >= max_files:
+            break
+        if f.suffix not in LANG_EXT:
+            continue
+        try:
+            with f.open("rb") as fh:  # read at most FILE_CAP bytes; never slurp a multi-GB bundle to slice it
+                text = fh.read(FILE_CAP).decode("utf-8", errors="ignore")
+        except OSError:
+            continue
+        n += bool(pat.search(text))
+    return n

@@ -12,6 +12,7 @@ ROSTER = (
     'lsp_callees',
     'lsp_path_to_entry',
     'list_anchors',
+    'osv_query',
     'consult_owasp',
     'list_skills',
     'load_skill',

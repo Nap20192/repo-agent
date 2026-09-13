@@ -6,10 +6,9 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 
 from scanner.adapter.tools.code import grep, read_file, shell
-from scanner.adapter.tools.consult import list_skills, load_skill, owasp
+from scanner.adapter.tools.consult import list_skills, load_skill, osv_query, owasp
 from scanner.adapter.tools.context import ToolContext
 from scanner.adapter.tools.gates import disprove_finding, report_finding
-from scanner.adapter.tools.knowledge import deps_dev, epss, ghsa, kev, nvd_cve, osv_query
 from scanner.adapter.tools.lsp import callees, callers, definition, path_to_entry, references, symbols
 from scanner.adapter.tools.store import list_anchors
 
@@ -27,16 +26,10 @@ TOOLS: dict[str, Callable[[ToolContext], Callable]] = {
     "lsp_callees": callees.make,
     "lsp_path_to_entry": path_to_entry.make,
     "list_anchors": list_anchors.make,
+    "osv_query": osv_query.make,
     "consult_owasp": owasp.make,
     "list_skills": list_skills.make,
     "load_skill": load_skill.make,
-    # the Knowledge agent's own tools
-    "osv_query": osv_query.make,
-    "ghsa": ghsa.make,
-    "nvd_cve": nvd_cve.make,
-    "epss": epss.make,
-    "kev": kev.make,
-    "deps_dev": deps_dev.make,
 }
 
 

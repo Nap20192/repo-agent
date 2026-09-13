@@ -15,7 +15,7 @@ log = logging.getLogger("scanner.callbacks")
 BUDGET_LAST_CALL = ("Model-call budget is exhausted after this reply. Answer NOW with your final JSON only — "
                     "tools are disabled for this turn.")
 
-def budget_callback(limit: int, per_branch: bool = False, stop_run: bool = False, per_invocation: bool = False):
+def budget_callback(limit: int, per_branch: bool = False, stop_run: bool = False):
     """before_model_callback counting model calls (per branch or globally).
 
     Call `limit`: tools are stripped and the model is told to answer with its final JSON now.
@@ -26,7 +26,7 @@ def budget_callback(limit: int, per_branch: bool = False, stop_run: bool = False
     def cb(callback_context, llm_request) -> LlmResponse | None:
         if limit <= 0:
             return None
-        key = callback_context.invocation_id if per_invocation else callback_context.branch if per_branch else None
+        key = callback_context.branch if per_branch else None
         counters[key] = counters.get(key, 0) + 1
         if counters[key] < limit:
             return None

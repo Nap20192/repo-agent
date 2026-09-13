@@ -26,7 +26,7 @@ def _target(tmp_path: Path) -> Path:
 # --- the roster -------------------------------------------------------------------------------------------
 
 def test_roster_is_the_five_agents():
-    assert set(runner.ROSTER) == {"model", "verify", "critic", "knowledge", "domain"}
+    assert set(runner.ROSTER) == {"model", "verify", "critic"}
 
 
 def test_one_web_app_per_roster_name_next_to_fullscan():
@@ -44,7 +44,7 @@ def test_web_apps_do_not_shadow_stdlib():
 
 # --- standalone -------------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("name", ["verify", "critic", "model", "knowledge"])
+@pytest.mark.parametrize("name", ["verify", "critic", "model"])
 def test_standalone_builds_the_named_agent_with_its_run_tools(name, tmp_path, monkeypatch):
     monkeypatch.setenv("STATE_PATH", str(tmp_path / "state.db"))
     monkeypatch.setenv("CRITIC", "0")
@@ -55,14 +55,12 @@ def test_standalone_builds_the_named_agent_with_its_run_tools(name, tmp_path, mo
     try:
         assert isinstance(agent, LlmAgent) and agent.name == name
         tools = {getattr(t, "__name__", getattr(t, "name", "")) for t in agent.tools}
-        if name == "knowledge":
-            assert "osv_query" in tools
-        elif name == "model":
+        if name == "model":
             assert "read_file" in tools and not ({"report_finding", "disprove_finding", "shell"} & tools)  # a document stage
         elif name == "critic":
-            assert {"read_file", "disprove_finding"} <= tools and "report_finding" not in tools
+            assert {"read_file", "disprove_finding", "osv_query"} <= tools and "report_finding" not in tools
         else:
-            assert {"read_file", "report_finding"} <= tools  # investigators report only through the gate
+            assert {"read_file", "report_finding", "osv_query"} <= tools  # investigators report only through the gate
         assert run.target == str(tmp_path.resolve()) and [a.id for a in run.anchors()] == [A1.id]  # pre-pass ran once
         assert run.artifact("scan") == {"anchors": 1, "ran": ["gosec"], "failed": {}}
         assert runner.standalone("verify", tmp_path)[1] is run  # every app of the process shares the run
@@ -83,7 +81,7 @@ def test_standalone_names_cover_the_roster(tmp_path, monkeypatch):
     kw = runner.wiring(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
     try:
         built = {a.name for a in kw.values() if isinstance(a, LlmAgent)}
-        assert built | {"knowledge", "domain"} == set(runner.ROSTER)  # the consultants are sub-agents, not on a graph edge
+        assert built == set(runner.ROSTER)
     finally:
         kw["index"].close()
 

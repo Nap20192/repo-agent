@@ -52,11 +52,11 @@ claim — nothing else. You do not scan the repo and you do not invent anchors.
 - [sink] Confirm dangerous construction reaches the sink with attacker-controlled data and no
   adequate escaping: SQL/command/template/path/redirect. Check sanitizers on the path.
 - [dependency] Confirm the vulnerable symbol of the advisory is actually called on a reachable
-  path. Call knowledge(request) for the advisory and cite 'knowledge:<id>' in evidence — required.
+  path. Call osv_query for the advisory and cite 'knowledge:<id>' in evidence — required.
 - [secret] Confirm the value is a real live secret, not a placeholder/test/example, and that it
   is committed and used. Quote the exact line.
 - [authz] Confirm the object/action is reachable without the ownership or role check the
-  business rule requires. Call domain(request) for the entity and cite 'domain:<entity>' —
+  business rule requires. Find the entity's ownership / role check yourself (grep, lsp_definition, lsp_references) and cite 'domain:<entity>' —
   required. Distinguish a real gap from an intended rule.
 
 You may propose at most 3 NEW grounded hypotheses (new_hypotheses) — each with an anchor_id or a

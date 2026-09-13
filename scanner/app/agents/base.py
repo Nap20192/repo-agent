@@ -4,7 +4,7 @@ tool-window digest, tool-call logging). `build()` turns a spec into a wired LlmA
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from google.adk.agents import LlmAgent
 
@@ -19,19 +19,12 @@ class AgentSpec:
     description: str
     instruction: str
     tools: tuple[str, ...]  # registry names (scanner/adapter/tools/registry.py), in the order the model sees them
-    budget: str | int  # a Settings field name, or a literal (specialists; SPECIALIST_<NAME>_MAX_CALLS overrides it)
-    node: str = ""  # how the graph runs it: "stage" (document, timeout+degrade), "worker" (parallel items), "tool" (AgentTool), "" (not in the graph)
+    budget: str | int  # a Settings field name (*_max_calls), or a literal
+    node: str = ""  # how the graph runs it: "stage" (document, timeout+degrade), "worker" (parallel items), "" (not in the graph)
     output_schema: type | None = None  # the document the FINAL answer must validate as (tools stay usable)
     window: bool = True  # tool-window digest callback
-    per_branch: bool = True  # budget scope
-    per_invocation: bool = False
-    consults: tuple[str, ...] = ()  # consultant agents this agent gets as sub-agents (AgentTools): "knowledge", "domain"
+    per_branch: bool = True  # budget scope: per parallel branch, else one counter for the run
     flag: str = ""  # Settings switch that turns the agent off (None in the graph): "critic", "triage", "threat_model", ...
-    folder: str = field(default="", compare=False)  # web/<folder>; differs from name only when the name shadows stdlib
-
-    @property
-    def app(self) -> str:
-        return self.folder or self.name
 
 
 def new_agent(
@@ -43,7 +36,6 @@ def new_agent(
     *,
     model,
     per_branch: bool = True,
-    per_invocation: bool = False,
     window: bool = True,
     stop_run: bool = False,
     overlay: str = "",
@@ -52,7 +44,7 @@ def new_agent(
     """An agent that sees only its instruction + its own tool turns; `overlay` is appended to the instruction.
     `output_schema` (a core pydantic model) makes ADK enforce the shape of the FINAL answer; tools stay usable
     during the thought loop (google/adk/agents/llm_agent.py: output_schema + tools are supported together)."""
-    before_model = [budget_callback(max_calls, per_branch=per_branch, stop_run=stop_run, per_invocation=per_invocation)]
+    before_model = [budget_callback(max_calls, per_branch=per_branch, stop_run=stop_run)]
     if window:
         before_model.append(tool_window_callback())
     return LlmAgent(
@@ -73,10 +65,9 @@ def max_calls(spec: AgentSpec, settings: Settings | None = None) -> int:
     return getattr(settings or Settings(), spec.budget) if isinstance(spec.budget, str) else spec.budget
 
 
-def build(spec: AgentSpec, model, ctx: ToolContext, settings: Settings | None = None, *, overlay: str = "",
-          extra_tools: list | None = None) -> LlmAgent:
+def build(spec: AgentSpec, model, ctx: ToolContext, settings: Settings | None = None, *, overlay: str = "") -> LlmAgent:
     """A wired LlmAgent for one run: the spec's roster built from `ctx`, its budget from `settings`."""
-    tools = make(spec.tools, ctx) + list(extra_tools or [])
+    tools = make(spec.tools, ctx)
     return new_agent(spec.name, spec.description, spec.instruction, tools, max_calls(spec, settings), model=model,
-                     per_branch=spec.per_branch, per_invocation=spec.per_invocation, window=spec.window, overlay=overlay,
+                     per_branch=spec.per_branch, window=spec.window, overlay=overlay,
                      output_schema=spec.output_schema)

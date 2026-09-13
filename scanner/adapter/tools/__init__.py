@@ -1,7 +1,7 @@
 """ADK function tools, one per file, built per run from a ToolContext through the name registry.
 
 Layout: code/ (read_file, grep, shell), lsp/ (symbol navigation over the Index port), gates/ (report_finding,
-disprove_finding), store/ (anchors), consult/ (owasp, skills), knowledge/ (the Knowledge agent's databases). `registry.TOOLS` names them; `make(names, ctx)` builds them.
+disprove_finding), store/ (anchors), consult/ (osv_query, owasp, skills). `registry.TOOLS` names them; `make(names, ctx)` builds them.
 Every tool returns a dict; errors are {"status": "error", "reason": ...}, never raised into the model."""
 
 from scanner.adapter.tools.common import (

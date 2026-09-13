@@ -19,7 +19,7 @@ Cite every line; all three are required for `confirmed`.
 Any one of these, if it dominates the sink on the traced path, makes the claim false:
 - a DTO/schema with an explicit field allow-list is used for binding (`binding:"-"` on the role field, pydantic model without `role`, `pick(req.body, [...])`).
 - the privileged field is overwritten from the session after binding (`user.Role = current.Role`).
-- the update endpoint is admin-only and the Domain Map says role changes are an admin action.
+- the update endpoint is admin-only: the role guard on the route is real and runs on every path (cite `domain:<entity>`).
 
 ## Not enough to confirm
 - mass assignment of harmless fields (display name) is not escalation: the finding needs a privileged field.

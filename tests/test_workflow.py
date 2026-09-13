@@ -30,7 +30,7 @@ def _fake_v1(run, target, entries, model, index=None, settings=None, deps=False)
 
 def _fake_v2(run, target, entries, model, index=None, settings=None, deps=False):
     stage = fake_stage_node(run, "model", {"architecture_model": {"entities": [{"name": "shop"}], "vuln_classes": [{"cwe": "CWE-89"}]},
-                                           "threat_model": {"intent": "production", "threats": [
+                                           "threat_model": {"threats": [
                                                {"cwe": "CWE-639", "claim": "ghost", "symbol": "nowhere", "priority": 80}]}})
     return build_workflow(model=stage, verifier=fake_verifier_node(run), store=run, target=str(target),
                           has_anchor=lambda i: run.anchor(i) is not None, has_symbol=lambda s: False, entry_points_fn=list,
@@ -80,8 +80,7 @@ def test_cli_exit_code(env, monkeypatch):
 def test_full_run_persists_artifacts(env, monkeypatch):
     monkeypatch.setattr(runner, "build_agent", _fake_v2)
     s = runner.scan_full(SAMPLE, runs_dir=env / "runs")
-    assert s["intent"] == "production" and s["confirmed"] == 1 and s["stop_reason"] == "round limit"
+    assert s["confirmed"] == 1 and s["stop_reason"] == "round limit"
     run = Run(Store(str(env / "state.db")).db, 1, str(SAMPLE))
     assert run.artifact("architecture_model")["vuln_classes"] == [{"cwe": "CWE-89"}]
-    assert run.artifact("threat_model")["intent"] == "production"
     assert any("ungrounded" in n["text"] for n in run.notes())  # the ghost threat was gated, not silently lost

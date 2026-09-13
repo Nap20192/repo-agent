@@ -32,7 +32,7 @@ def test_report_finding_gate(tmp_path):
     # 2. coordinate mismatch
     assert "does not match" in rf("a_sql", "t", "confirmed", ['db.Query("SELECT " + name)'], line=99)["reason"]
     # 3. missing consult ref for authz class
-    assert "consult_domain" in rf("a_idor", "t", "rejected", ["getOrder(id)"])["reason"]
+    assert "domain:<entity>" in rf("a_idor", "t", "rejected", ["getOrder(id)"])["reason"]
     # 4. quote not in code
     assert "does not match the code" in rf("a_sql", "t", "confirmed", ["totally made up"])["reason"]
     assert len(run.gate) == 4

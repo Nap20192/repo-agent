@@ -4,8 +4,6 @@ new_hypotheses, merged into one prioritized queue of Hypotheses without duplicat
 from __future__ import annotations
 
 import logging
-import math
-import random
 import re
 from collections.abc import Callable
 
@@ -65,45 +63,28 @@ def split_direct(anchors: list[Anchor], max_per_tool: int = DIRECT_MAX) -> tuple
     return [a for a in direct if a.id in kept_ids], [a for a in anchors if not is_direct(a)]
 
 
-def _cvss_severity(e: dict, default: str) -> str:
-    if e.get("kev"):
-        return "critical"
-    s = e.get("cvss")
-    if s is None:
-        return default
-    return "critical" if s >= 9 else "high" if s >= 7 else "medium" if s >= 4 else "low"
 
 
-def direct_finding(a: Anchor, enrichment: dict | None = None, imported_by: int | None = None) -> Finding:
-    """Confirmed finding straight from a direct anchor. `enrichment` is the knowledge record of an osv anchor
-    (ids, aliases, cvss, epss, kev, fixed, cwes); `imported_by` = source files importing the package (None =
-    not computed). Secrets are redacted in title and evidence."""
-    e = enrichment or {}
+def direct_finding(a: Anchor, imported_by: int | None = None) -> Finding:
+    """Confirmed finding straight from a direct anchor; `imported_by` = source files importing the package of an
+    osv anchor (None = not computed). Secrets are redacted in title and evidence."""
     at = f"{a.file}:{a.line}"
     secret = a.tool == "gitleaks" or a.cwe == "CWE-798"
     red = core.redact_secrets if secret else (lambda s: s)  # advisory ids and package names are not secrets
     evidence = [f"{at}: {red(a.snippet)}" if a.snippet else at]
-    title, severity, cwe = a.message or a.rule_id, a.severity, a.cwe
+    title, cwe = a.message or a.rule_id, a.cwe
     if a.tool == "osv":
-        ids = [i for i in dict.fromkeys([*(a.rule_ids or [a.rule_id]), *e.get("aliases", [])]) if i]
+        ids = [i for i in dict.fromkeys(a.rule_ids or [a.rule_id]) if i]
         evidence += [f"knowledge:{i}" for i in ids]
-        facts = (f"CVSS {e['cvss']}" if e.get("cvss") is not None else "",
-                 f"EPSS {e['epss']:.2f}" if e.get("epss") is not None else "",
-                 "KEV: known exploited" if e.get("kev") else "",
-                 f"fixed: {', '.join(e['fixed'][:3])}" if e.get("fixed") else "")
-        evidence += [x for x in facts if x]
         if imported_by is not None:
             evidence.append(f"imported by {imported_by} files" if imported_by
                             else "not imported by any source file (transitive or unused; reachability unknown)")
-        pkg = f"{e['package']}@{e['version']}" if e.get("package") else "@".join(a.snippet.split()[:2]) or a.rule_id
-        title = f"Vulnerable dependency {pkg}: {', '.join(ids[:3])}"
-        severity = _cvss_severity(e, a.severity)
-        cwe = a.cwe or (e.get("cwes") or [""])[0]
+        title = f"Vulnerable dependency {'@'.join(a.snippet.split()[:2]) or a.rule_id}: {', '.join(ids[:3])}"
     elif a.tool == "gitleaks":
         title = f"Hardcoded secret ({a.rule_id}) in {a.file}"
         cwe = a.cwe or "CWE-798"
     return Finding(anchor_id=a.id, cwe=cwe, file=a.file, line=a.line, title=red(title),
-                   severity=severity, status=core.CONFIRMED, evidence=evidence, confidence=1.0, source="direct")
+                   severity=a.severity, status=core.CONFIRMED, evidence=evidence, confidence=1.0, source="direct")
 
 
 def from_anchors(anchors: list[Anchor]) -> list[Hypothesis]:
@@ -290,7 +271,6 @@ HUNT = (
 )
 _ID_PARAM = re.compile(r"[:{<][^/}>]*id[^/}>]*[}>]?|[?&][^=]*id=|/\d+\b", re.IGNORECASE)  # /:id {id} <int:id> ?userId= /42
 DEFAULT_HUNT = ("CWE-79", "CWE-89", "CWE-639")
-FILE_BASELINE_MAX = 60  # ponytail: rounds×hyps slots never reach more anyway; raise with the budget
 
 
 def hunt_classes(route: str = "", file: str = "", symbol: str = "") -> list[str]:
@@ -314,15 +294,11 @@ def _baseline(where: str, file: str, line: int, symbol: str, classes: list[str],
     return h, a
 
 
-def coverage(entry_points: list[Candidate], queue: list[Hypothesis], done: set[str], files: list[str] = (),
-             adversarial: float = 0.25, seed: int = 0) -> tuple[list[Hypothesis], list[Anchor]]:
-    """Plan-stage rule (Shannon): nothing stays unexamined. Every entry point not covered by a queued/done item
-    (same symbol) becomes a priority-10 baseline naming the classes to hunt (`hunt_classes`); a deterministic
-    `adversarial` share of them also gets the sweep wording. Every production `file` nobody reads becomes a
-    priority-8 file baseline (≤ FILE_BASELINE_MAX). Each baseline carries its own entrypoint anchor.
-    Returns (hypotheses, minted anchors)."""
+def coverage(entry_points: list[Candidate], queue: list[Hypothesis], done: set[str]) -> tuple[list[Hypothesis], list[Anchor]]:
+    """Plan-stage rule: no entry point stays unexamined. Every entry point not covered by a queued/done item (same
+    symbol) becomes a priority-10 baseline naming the classes to hunt (`hunt_classes`, by route words). Each
+    baseline carries its own entrypoint anchor. Returns (hypotheses, minted anchors)."""
     covered_syms = {h.symbol for h in queue if h.symbol} | {k.split("|", 1)[0] for k in done if "|" in k}
-    sweep = {h.symbol: h.claim for h in adversarial_sweep(entry_points, adversarial, seed)}
     hyps: list[Hypothesis] = []
     minted: list[Anchor] = []
     for c in entry_points:
@@ -332,42 +308,20 @@ def coverage(entry_points: list[Candidate], queue: list[Hypothesis], done: set[s
         classes = hunt_classes(" ".join(c.route), c.file, c.symbol)
         claim = (f"Baseline: untrusted input entering {where} ({c.file}:{c.line}) — hunt {', '.join(classes)}: "
                  "a sink of one of these classes reached without the matching control")
-        if c.symbol in sweep:
-            claim += ". " + sweep[c.symbol]
         h, a = _baseline(where, c.file, c.line, c.symbol, classes, claim, 10, route=c.route)
         hyps.append(h)
         minted.append(a)
         if c.symbol:
             covered_syms.add(c.symbol)  # one handler under several routes is one audit
-    read = {f for h in [*queue, *hyps] for f in h.reads}
-    for f in [f for f in files if f not in read][:FILE_BASELINE_MAX]:
-        classes = hunt_classes("", f, "")
-        claim = f"Baseline file: read {f} for {', '.join(classes)} — no queued item examines it"
-        h, a = _baseline(f, f, 1, "", classes, claim, 8)
-        hyps.append(h)
-        minted.append(a)
     return hyps, minted
 
 
-def adversarial_sweep(candidates: list[Candidate], fraction: float = 0.25, seed: int = 0) -> list[Hypothesis]:
-    """Plan-stage rule (Shannon): a deterministic fraction of otherwise-uncovered candidates gets an unconstrained
-    sweep — ignore assumed safety, treat every input as untrusted. Same seed → same pick."""
-    pool = [c for c in candidates if c.symbol]
-    if not pool or fraction <= 0:
-        return []
-    picked = random.Random(seed).sample(pool, min(len(pool), math.ceil(len(pool) * fraction)))
-    return [Hypothesis(
-        kind="entry", symbol=c.symbol, reads=[c.file] if c.file else [], priority=5,
-        claim=f"Adversarial sweep of {c.symbol} ({c.file}:{c.line}): ignore assumed safety and trust boundaries, "
-              "treat every input as untrusted and malformed, look for any sink it can reach",
-    ) for c in picked]
 
 
 def build_queue(
     store: RunStore, anchors: list[Anchor], threats: list[Threat] | None = None,
     locate: Callable[[str], tuple[str, int] | None] | None = None,
     entry_points_fn: Callable[[], list[Candidate]] | None = None,
-    source_files_fn: Callable[[], list[str]] | None = None,
 ) -> tuple[list[Hypothesis], set[str]]:
     """One prioritized queue from the grounded threat model (store artifacts), the scanner anchors and
     entry-point coverage; synthetic anchors minted on the way are saved to the store. Shared by the tests
@@ -387,9 +341,8 @@ def build_queue(
         log.info("reconcile: %d synthetic anchors for grounded threats", len(minted))
     done: set[str] = set()
     queue = reconcile(from_anchors(anchors) + hyps, [], done)
-    if entry_points_fn is not None or source_files_fn is not None:  # plan-stage rule: nothing stays unexamined
-        baseline, minted_entries = coverage(entry_points_fn() if entry_points_fn else [], queue, done,
-                                            files=source_files_fn() if source_files_fn else [])
+    if entry_points_fn is not None:  # plan-stage rule: no entry point stays unexamined
+        baseline, minted_entries = coverage(entry_points_fn(), queue, done)
         if minted_entries:
             store.save_anchors(minted_entries)  # every baseline reports from its own entrypoint anchor
         queue = reconcile(baseline, queue, done)

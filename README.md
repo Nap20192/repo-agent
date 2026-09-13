@@ -8,20 +8,19 @@
 не из прозы модели. Состояние прогона — SQLite `.state/state.db`; выгрузка — `.runs/<ts>/`.
 
 Не перенесено из Go-версии: Docker-песочница (команды идут на хосте), go/ssa и LSP-индекс
-(символы — LSP или grep-fallback), Domain Map (консультант `domain` — саб-агент).
+(символы — LSP или grep-fallback), Domain Map (агент читает владение/роли сам и цитирует `domain:<entity>`).
 
 ## Слои (`scanner/core` / `adapter` / `app`)
 
 Архитектура, порты, инварианты гейтов и источники (SOLID, Clean/Hexagonal Architecture, PEP, ADK) —
 `docs/architecture.md`; решения — `docs/adr/`; аудиты — `docs/audits/`; план фазы качества — `docs/plans/quality.md`.
 
-- `scanner/core` — типы (`types.py`), чистые правила (`rules.py`), calibrate (`calibrate.py`),
-  settings (`settings.py`), порты (`ports.py`), domain-карта (`domain.py`): доменный лист без ADK и I/O.
-- `scanner/adapter` — SQLite State (`store.py`), OWASP (`owasp.py`), domain-модель (`domain.py`), dominance
-  (`dominance.py`), knowledge-кэш (`knowledge.py`), entry points (`entrypoints.py`), файловая система (`fs.py`),
-  скиллы (`skills.py`); пакет `scanners/` (один сканер — один файл: `gosec.py`, `semgrep.py`, `osv.py`, `gitleaks.py`,
+- `scanner/core` — типы (`types.py`), чистые правила (`rules.py`), settings (`settings.py`), порты (`ports.py`),
+  ключи состояния графа (`workflow.py`): доменный лист без ADK и I/O.
+- `scanner/adapter` — SQLite State (`store.py`), OWASP (`owasp.py`), osv.dev (`osv.py`), entry points
+  (`entrypoints.py`), файловая система (`fs.py`), git clone (`git.py`), скиллы (`skills.py`); пакет `scanners/` (один сканер — один файл: `gosec.py`, `semgrep.py`, `osv.py`, `gitleaks.py`,
   `sarif.py`, `process.py` — единственная точка запуска подпроцессов, `scan.py`); пакет `tools/` (один инструмент —
-  один файл с `make(ctx: ToolContext)`: `code/`, `lsp/`, `gates/`, `store/`, `consult/`, `knowledge/`; `registry.py` —
+  один файл с `make(ctx: ToolContext)`: `code/`, `lsp/`, `gates/`, `store/`, `consult/`; `registry.py` —
   имя → фабрика в порядке, который видит модель; `context.py` — ToolContext); пакет `index/` (LSP-адаптеры и grep
   fallback: `lsp.py`, `grep.py`, `rpc.py`, `languages.py`, `callgraph.py`).
 - `scanner/app` — пакет `agents/` (одна папка на агента: `agent.py` с `SPEC = AgentSpec(...)`, `instruction.py`,
@@ -52,9 +51,10 @@ START → scan → build_skeleton → direct_findings → model → plan ─(п�
   (taint / authz / dependency / secrets / config по CWE → kind) и языковой overlay; вердикт — только через `report_finding`.
 - `critique` — dedupe, затем `critic` по каждой подтверждённой находке: опровергнуть можно только `disprove_finding`
   с контр-цитатой; JSON критика — аннотация `review`.
-- `export` — детерминированная калибровка, тайминги, стоп-причина → SARIF + summary в `.runs/<ts>/`.
+- `export` — тайминги, стоп-причина → SARIF + summary в `.runs/<ts>/`.
 
-Консультанты `knowledge` (OSV/GHSA/NVD/EPSS/KEV) и `domain` (владение/правила по коду) — саб-агенты `verify`/`critic`.
+Консультантов-агентов нет (ADR-0011): osv.dev — тул `osv_query` у `verify`/`critic` (ответ несёт `knowledge:<id>` для гейта),
+владение и бизнес-правила агент читает сам по коду и цитирует `domain:<entity>`.
 
 ## Сессии и трассировка
 
@@ -87,26 +87,22 @@ stdlib JSON-RPC (`rpc.py`) — gopls (Go), pyright (Python), typescript-language
 (≤50 мест); `has_symbol`/`locate` для гейта идут через индекс. `read_file` по умолчанию 60 строк, grep ≤4k.
 `tool_window_callback(keep=3)` заменяет старые результаты однострочным дайджестом.
 
-## Классы, overlay и консультанты
+## Классы, overlay и osv.dev
 
 Один `verify` и один `critic` вместо восьми специалистов (ADR-0010): к каждой активации `registry.overlay()`
 подмешивает секцию класса — `taint` (A03/A08/A10), `authz` (A01/A07), `dependency` (A06/A08), `secrets` (A02),
 `config` (A02/A05/A09) — по CWE, затем по kind; критик получает `*_critic`-секции того же класса; языковой overlay
 (Go / Node / Python) — по расширению файла. `TOP10_COVERAGE` закрывает OWASP Top 10 2021 целиком (A04 — этап `model`).
-Консультанты — саб-агенты (AgentTool) `verify`/`critic`: **`domain`** отвечает про владение и бизнес-правила по коду
-(grep / read_file / lsp), **`knowledge`** — по базам OSV/GHSA/NVD/EPSS/KEV/deps.dev (`KNOWLEDGE_ENRICH=0` выключает
-обогащение osv-якорей в пре-пассе, `GHSA_DIR` для офлайна, `GITHUB_TOKEN`/`NVD_API_KEY` снимают лимиты).
+Единственный внешний источник знаний — osv.dev через тул `osv_query` (advisory id или `ecosystem:name@version` →
+`knowledge:<id>`, aliases, fixed, CVSS-вектор, CWE); кэша и других баз нет.
 OWASP-карта (`scanner/adapter/owasp.py`) покрывает 58 CWE: WSTG, Top 10 2021 и 2025, ASVS 5.0 с уровнем, cheat
 sheet и remediation; SARIF несёт таксономии и `fixes[]`.
 
-## Скиллы, калибровка, покрытие
+## Скиллы и покрытие
 
 - `scanner/skills/*.md` — 34 скилла (Strix через адаптацию git-agent3): per-CWE (sql-injection, xss, ssrf, idor…),
   analysis (counterevidence, severity-calibration, source-aware-discovery, verifier-proof). Тулы `list_skills` /
   `load_skill` у Investigator, Critic, Architect; `skill_for(cwe, kind)` кладёт подсказку в payload гипотезы.
-- `scanner/core/calibrate.py` — report-only score по Shannon calibrate: `Hazard = (Impact + Likelihood) × Multiplier`,
-  cap 10, exposure и intent-масштабирование; пишется в `summary.json` (`findings[].calibration`) и в SARIF
-  `properties.calibration`, статус находки не меняет.
 - Reconciler добавляет baseline-гипотезу (kind `entry`, низкий приоритет) на каждый entry point, который не
   покрыт ни якорем, ни угрозой (plan-правило Shannon: «файл, не попавший в investigation, не смотрит никто»).
 - Инструкции всех агентов начинаются с operating principles Shannon; Critic идёт по 13 правилам review.
@@ -133,20 +129,13 @@ uv run pytest -q
 | `BUGFINDER_MAX_PARALLEL` | параллельных Investigator'ов | 3 |
 | `STAGE_TIMEOUT` | таймаут стадии в секундах | 600 |
 | `THREAT_MODEL` | включить Architect/ThreatModeler | on |
-| `DOMAIN_MAX_MODEL_CALLS` | бюджет консультанта `domain` на один вопрос | 8 |
 | `CRITIC` | включить адверсариальный проход Critic | on |
 | `VERIFIER_MAX_MODEL_CALLS` | бюджет вызовов Investigator'а | 30 |
 | `CRITIC_MAX_MODEL_CALLS` | бюджет вызовов Critic'а | 20 |
 | `MODEL_MAX_MODEL_CALLS` | бюджет вызовов Architect | 40 |
-| `KNOWLEDGE_MAX_MODEL_CALLS` | бюджет вызовов Knowledge AgentTool | 10 |
 | `STATE_PATH` | SQLite State (якоря, гипотезы, досье, находки, artifacts) | `.state/state.db` |
 | `SESSIONS_PATH` | SQLite ADK-сессий (видны через `adk web`) | `.state/sessions.db` |
 | `SKIP_DEPS` | пропустить osv-scanner (SKIP_DEPS=1) | off |
-| `KNOWLEDGE_CACHE` | SQLite кэш OSV/GHSA/NVD/EPSS | `.state/knowledge.db` |
-| `KNOWLEDGE_ENRICH` | обогащать osv-якоря из кэша и APIs | on |
-| `GHSA_DIR` | директория офлайн GHSA (вместо GitHub API) | — |
-| `GITHUB_TOKEN` | токен GitHub (снять лимит GHSA) | — |
-| `NVD_API_KEY` | ключ NVD API | — |
 | `INDEX_MAX_FILES` | лимит файлов индекса | 3000 |
 | `INDEX_MAX_BYTES` | лимит памяти индекса в байтах | 30M |
 | `WORKSPACE_ROOT` | adk web `fullscan`: цель из сообщения только под этим каталогом; клоны GitHub — в `.targets/` под ним | cwd |
@@ -159,8 +148,8 @@ git-aware обход osv-scanner ничего не находит в мелко�
 **Тесты:** `tests/fakes.py` — общие test doubles (FakeRun, fake agents); `tests/test_layers.py` — архитектурные гарды
 (core ← ничего, adapter ← core only, test модули не импортируют друг друга); маркер `tests/live` для live-eval.
 
-Модули: `scanner/core/{types,rules,calibrate,settings,ports,domain}.py` (доменный лист), `scanner/adapter/static.py`
-(сканеры → якоря), `scanner/adapter/{store,owasp,knowledge,entrypoints,fs,skills,git}.py` (адаптеры),
+Модули: `scanner/core/{types,rules,settings,ports,workflow}.py` (доменный лист), `scanner/adapter/scanners/`
+(сканеры → якоря), `scanner/adapter/{store,owasp,osv,entrypoints,fs,skills,git}.py` (адаптеры),
 `scanner/adapter/tools/` (агент-тулы по файлам), `scanner/adapter/index/{lsp,grep,rpc,languages,callgraph}.py`
-(код индекс), `scanner/app/agents/` (5 агентов) и `scanner/app/graph/` (7 узлов),
+(код индекс), `scanner/app/agents/` (3 агента) и `scanner/app/graph/` (7 узлов),
 `scanner/app/{callbacks,observe,runner,settings}.py` (исполнение), `scanner/main.py` (CLI, eval), `web/fullscan/agent.py` (`adk web`).

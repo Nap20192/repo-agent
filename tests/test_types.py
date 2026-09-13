@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from scanner import core
-from scanner.core import Anchor, Candidate, Finding, ThreatModel
+from scanner.core import Anchor, Candidate, Finding
 
 
 def test_program_set_fields_are_literals():
@@ -22,10 +22,6 @@ def test_llm_facing_fields_stay_strings_for_gate_messages():
     f = Finding(title="t", status="maybe", severity="HUGE")
     assert core.validate_finding(f).startswith("finding: status must be")
 
-
-def test_intent_is_normalised_then_validated():
-    assert ThreatModel(intent="SAMPLE_OR_TEST_ONLY").intent == "sample"
-    assert ThreatModel(intent="PRODUCTION").intent == "production"
 
 
 def test_cwe_taxonomy_covers_gate_sets_and_consult_rule():

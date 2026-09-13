@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 CONFIRMED, REJECTED, UNCERTAIN = "confirmed", "rejected", "uncertain"
 
@@ -41,7 +41,6 @@ CandidateKind = Literal["entry", "sink", "external"]
 Severity = Literal["critical", "high", "medium", "low", "info"]
 Tool = Literal["gosec", "semgrep", "osv", "gitleaks", "threatmodel", "entrypoint", "investigator"]
 SYNTHETIC_TOOLS = ("threatmodel", "entrypoint")  # anchors minted from a stage, not a scanner: they only say "start here"
-Intent = Literal["production", "sample"]
 
 # One CWE taxonomy (ADR 0006): cwe → class family. The class overlay (agents.registry.CLASSES) and the consult gate derive from it;
 # AUTHZ_CWES/TAINT_CWES above stay as the gate's historical subsets (CWE-352 routes to authz but needs no domain: ref).
@@ -124,11 +123,7 @@ class Finding(_Model):
     asvs_id: str = ""  # ASVS 5.0 requirement id (from the hypothesis / CWE map)
     top10: str = ""  # OWASP Top 10 2025 category
     source: Literal["llm", "direct"] = "llm"  # direct: a scanner result reported without an LLM verdict (card 42)
-    # card 45 annotations (report-only, written through RunStore.annotate; the verdict stays with the gates)
-    review: dict = Field(default_factory=dict)  # ReviewVerdict dump: status, checklist, repro_hints
-    viability: str = ""  # VIABLE | CONDITIONAL_VIABLE | NON_VIABLE | SAMPLE_OR_TEST
-    repro_status: str = ""  # statically_confirmed | not_attempted
-    calibration: dict = Field(default_factory=dict)  # filled by the calibrate node; exporters compute it when empty
+    review: dict = Field(default_factory=dict)  # the Critic's verdict (report-only, written through RunStore.annotate)
 
 class Threat(_Model):
     """One modeled threat (ThreatModeler output). Grounding: an anchor match by (file, cwe) or a symbol."""
@@ -164,9 +159,3 @@ class ArchitectureModel(_Model):
 class ThreatModel(_Model):
     threats: list[Threat] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)  # design concerns without a symbol: notes, never threats
-    intent: Intent = "production"  # fail-closed: sample only if every check holds; normalised before validation
-
-    @field_validator("intent", mode="before")
-    @classmethod
-    def _norm_intent(cls, v: object) -> str:  # tolerate the model's spelling; anything not clearly sample is production
-        return "sample" if str(v).strip().lower().startswith("sample") else "production"

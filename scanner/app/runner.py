@@ -16,14 +16,12 @@ from google.adk.apps import App
 from google.adk.errors._stale_session_error import StaleSessionError
 from google.adk.runners import Runner
 from google.adk.sessions.sqlite_session_service import SqliteSessionService
-from google.adk.tools.agent_tool import AgentTool
 from google.adk.workflow import FunctionNode
 from google.genai import types
 
 from scanner import core
 from scanner.adapter import entrypoints, fs, scanners
 from scanner.adapter.index import build_index
-from scanner.adapter.knowledge import KnowledgeConfig
 from scanner.adapter.store import Store
 from scanner.adapter.tools import ToolContext
 from scanner.app.agents import build
@@ -99,8 +97,7 @@ async def run_session(agent, target: str, run_id: int, settings: Settings | None
 
 def build_agents(model, run, target: Path, index: Index, s: Settings) -> dict[str, LlmAgent | None]:
     """Every agent of the registry for one run, by name — None when its Settings flag is off (the graph keeps the
-    node as a no-op of the same name). One fresh consultant AgentTool (knowledge / domain) per agent that consults it
-    (own budget each); the Model agent gets the stack overlay of the target's languages."""
+    node as a no-op of the same name); the Model agent gets the stack overlay of the target's languages."""
     ctx = ToolContext(target, run, index=index, settings=s)
     overlay = architect_overlay(fs.detect_langs(target))
     out: dict[str, LlmAgent | None] = {}
@@ -108,8 +105,7 @@ def build_agents(model, run, target: Path, index: Index, s: Settings) -> dict[st
         if spec.flag and not getattr(s, spec.flag):
             out[spec.name] = None
             continue
-        extra = [AgentTool(build(AGENTS[c], model, ctx, s)) for c in spec.consults] or None
-        out[spec.name] = build(spec, model, ctx, s, overlay=overlay if spec.name == "model" else "", extra_tools=extra)
+        out[spec.name] = build(spec, model, ctx, s, overlay=overlay if spec.name == "model" else "")
     return out
 
 
@@ -121,11 +117,10 @@ def wiring(run, target: Path, entries: list[Candidate], model, index: Index | No
     agents = build_agents(model, run, target, index, s)
     return {
         "index": index,
-        "scan_fn": lambda: scanners.scan(target, skip_deps=not deps and s.skip_deps, knowledge_cfg=run.knowledge),
+        "scan_fn": lambda: scanners.scan(target, skip_deps=not deps and s.skip_deps),
         "model": agents["model"],
         "verifier": agents["verify"],
         "critic": agents["critic"],
-        "knowledge_cfg": getattr(run, "knowledge", None),
         "store": run,
         "target": str(target),
         "has_anchor": lambda i: run.anchor(i) is not None,
@@ -155,7 +150,6 @@ def prepare(target: Path, deps: bool = False, settings: Settings | None = None):
     store = Store(s.state_path)
     run = store.start_run(str(target))
     try:
-        run.knowledge = KnowledgeConfig.from_settings(s)  # calibration reads EPSS/KEV through the run's config
         index = build_index(target, max_files=s.index_max_files, max_bytes=s.index_max_bytes)
         agent = build_agent(run, target, entrypoints.entry_points(target), model_from_env(s), index, s, deps=deps)
     except Exception as e:
@@ -191,10 +185,9 @@ def _shared_run(target: Path, s: Settings) -> tuple:
     store = Store(s.state_path)
     run = store.start_run(str(target))
     try:
-        run.knowledge = KnowledgeConfig.from_settings(s)
         index = build_index(target, max_files=s.index_max_files, max_bytes=s.index_max_bytes)
         model = model_from_env(s)
-        res = scanners.scan(target, skip_deps=s.skip_deps, knowledge_cfg=run.knowledge)  # the graph's `scan` node, once
+        res = scanners.scan(target, skip_deps=s.skip_deps)  # the graph's `scan` node, once
         run.save_anchors(res.anchors)
         run.put_artifact("scan", {"anchors": len(res.anchors), "ran": res.ran, "failed": res.failed})
         agents = build_agents(model, run, target, index, s)

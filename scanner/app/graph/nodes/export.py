@@ -1,4 +1,4 @@
-"""export: the terminal node — calibrate every finding (deterministic), stop reason, rounds, timings → ExportResult."""
+"""export: the terminal node — stop reason, rounds, timings → ExportResult (SARIF + summary are written by the runner)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import logging
 from google.adk.workflow import node
 
 from scanner import core
-from scanner.app.graph import planning
 from scanner.app.graph.helpers import llm_findings
 from scanner.core.ports import RunStore
 from scanner.core.workflow import ExportResult
@@ -15,11 +14,8 @@ from scanner.core.workflow import ExportResult
 log = logging.getLogger("scanner.graph.export")
 
 
-def export_node(store: RunStore, knowledge_cfg, timings: dict[str, float]):
+def export_node(store: RunStore, timings: dict[str, float]):
     async def export(ctx, node_input) -> dict:
-        intent = (store.artifact("threat_model") or {}).get("intent", "production")
-        for fid, c in planning.calibrate_all(store.findings(), intent, store.artifact("architecture_model"), knowledge_cfg).items():
-            store.annotate(fid, calibration=c)
         stop = str(ctx.state.get(core.STATE_STOP_REASON) or "")
         rounds = int(ctx.state.get(core.STATE_ROUND) or 0)
         ctx.state[core.STATE_STOP_REASON] = stop

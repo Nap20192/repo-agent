@@ -31,6 +31,8 @@ class ToolContext:
 
 ## Структура tools/
 
+Источник истины — `scanner/adapter/tools/registry.py` (`TOOLS`: имя → factory, в порядке, который видит модель).
+
 ```
 tools/
 ├── __init__.py              # экспорты (ToolContext, make, registry)
@@ -43,52 +45,36 @@ tools/
 │   ├── grep.py              # grep(pattern, files, max_files)
 │   └── shell.py             # shell(cmd, timeout)
 │
-├── lsp/                     # Навигация по коду (LSP)
+├── lsp/                     # Навигация по коду (LSP, grep-fallback)
 │   ├── symbols.py           # lsp_symbols(path) → [symbol]
-│   ├── definition.py        # lsp_definition(path, symbol) → body
+│   ├── definition.py        # lsp_definition(symbol) → body
 │   ├── references.py        # lsp_references(symbol)
 │   ├── callers.py           # lsp_callers(function)
 │   ├── callees.py           # lsp_callees(function)
-│   └── path_to_entry.py     # lsp_path_to_entry(file) → entry point
+│   └── path_to_entry.py     # lsp_path_to_entry(symbol) → путь до entry point
 │
 ├── gates/                   # Вердикты findings
 │   ├── report_finding.py    # ⭐ KEY: report_finding(anchor_id, title, status, evidence, ...)
-│   ├── disprove_finding.py  # disprove_finding(anchor_id, reason)
-│   └── finding.py           # gate_finding() валидация
+│   ├── disprove_finding.py  # disprove_finding(finding_id, counter_evidence, reason)
+│   └── finding.py           # чистая проверка гейта (не tool)
 │
-├── store/                   # Хранилище state
-│   ├── list_anchors.py      # list_anchors() → anchors для проверки
-│   ├── list_findings.py     # list_findings(status) → findings
-│   ├── note_add.py          # note_add(text) → note
-│   └── note_list.py         # note_list() → notes
+├── store/                   # Состояние прогона
+│   └── list_anchors.py      # list_anchors() → якоря
 │
-├── consult/                 # Консультации знаний
-│   ├── domain.py            # consult_domain(entity, kind) → info
-│   ├── dominance.py         # check_dominance(path, symbols)
-│   ├── entry_points.py      # list_entry_points() → entry list
-│   ├── owasp.py             # consult_owasp(cwe, category)
-│   ├── knowledge.py         # consult_knowledge(query)
-│   ├── list_skills.py       # list_skills(kind)
-│   └── load_skill.py        # load_skill(name, version)
-│
-└── knowledge/               # Внешние БД (для Knowledge агента)
-    ├── osv_query.py         # osv_query(package, version)
-    ├── nvd_cve.py           # nvd_cve(cve_id)
-    ├── ghsa.py              # ghsa(ghsa_id)
-    ├── kev.py               # kev(cve_id)
-    ├── epss.py              # epss(cve_id)
-    ├── deps_dev.py          # deps_dev(package)
-    └── web_search.py        # web_search(query)
+└── consult/                 # Справочники и единственная внешняя база
+    ├── osv_query.py         # osv_query(advisory id | ecosystem:name@version) → knowledge:<id>
+    ├── owasp.py             # consult_owasp(cwe)
+    ├── list_skills.py       # list_skills()
+    └── load_skill.py        # load_skill(name)
 ```
 
 ## Как это работает: Пример
 
 ### 1. Агент объявляет свой инструментарий
 
-`scanner/app/agents/architect/tools.py`:
+`scanner/app/agents/model/tools.py`:
 ```python
 ROSTER = (
-    'list_entry_points',
     'read_file',
     'grep',
     'lsp_symbols',
@@ -103,7 +89,7 @@ ROSTER = (
 `scanner/app/agents/base.py`:
 ```python
 def build(spec: AgentSpec, model, ctx: ToolContext, ...):
-    names = spec.tools  # ['list_entry_points', 'read_file', ...]
+    names = spec.tools  # ['read_file', 'grep', ...]
     tools = make(names, ctx)  # Создаём tool functions
     return new_agent(
         name=spec.name,
@@ -213,11 +199,11 @@ TOOLS = {
 }
 
 # Каждый агент выбирает свой инструментарий
-architect.ROSTER = ('list_entry_points', 'read_file', 'grep', ...)
-investigator.ROSTER = ('report_finding', 'list_anchors', 'read_file', ...)
+model.ROSTER = ('read_file', 'grep', 'lsp_symbols', ...)
+verify.ROSTER = ('report_finding', 'read_file', 'grep', ..., 'osv_query')
 
 # make() собирает только нужные tools
-tools = make(architect.ROSTER, ctx)  # 7 tools для architect
+tools = make(model.ROSTER, ctx)  # инструменты этапа model
 tools = make(investigator.ROSTER, ctx)  # Другой набор для investigator
 ```
 
@@ -225,14 +211,14 @@ tools = make(investigator.ROSTER, ctx)  # Другой набор для investi
 
 | Tool | Цель | Кто использует |
 |------|------|---|
-| **report_finding** | ⭐ Вердикт: confirmed/rejected/uncertain + evidence | Investigator, specialists |
-| **list_anchors** | Получить anchors для проверки | Все agents |
-| **list_entry_points** | Найти entry points кода | Architect |
-| **read_file** | Прочитать код (numbered) | Все agents |
-| **grep** | Поиск по регулярке | Все agents |
-| **lsp_*** | Навигация: symbols, definition, callers | Architect, Investigator |
-| **consult_domain** | БД знаний: APIs, configs, security patterns | Domain specialist |
-| **consult_owasp** | OWASP Top 10, CWE справочник | Investigator |
+| **report_finding** | ⭐ Вердикт: confirmed/rejected/uncertain + evidence | verify |
+| **disprove_finding** | Опровержение с контр-цитатой → uncertain | critic |
+| **read_file** / **grep** / **shell** | Код: чтение, поиск, команда в target | все три |
+| **lsp_*** | Навигация: symbols, definition, references, callers, callees, path_to_entry | все три |
+| **list_anchors** | Якоря сканеров текущего прогона | verify, critic |
+| **osv_query** | osv.dev: advisory → `knowledge:<id>`, fixed, CVSS-вектор, CWE | verify, critic |
+| **consult_owasp** | WSTG / Top 10 / ASVS / cheat sheet по CWE | все три |
+| **list_skills** / **load_skill** | Корпус скиллов (per-CWE, analysis) | все три |
 
 ## Процесс с точки зрения agent
 

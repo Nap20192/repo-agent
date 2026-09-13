@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 
 from scanner.adapter import owasp
-from scanner.adapter.knowledge import enrichment_for
 from scanner.core import (
     CONFIRMED,
     REJECTED,
@@ -18,8 +17,6 @@ from scanner.core import (
     Dossier,
     Finding,
     Hypothesis,
-    calibrate,
-    exposure_for,
 )
 
 _SCHEMA = """
@@ -78,7 +75,6 @@ class Store:
 class Run:
     def __init__(self, db: sqlite3.Connection, run_id: int, target: str):
         self.db, self.id, self.target = db, run_id, target
-        self.knowledge = None  # KnowledgeConfig set by the runner; None → environment defaults
 
     def save_anchors(self, anchors: list[Anchor]) -> None:
         with self.db:
@@ -140,7 +136,7 @@ class Run:
             return f
         return None
 
-    ANNOTATIONS = ("review", "viability", "repro_status", "calibration")
+    ANNOTATIONS = ("review",)
 
     def annotate(self, finding_id: str, **fields) -> Finding | None:
         """Merge report-only annotations into a finding (card 45). Dict fields merge key-wise (review keeps earlier
@@ -183,24 +179,16 @@ class Run:
         with self.db:
             self.db.execute("UPDATE runs SET status=?, reason=?, finished=? WHERE id=?", (status, reason, time.time(), self.id))
 
-    def _intent(self) -> str:
-        return (self.artifact("threat_model") or {}).get("intent", "production")
-
-    def _calibrate(self, f: Finding, intent: str) -> dict:
-        exp, rules = exposure_for(f, self.artifact("architecture_model"))
-        return calibrate(f, intent, exposure=exp, knowledge=enrichment_for(f.anchor_id, getattr(self, "knowledge", None)), extra_rules=rules)
 
     def write_report(self, out_dir: Path) -> Path:
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        intent = self._intent()
         results = [{
             "ruleId": f.cwe or "unknown", "level": _LEVEL.get(f.severity, "warning"),
             "message": {"text": f.title + ("\n" + "\n".join(f.evidence) if f.evidence else "")},
             "locations": [{"physicalLocation": {"artifactLocation": {"uri": f.file}, "region": {"startLine": f.line}}}],
             "properties": {"finding_id": f.id, "anchor_id": f.anchor_id, "confidence": f.confidence,
-                           "source": f.source, "calibration": f.calibration or self._calibrate(f, intent),
-                           **{k: getattr(f, k) for k in ("review", "viability", "repro_status") if getattr(f, k)}},
+                           "source": f.source, **({"review": f.review} if f.review else {})},
             "taxa": _taxa(f),
             **({"fixes": [{"description": {"text": f.remediation}, "properties": {"url": f.remediation_url}}]}
                if f.remediation else {}),
@@ -223,11 +211,9 @@ class Run:
         out_dir.mkdir(parents=True, exist_ok=True)
         fs = self.findings()
         gate = self.db.execute("SELECT COUNT(*) FROM gate_log WHERE run=?", (self.id,)).fetchone()[0]
-        intent = self._intent()
         summary = {"run_id": self.id, "target": self.target,
                    **{s: sum(f.status == s for f in fs) for s in (CONFIRMED, REJECTED, UNCERTAIN)},
-                   "findings": [{**f.model_dump(), "calibration": self._calibrate(f, intent)} for f in fs], "gate_refusals": gate,
-                   "intent": intent}
+                   "findings": [f.model_dump() for f in fs], "gate_refusals": gate}
         if (timings := self.artifact("timings")) is not None:
             summary["timings"] = timings
         p = out_dir / "summary.json"

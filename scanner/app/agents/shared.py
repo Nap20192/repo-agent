@@ -120,8 +120,9 @@ SPECIALIST_SECTIONS = {
   also not proof — trace to the sink; client-side validation; self-XSS; a WAF; framework auto-escaping that
   is actually on for that template (quote the config).""",
     'authz': """## Specialisation: authorization, IDOR, authentication and session (A01, A07)
-- domain(request: the entity) is MANDATORY: cite 'domain:<entity>' in evidence for authz/IDOR verdicts (the gate
-  requires it) and decide "hole vs intended business rule" from the rules it returns.
+- 'domain:<entity>' in evidence is MANDATORY for authz/IDOR verdicts: read the entity's ownership / role checks yourself
+  (grep, lsp_definition, lsp_references) and cite them as domain:<entity> (the gate
+  requires it) and decide "hole vs intended business rule" from what the code enforces.
 - Reachability is the question: lsp_callers / lsp_path_to_entry from the handler to the object access; which
   middleware or decorator guards the route (read_file / grep for the auth chain, shell if needed).
 - Horizontal (IDOR): for every id in path/query/body (`:id`, `userId`, `orderId`, `req.params`, `req.body.*Id`)
@@ -141,7 +142,7 @@ SPECIALIST_SECTIONS = {
   effect counts as missing, not as present; documentation or comments as proof; being logged in as
   authorization; framework defaults you cannot quote as configured.""",
     'dependency': """## Specialisation: vulnerable dependencies / supply chain (A06)
-- knowledge(request: advisory id or package@version) is MANDATORY: cite 'knowledge:<GHSA/CVE>' (the gate requires it).
+- osv_query(advisory id or ecosystem:name@version) is MANDATORY: cite 'knowledge:<GHSA/CVE>' (the gate requires it).
 - Then decide reachability, not just presence: the advisory's vulnerable symbol must be called on a path from
   an entry point — lsp_references / lsp_path_to_entry on the symbol, read_file/grep for the import and call.
 - patched_in above the manifest version, or an uncalled symbol → rejected with that line quoted. You have no command-line tool.""",
@@ -166,10 +167,10 @@ SPECIALIST_SECTIONS = {
   and show the control line runs before the sink on every path; disprove only then, quoting the control line.
   For "unreachable" use lsp_path_to_entry / lsp_callers; read_file/grep/shell to re-trace ±15 lines around the evidence.""",
     'authz_critic': """## Specialisation: authorization / authentication findings
-- domain(request: the entity): an access the business rules intend is not a hole — cite 'domain:<rule>'. Re-check
+- An access the business rules intend is not a hole — read the rule in the code and cite 'domain:<entity>'. Re-check
   the guard chain with lsp_callers / lsp_path_to_entry, read the handler to see the guard clause runs before the
   access on every path, read_file/grep/shell around the evidence.""",
     'dependency_critic': """## Specialisation: dependency findings
-- knowledge(request) for patched_in vs the manifest version; lsp_references / lsp_path_to_entry for the vulnerable
+- osv_query for the fixed versions vs the manifest version; lsp_references / lsp_path_to_entry for the vulnerable
   symbol — an uncalled symbol or a patched version disproves (quote the manifest or import line). You have no command-line tool.""",
 }

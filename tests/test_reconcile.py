@@ -1,6 +1,5 @@
 from scanner import core
 from scanner.app.graph.reconcile import (
-    adversarial_sweep,
     coverage,
     direct_finding,
     from_anchors,
@@ -78,14 +77,6 @@ def test_coverage_baselines_uncovered_entry_points():
     assert core.ground_hypothesis(out[1], lambda i: i == out[1].anchor_id, lambda s: False) is None  # grounded on its own anchor
 
 
-def test_adversarial_sweep_is_deterministic_fraction():
-    cands = [Candidate(kind="entry", symbol=f"h{i}", file=f"f{i}.go", line=i) for i in range(8)]
-    a, b = adversarial_sweep(cands, 0.25, seed=1), adversarial_sweep(cands, 0.25, seed=1)
-    assert len(a) == 2 and [h.symbol for h in a] == [h.symbol for h in b]  # ceil(8*0.25), same seed → same pick
-    assert all(h.priority == 5 and h.kind == "entry" and "Adversarial sweep" in h.claim for h in a)
-    assert adversarial_sweep(cands, 0) == [] and adversarial_sweep([], 0.5) == []
-    assert len(adversarial_sweep(cands, 1.0)) == 8
-
 
 def test_coverage_mints_anchor_for_symbol_less_entry():
     from scanner.app.graph.reconcile import coverage
@@ -133,7 +124,7 @@ def test_ground_artifacts_drops_fabrications():
           "vuln_classes": [{"cwe": "CWE-89", "wstg_id": "WSTG-174"}, {"cwe": "CWE-999", "wstg_id": "WSTG-999"}], "notes": []}
     dm = {"entities": [], "roles": [], "rules": [{"id": "r1", "statement": "Order visible to owner", "entity": "Order", "symbol": "Server.login"},
                                                  {"id": "r2", "statement": "getOrder must check owner", "entity": "Order", "symbol": "getOrder"}], "gaps": [], "notes": []}
-    tm = {"intent": "production", "threats": [{"cwe": "CWE-89", "claim": "sqli", "symbol": "searchHandler", "wstg_id": "WSTG-174"},
+    tm = {"threats": [{"cwe": "CWE-89", "claim": "sqli", "symbol": "searchHandler", "wstg_id": "WSTG-174"},
                                              {"cwe": "CWE-79", "claim": "ghost", "symbol": "nowhere"}], "notes": []}
     am2, dm2, tm2, notes = ground_artifacts(am, dm, tm, _has, {"WSTG-INJT-05"})
     assert [e["name"] for e in am2["entities"]] == ["H"] and any("ungrounded entity Server" in n for n in am2["notes"])
@@ -175,22 +166,11 @@ def test_split_direct_keeps_code_anchors_for_the_llm():
     assert [a.id for a in inv] == ["a_sql", "a_idor"]  # semgrep medium (warning) still gets investigated
 
 
-def test_direct_finding_osv_uses_enrichment_and_reachability():
-    e = {"package": "lodash", "version": "4.13.1", "ids": ["GHSA-x"], "aliases": ["CVE-2020-1"], "cvss": 9.8,
-         "epss": 0.5, "kev": True, "fixed": ["4.17.21"], "cwes": ["CWE-1321"]}
-    f = direct_finding(OSV, e, imported_by=3)
-    assert (f.status, f.confidence, f.source, f.anchor_id, f.severity, f.cwe) == \
-        (core.CONFIRMED, 1.0, "direct", "a_osv", "critical", "CWE-1321")
-    assert f.file == "go.mod" and f.line == 1 and f.evidence[0] == "go.mod:1"
-    assert "knowledge:GHSA-x" in f.evidence and "knowledge:CVE-2020-1" in f.evidence
-    joined = " | ".join(f.evidence)
-    assert "CVSS 9.8" in joined and "EPSS 0.50" in joined and "KEV" in joined and "fixed: 4.17.21" in joined
-    assert "imported by 3 files" in joined
-
-
-def test_direct_finding_without_enrichment_keeps_anchor_severity():
-    f = direct_finding(OSV)
-    assert f.severity == "high" and f.evidence == ["go.mod:1", "knowledge:GHSA-x"] and f.cwe == ""
+def test_direct_finding_osv_cites_the_advisory_and_reachability():
+    f = direct_finding(OSV, imported_by=3)
+    assert (f.status, f.confidence, f.source, f.anchor_id, f.severity) == (core.CONFIRMED, 1.0, "direct", "a_osv", "high")
+    assert f.file == "go.mod" and f.line == 1 and f.evidence == ["go.mod:1", "knowledge:GHSA-x", "imported by 3 files"]
+    assert direct_finding(OSV).evidence == ["go.mod:1", "knowledge:GHSA-x"]
     assert "imported by" not in " ".join(direct_finding(OSV, imported_by=None).evidence)
     assert "not imported by any source file" in " ".join(direct_finding(OSV, imported_by=0).evidence)
 
@@ -261,34 +241,17 @@ def test_hunt_classes_by_route_file_and_symbol():
     assert hunt_classes("GET /", "index.js", "displayWelcomePage") == list(DEFAULT_HUNT)
 
 
-def test_baselines_name_classes_route_to_a_specialist_and_carry_the_adversarial_share():
+def test_baselines_name_classes_by_route():
     eps = [Candidate(kind="entry", file="s.js", line=53, symbol="handleLoginRequest", route=["POST /login"]),
            Candidate(kind="entry", file="p.js", line=40, symbol="handleProfileUpdate", route=["POST /profile"]),
            Candidate(kind="entry", file="a.js", line=8, symbol="displayAllocations", route=["GET /allocations/:userId"]),
            Candidate(kind="entry", file="i.js", line=30, symbol="displayWelcomePage", route=["GET /"])]
-    hyps, _ = coverage(eps, [], set(), adversarial=0.25, seed=1)
+    hyps, _ = coverage(eps, [], set())
     login = next(h for h in hyps if h.symbol == "handleLoginRequest")
     assert login.cwe == "CWE-287" and "CWE-307" in login.claim and login.kind == "entry" and login.priority == 10
     assert next(h for h in hyps if h.symbol == "handleProfileUpdate").cwe == "CWE-79"
-    assert sum("Adversarial sweep" in h.claim for h in hyps) == 1  # ceil(4 * 0.25), deterministic
-    assert coverage(eps, [], set(), adversarial=0.25, seed=1)[0][0].claim == hyps[0].claim
+    assert next(h for h in hyps if h.symbol == "displayAllocations").cwe == "CWE-639"  # an id in the route → IDOR first
 
-
-def test_file_baselines_cover_source_files_nobody_reads():
-    eps = [Candidate(kind="entry", file="routes/index.js", line=3, symbol="h")]
-    queue = [Hypothesis(kind="sink", cwe="CWE-89", claim="x", anchor_id="a", reads=["dao/user.js"])]
-    hyps, minted = coverage(eps, queue, set(), files=["routes/index.js", "dao/user.js", "dao/allocations.js", "lib/validators.js"])
-    files = [h for h in hyps if not h.symbol]
-    assert [h.reads for h in files] == [["dao/allocations.js"], ["lib/validators.js"]]
-    assert files[0].priority == 8 and files[0].kind == "entry" and "dao/allocations.js" in files[0].claim
-    assert files[1].cwe == "CWE-1333" and {a.file for a in minted} >= {"dao/allocations.js", "lib/validators.js"}
-    assert files[0].anchor_id in {a.id for a in minted}
-
-
-def test_file_baselines_are_capped():
-    from scanner.app.graph.reconcile import FILE_BASELINE_MAX
-    hyps, _ = coverage([], [], set(), files=[f"f{i}.py" for i in range(FILE_BASELINE_MAX + 5)])
-    assert len(hyps) == FILE_BASELINE_MAX
 
 
 def test_coverage_one_handler_under_two_routes_is_one_baseline():

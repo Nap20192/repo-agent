@@ -1,6 +1,6 @@
 ---
 name: dependency-advisory
-description: How to confirm or reject an osv / CVE / GHSA anchor by comparing the manifest version with the advisory's patched versions via consult_knowledge
+description: How to confirm or reject an osv / CVE / GHSA anchor by comparing the manifest version with the advisory's fixed versions via osv_query
 ---
 
 # Dependency Advisory
@@ -13,15 +13,15 @@ refuses a dependency finding without a `knowledge:` reference.
 
 1. Read the anchor: `rule_id` is the advisory id (GO-…, CVE-…, GHSA-…), `file:line`
    points at the manifest entry (`go.mod`, `package-lock.json`, `requirements.txt`).
-2. Call `consult_knowledge` with the advisory id, or with `package` + `ecosystem`
+2. Call `osv_query` with the advisory id, or with `ecosystem:name@version` (e.g. `npm:tar@4.4.8`)
    when only the package is known. Do not guess ranges from memory.
 3. Compare the version at the anchor line with the answer:
-   - version inside `affected_ranges` and below every `patched_in` → **confirmed**;
-   - version at or above a `patched_in` entry → **rejected** ("not affected in this
+   - version below every `fixed` entry (or the package@version query lists the advisory) → **confirmed**;
+   - version at or above a `fixed` entry → **rejected** ("not affected in this
      version");
    - the answer is empty or ranges are ambiguous → **uncertain**, say what is missing.
-4. Severity comes from the advisory `cvss` when present; otherwise keep the anchor's.
-5. If `fix_pattern` is present, put it in the finding title or notes; the report uses it.
+4. Severity: read the advisory's CVSS `vector` (AV:N/PR:N/… → high or critical); otherwise keep the anchor's.
+5. Name the first `fixed` version in the finding title or notes; the report uses it.
 
 ## Evidence the gate accepts
 

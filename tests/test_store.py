@@ -79,15 +79,6 @@ def test_sarif_taxonomies_declare_every_result_taxon(tmp_path):
     assert any(x["name"] == "SQL Injection" for t in sarif["taxonomies"] if t["name"] == "WSTG" for x in t["taxa"])
 
 
-def test_summary_exposure_comes_from_the_architecture_model(tmp_path):
-    from scanner.core import Anchor, Finding
-    run = Store(str(tmp_path / "s.db")).start_run("t")
-    run.save_anchors([Anchor(id="a", tool="gosec", cwe="CWE-78", severity="high", file="main.go", line=30)])
-    run.report(Finding(anchor_id="a", cwe="CWE-78", file="main.go", line=30, title="pingHandler cmdi", status="confirmed", evidence=["x"], confidence=0.9))
-    run.put_artifact("architecture_model", {"entities": [], "trust_boundaries": ["Srv: pingHandler - untrusted input"]})
-    s = json.loads(run.write_summary(tmp_path).read_text())
-    assert s["findings"][0]["calibration"]["multiplier"] > 0.7  # exposed: ×1.0 instead of internal ×0.8
-
 
 def test_direct_source_lands_in_sarif_and_summary(tmp_path):
     run = Store(str(tmp_path / "s.db")).start_run("t")
@@ -125,34 +116,31 @@ def test_reporter_summary_and_sarif(tmp_path):
     store = Store(str(tmp_path / "s.db"))
     run = store.start_run("/t")
     run.save_anchors([A1, A2])
-    run.put_artifact("threat_model", {"intent": "sample", "threats": []})
     run.report(Finding(anchor_id="a_1", cwe="CWE-89", file="main.go", line=22, title="sqli", status=CONFIRMED, evidence=["q"]))
     run.report(Finding(anchor_id="a_2", cwe="CWE-78", file="main.go", line=30, title="cmd", status=REJECTED))
     summary = json.loads(run.write_summary(tmp_path).read_text())
-    assert summary["intent"] == "sample" and summary["confirmed"] == 1 and summary["rejected"] == 1
-    assert all("score" in f["calibration"] for f in summary["findings"])
+    assert summary["confirmed"] == 1 and summary["rejected"] == 1 and "calibration" not in summary["findings"][0]
     sarif = json.loads(run.write_report(tmp_path).read_text())
     results = sarif["runs"][0]["results"]
-    assert [r["ruleId"] for r in results] == ["CWE-89"] and "score" in results[0]["properties"]["calibration"]
+    assert [r["ruleId"] for r in results] == ["CWE-89"] and results[0]["properties"]["source"] == "llm"
     run.set_status("f_1", "uncertain", ["critic: safe"])  # disprove → reflected in the summary
     assert json.loads(run.write_summary(tmp_path).read_text())["uncertain"] == 1
     store.close()
 
 
 def test_annotate_merges_fields_and_refuses_verdict_fields(tmp_path):
-    """Card 45: review/viability/confirm write annotations; the verdict (status/evidence/confidence) only through the gates."""
+    """Card 45: the Critic writes its review as an annotation; the verdict (status/evidence/confidence) only through the gates."""
     import pytest
 
     run = Store(str(tmp_path / "s.db")).start_run("/t")
     f = run.report(Finding(anchor_id="a1", cwe="CWE-89", file="m.go", line=3, title="sqli", status=CONFIRMED, confidence=0.9))
-    out = run.annotate(f.id, review={"status": "PROVISIONALLY_VALID", "checklist": {"hypothetical_misuse": {"outcome": "PASS", "reason": ""}}},
-                       viability="CONDITIONAL_VIABLE")
-    assert out.review["status"] == "PROVISIONALLY_VALID" and out.viability == "CONDITIONAL_VIABLE" and out.status == CONFIRMED
-    again = run.annotate(f.id, repro_status="statically_confirmed")
-    assert again.review["status"] == "PROVISIONALLY_VALID" and again.repro_status == "statically_confirmed"  # merge, not replace
-    assert run.findings()[0].repro_status == "statically_confirmed"
-    assert run.annotate("f_nope", viability="VIABLE") is None
-    for bad in ("status", "evidence", "confidence", "id", "anchor_id"):
+    out = run.annotate(f.id, review={"status": "PROVISIONALLY_VALID", "checklist": {"hypothetical_misuse": {"outcome": "PASS", "reason": ""}}})
+    assert out.review["status"] == "PROVISIONALLY_VALID" and out.status == CONFIRMED
+    again = run.annotate(f.id, review={"reasoning": "safe"})
+    assert again.review["status"] == "PROVISIONALLY_VALID" and again.review["reasoning"] == "safe"  # merge, not replace
+    assert run.findings()[0].review["reasoning"] == "safe"
+    assert run.annotate("f_nope", review={"status": "VALID"}) is None
+    for bad in ("status", "evidence", "confidence", "id", "anchor_id", "viability", "calibration"):
         with pytest.raises(ValueError):
             run.annotate(f.id, **{bad: "x"})
     with pytest.raises(ValueError):
@@ -162,11 +150,11 @@ def test_annotate_merges_fields_and_refuses_verdict_fields(tmp_path):
 def test_annotations_land_in_sarif_properties(tmp_path):
     run = Store(str(tmp_path / "s.db")).start_run("/t")
     f = run.report(Finding(anchor_id="a1", cwe="CWE-89", file="m.go", line=3, title="sqli", status=CONFIRMED, confidence=0.9))
-    run.annotate(f.id, review={"status": "VALID"}, viability="VIABLE", repro_status="statically_confirmed")
+    run.annotate(f.id, review={"status": "VALID"})
     g = run.report(Finding(anchor_id="a2", cwe="CWE-79", file="v.js", line=8, title="xss", status=CONFIRMED, confidence=0.8))
     sarif = json.loads(run.write_report(tmp_path).read_text())
     props = {r["properties"]["finding_id"]: r["properties"] for r in sarif["runs"][0]["results"]}
-    assert props[f.id]["review"] == {"status": "VALID"} and props[f.id]["viability"] == "VIABLE" and props[f.id]["repro_status"] == "statically_confirmed"
-    assert "review" not in props[g.id] and "viability" not in props[g.id]  # empty annotations are not exported
+    assert props[f.id]["review"] == {"status": "VALID"}
+    assert "review" not in props[g.id]  # an empty annotation is not exported
     summary = json.loads(run.write_summary(tmp_path).read_text())
-    assert summary["findings"][0]["viability"] == "VIABLE"
+    assert summary["findings"][0]["review"] == {"status": "VALID"}

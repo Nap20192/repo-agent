@@ -10,7 +10,7 @@ from scanner.adapter.index.grep import GrepIndex
 from scanner.adapter.index.languages import LANGUAGES, Language
 from scanner.adapter.index.lsp import LspIndex
 from scanner.adapter.index.rpc import LspClient, LspError
-from scanner.core.ports import Degradable, Index, Symbol
+from scanner.core.ports import Index, Symbol
 
 log = logging.getLogger("scanner.index")
 
@@ -18,9 +18,9 @@ __all__ = ["LANGUAGES", "GrepIndex", "Index", "Language", "LspClient", "LspError
 
 
 class FallbackIndex:
-    """primary (an Index that is also Degradable, e.g. LSP) until it fails, then secondary (grep) — per language."""
+    """primary (an LSP Index with `failed`) until it fails, then secondary (grep) — per language."""
 
-    def __init__(self, primary: Index | Degradable, secondary: Index):
+    def __init__(self, primary: Index, secondary: Index):
         self.primary, self.secondary = primary, secondary
 
     def _pick(self, method: str, *args):

@@ -19,7 +19,7 @@ Cite every line; all three are required for `confirmed`.
 Any one of these, if it dominates the sink on the traced path, makes the claim false:
 - the route group is wrapped by an auth+role middleware, or the endpoint is registered only when `DEBUG`/`dev` is true and that flag cannot be enabled in production.
 - the endpoint is bound to localhost only in code (`127.0.0.1:6060`).
-- the Domain Map lists the interface as intentionally internal behind a network boundary (cite `domain:`).
+- the interface is intentionally internal behind a network boundary (deploy config, bind address — cite `domain:<entity>`).
 
 ## Not enough to confirm
 - `/health` and `/version` are not admin interfaces unless they leak internals.

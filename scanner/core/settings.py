@@ -48,19 +48,11 @@ class Settings:
     model_max_calls: int = 40
     verifier_max_calls: int = 30
     critic_max_calls: int = 20
-    knowledge_max_calls: int = 10
-    domain_max_calls: int = 8
     # state
     state_path: str = ".state/state.db"
     workspace_root: str = "."  # adk web: a chat message may only name targets under this directory (card 48)
     sessions_path: str = ".state/sessions.db"
     skip_deps: bool = False
-    # knowledge
-    knowledge_cache: str = ".state/knowledge.db"
-    knowledge_enrich: bool = True
-    ghsa_dir: str = ""
-    github_token: str = ""
-    nvd_api_key: str = ""
     # index
     index_max_files: int = 3000
     index_max_bytes: int = 30 * 1024 * 1024
@@ -85,17 +77,10 @@ class Settings:
             model_max_calls=_int(e, "MODEL_MAX_MODEL_CALLS", 40),
             verifier_max_calls=_int(e, "VERIFIER_MAX_MODEL_CALLS", 30),
             critic_max_calls=_int(e, "CRITIC_MAX_MODEL_CALLS", 20),
-            knowledge_max_calls=_int(e, "KNOWLEDGE_MAX_MODEL_CALLS", 10),
-            domain_max_calls=_int(e, "DOMAIN_MAX_MODEL_CALLS", 8),
             state_path=e.get("STATE_PATH") or ".state/state.db",
             workspace_root=e.get("WORKSPACE_ROOT") or ".",
             sessions_path=e.get("SESSIONS_PATH") or ".state/sessions.db",
             skip_deps=e.get("SKIP_DEPS") == "1",
-            knowledge_cache=e.get("KNOWLEDGE_CACHE") or ".state/knowledge.db",
-            knowledge_enrich=_on(e, "KNOWLEDGE_ENRICH"),
-            ghsa_dir=e.get("GHSA_DIR", ""),
-            github_token=e.get("GITHUB_TOKEN", ""),
-            nvd_api_key=e.get("NVD_API_KEY", ""),
             index_max_files=_int(e, "INDEX_MAX_FILES", 3000),
             index_max_bytes=_int(e, "INDEX_MAX_BYTES", 30 * 1024 * 1024),
             otel_endpoint=e.get("OTEL_EXPORTER_OTLP_ENDPOINT", ""),

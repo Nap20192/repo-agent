@@ -18,7 +18,7 @@ def make(ctx: ToolContext):
         finding is not confirmed or the quotes are not found in the code."""
         f = next((x for x in run.findings() if x.id == finding_id), None)
         if f is None:
-            return err(f"unknown finding_id {finding_id!r} — use ids from list_findings")
+            return err(f"unknown finding_id {finding_id!r} — use the id of the finding in your payload")
         if f.status != core.CONFIRMED:
             return err(f"finding {finding_id} is {f.status}, only confirmed findings can be disproved")
         quotes = [q.strip() for q in counter_evidence or [] if q.strip()]

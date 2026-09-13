@@ -6,7 +6,7 @@
 `scan` runs the scanners (anchors → store); `direct_findings` reports osv/gitleaks/semgrep-ERROR anchors without a model;
 `model` is the one LLM modelling stage (architecture + threats, grounded); `plan` builds the hypothesis queue; `audit` is
 the round loop over the Investigator fan-out (class section + language overlay per hypothesis); `critique` dedupes and
-runs the Critic over every confirmed finding; `export` calibrates and closes. Verdicts come only from the store
+runs the Critic over every confirmed finding; `export` closes. Verdicts come only from the store
 (report_finding / disprove_finding); the model's JSON adds notes and annotations."""
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from scanner.app.graph.nodes import (
     scan_node,
 )
 from scanner.core import Candidate
-from scanner.core.ports import Closeable, RunStore
+from scanner.core.ports import Index, RunStore
 
 NODES = ("scan", "build_skeleton", "direct_findings", "model", "plan", "audit", "critique", "export")
 
@@ -38,7 +38,7 @@ class ScanWorkflow(Workflow):
     """The Workflow plus the code Index it was wired with (closed by the runner)."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    index: Closeable | None = None
+    index: Index | None = None
 
 
 def build_workflow(
@@ -47,9 +47,8 @@ def build_workflow(
     locate: Callable[[str], tuple[str, int] | None] | None = None,
     entry_points_fn: Callable[[], list[Candidate]] | None = None,
     scan_fn: Callable[[], ScanResult] | None = None,
-    knowledge_cfg=None,
     max_rounds: int = 4, max_hyps: int = 8, max_parallel: int = 3, stage_timeout: float = 600.0,
-    index: Closeable | None = None,
+    index: Index | None = None,
 ) -> ScanWorkflow:
     """Wire the graph for one run. Agents left None turn their node into a no-op of the same name so the diagram is
     stable; `scan_fn` None means the anchors are already in the store (tests)."""
@@ -62,7 +61,7 @@ def build_workflow(
     n_plan = plan_node(store, locate, entry_points_fn)
     n_audit = audit_node(store, verify_node, has_anchor, has_symbol, max_rounds, max_hyps, timings)
     n_critique = critique_node(store, critic, max_parallel)
-    n_export = export_node(store, knowledge_cfg, timings)
+    n_export = export_node(store, timings)
     edges = [
         (START, n_scan, n_skel, n_direct, n_model, n_plan),
         (n_plan, {"empty": n_export, DEFAULT_ROUTE: n_audit}),

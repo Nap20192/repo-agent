@@ -18,7 +18,7 @@ Cite every line; all three are required for `confirmed`.
 ## Counter-facts that reject
 Any one of these, if it dominates the sink on the traced path, makes the claim false:
 - a role/permission check dominates the action (`RequireRole`, `@permission_required`, `ensureAdmin`) or the router group is wrapped by it.
-- the action is intentionally public per the Domain Map (cite `domain:<entity>`).
+- the action is intentionally public — the code shows no owner or role is meant to apply (cite `domain:<entity>`).
 - the route is not registered anywhere (dead code).
 
 ## Not enough to confirm

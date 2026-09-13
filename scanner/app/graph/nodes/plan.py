@@ -19,7 +19,7 @@ log = logging.getLogger("scanner.graph.plan")
 def plan_node(store: RunStore, locate, entry_points_fn: Callable[[], list[Candidate]] | None) -> FunctionNode:
     def plan(node_input) -> Event:
         """The queue; route "empty" → export when there is nothing to investigate."""
-        queue, done = build_queue(store, split_direct(store.anchors())[1], None, locate, entry_points_fn, None)
+        queue, done = build_queue(store, split_direct(store.anchors())[1], None, locate, entry_points_fn)
         qs = QueueState(queue=queue, done=sorted(done)).model_dump()
         store.put_artifact("plan", qs)
         log.info("plan: %d hypotheses", len(queue))

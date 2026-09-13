@@ -11,16 +11,16 @@ def test_defaults_match_the_previous_hardcoded_values():
     assert (s.max_rounds, s.max_hyps, s.max_parallel) == (4, 8, 3)
     assert (s.verifier_max_calls, s.critic_max_calls, s.model_max_calls) == (30, 20, 40)
     assert s.stage_timeout == 600.0 and s.threat_model and s.critic
-    assert s.state_path == ".state/state.db" and s.knowledge_cache == ".state/knowledge.db"
+    assert s.state_path == ".state/state.db" and s.sessions_path
     assert s.index_max_bytes == 30 * 1024 * 1024 and s.otel_service_name == "scanner"
 
 
 def test_env_overrides_and_switches():
     s = Settings.from_env({"BUGFINDER_MAX_HYPS": "2", "STAGE_TIMEOUT": "1.5", "CRITIC": "0",
-                           "VERIFIER_MAX_MODEL_CALLS": "junk", "SKIP_DEPS": "1", "KNOWLEDGE_ENRICH": "0"})
+                           "VERIFIER_MAX_MODEL_CALLS": "junk", "SKIP_DEPS": "1"})
     assert s.max_hyps == 2 and s.stage_timeout == 1.5 and not s.critic
     assert s.verifier_max_calls == 30  # unparsable → default, as before
-    assert s.skip_deps and not s.knowledge_enrich
+    assert s.skip_deps
 
 
 def test_dotenv_process_env_wins(tmp_path, monkeypatch):
@@ -43,7 +43,7 @@ def test_dotenv_inline_comments_and_utf8(tmp_path):
 
 
 def test_no_env_reads_outside_settings():
-    owned = ["scanner/app/runner.py", "scanner/app/graph/helpers.py", "scanner/app/graph/workflow.py", "scanner/app/graph/nodes/critique.py", "scanner/adapter/knowledge.py",
+    owned = ["scanner/app/runner.py", "scanner/app/graph/helpers.py", "scanner/app/graph/workflow.py", "scanner/app/graph/nodes/critique.py", "scanner/adapter/osv.py",
              "scanner/adapter/index/lsp.py", "scanner/app/observe.py"]
     root = Path(__file__).resolve().parent.parent
     offenders = [f for f in owned if re.search(r"os\.(environ|getenv)", (root / f).read_text(encoding="utf-8"))]

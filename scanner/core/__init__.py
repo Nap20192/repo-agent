@@ -1,6 +1,5 @@
 """Domain leaf: types + pure rules. `from scanner.core import Anchor, ground_hypothesis` keeps working."""
 
-from scanner.core.calibrate import calibrate, exposure_for, priority
 from scanner.core.rules import (
     bare_quote,
     check_consulted,
@@ -40,7 +39,6 @@ from scanner.core.types import (
     Entity,
     Finding,
     Hypothesis,
-    Intent,
     Kind,
     Severity,
     Status,
@@ -75,7 +73,6 @@ __all__ = [
     "Entity",
     "Finding",
     "Hypothesis",
-    "Intent",
     "Kind",
     "Severity",
     "Status",
@@ -84,16 +81,13 @@ __all__ = [
     "Tool",
     "VulnClass",
     "bare_quote",
-    "calibrate",
     "check_consulted",
     "consult_required",
-    "exposure_for",
     "ground_hypothesis",
     "is_consult_ref",
     "merge_duplicates",
     "new_anchor_id",
     "norm_severity",
-    "priority",
     "redact_secrets",
     "required_consults",
     "select_candidates",

@@ -34,7 +34,7 @@ def test_timings_artifact_and_summary(tmp_path):
     store = Store(str(tmp_path / "s.db"))
     run = store.start_run("/t")
     run.save_anchors([A1])
-    stage = fake_stage_node(run, "model", {"architecture_model": {"entities": []}, "threat_model": {"intent": "production", "threats": []}})
+    stage = fake_stage_node(run, "model", {"architecture_model": {"entities": []}, "threat_model": {"threats": []}})
     _run(_workflow(run, model=stage, max_rounds=1, max_parallel=1))
     t = run.artifact("timings")
     assert set(t) >= {"model", "verify_0"} and all(v >= 0 for v in t.values())

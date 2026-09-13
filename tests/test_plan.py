@@ -18,9 +18,3 @@ def test_dedupe_pairs_near_same_class_similar_titles_keeps_the_stronger():
 def test_dedupe_skips_direct_and_non_confirmed():
     assert planning.dedupe([_f(1, source="direct"), _f(2, line=11, source="direct")]) == []
     assert planning.dedupe([_f(1, status=core.UNCERTAIN), _f(2, line=11)]) == []
-
-
-def test_calibrate_all_matches_core_calibrate_per_finding():
-    fs = [_f(1), _f(2, cwe="CWE-78", file="b.go")]
-    out = planning.calibrate_all(fs, "production", None, None)
-    assert set(out) == {"f_1", "f_2"} and all(isinstance(c, dict) and c for c in out.values())

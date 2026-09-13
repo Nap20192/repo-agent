@@ -8,10 +8,10 @@
 ```mermaid
 flowchart LR
     main[main.py / web/ — CLI и adk web] --> app
-    app[scanner/app — use-cases: граф из 7 узлов, 5 агентов, reconcile, runner] --> core
+    app[scanner/app — use-cases: граф из 7 узлов, 3 агента, reconcile, runner] --> core
     app --> adapter
-    adapter[scanner/adapter — static, store, index/, tools, owasp, skills, knowledge, domain] --> core
-    core[scanner/core — types, rules, calibrate, ports]
+    adapter[scanner/adapter — scanners/, store, index/, tools/, owasp, osv, skills, git] --> core
+    core[scanner/core — types, rules, settings, ports]
 ```
 
 Стрелки смотрят внутрь [CA, гл. 22 «The Clean Architecture», Dependency Rule; HEX]: `core` не импортирует ничего
@@ -21,8 +21,8 @@ flowchart LR
 
 | Слой | Ответственность | SOLID, который он воплощает | Где сейчас не дотягивает (аудит) |
 |---|---|---|---|
-| `core` | Типы (`Anchor`, `Hypothesis`, `Dossier`, `Finding`, `Threat`, `DomainMap`), чистые правила (`ground_hypothesis`, `validate_finding`, `check_consulted`, `calibrate`), порты (`ports.py`) | **DIP**: порты объявлены там, где их потребляют [CA, гл. 11]; **SRP** леса домена [DDD, гл. 4 «Isolating the Domain»] | инварианты в комментариях, а не в типах (`Literal`, `model_validator`) [types.md §1–2]; один порт (`Index`) на весь «шестиугольник» |
-| `adapter` | Вторичные адаптеры (сканеры, SQLite State, LSP/grep-индекс, OWASP/skills/knowledge/domain) и первичный (`tools` — то, чем LLM дёргает систему) | **OCP** там, где есть таблицы (`LANGUAGES`, `REGISTRY`, `_WSTG`) [CA, гл. 8]; **LSP** у реализаций `Index` | `static.py` и `tools.py` — «God modules» [REF, Large Class/Divergent Change]; `Index` толстый — нарушение **ISP** [CA, гл. 10]; неявный порт `Index + failed` |
+| `core` | Типы (`Anchor`, `Hypothesis`, `Dossier`, `Finding`, `Threat`, `DomainMap`), чистые правила (`ground_hypothesis`, `validate_finding`, `check_consulted`), порты (`ports.py`) | **DIP**: порты объявлены там, где их потребляют [CA, гл. 11]; **SRP** леса домена [DDD, гл. 4 «Isolating the Domain»] | инварианты в комментариях, а не в типах (`Literal`, `model_validator`) [types.md §1–2]; один порт (`Index`) на весь «шестиугольник» |
+| `adapter` | Вторичные адаптеры (сканеры, SQLite State, LSP/grep-индекс, OWASP/skills/osv.dev) и первичный (`tools` — то, чем LLM дёргает систему) | **OCP** там, где есть таблицы (`LANGUAGES`, `REGISTRY`, `_WSTG`) [CA, гл. 8]; **LSP** у реализаций `Index` | `static.py` и `tools.py` — «God modules» [REF, Large Class/Divergent Change]; `Index` один на всех потребителей (ADR-0011: ISP-разрез снят — потребитель один); `failed` у LSP-адаптера вне порта |
 | `app` | Оркестрация ADK: граф из 7 узлов (ADR-0010), реестр агентов + overlay классов, Reconciler, runner, наблюдаемость | **SRP** по модулям-стадиям; **OCP** реестра агентов и секций классов (новый класс = секция + строка в CLASSES) | `graph.py` смешивает fan-out, JSON, досье, критика; `store: Any`/`router: Any` вместо портов; env-флаги читаются в глубине [architecture.md §2–3] |
 | `main.py`, `web/` | Транспорт: argparse и `adk web`; никакой логики прогона | **SRP** транспорта | `score`/`_ensure_target` в CLI; `sys.path`-хак в `web/` |
 
@@ -37,7 +37,7 @@ flowchart LR
 | `Index` | объединение четырёх | — | места, которым нужно всё |
 | `RunStore` | `anchors`, `anchor`, `save_anchors`, `report`, `findings`, `put_hypotheses`, `put_dossiers`, `put_artifact`, `artifact`, `add_note`, `log_gate` | `store.Run`, `tests/fakes.FakeRun` | узлы графа, тулы |
 
-Разделение `Index` — ISP [CA, гл. 10]: каждый потребитель объявляет только то, чем пользуется; «Parse, don't
+`Index` — один протокол (ADR-0011 отменил разрез ADR-0003: у индекса один потребитель — тулы); «Parse, don't
 validate» [King] — порты принимают уже проверенные модели.
 
 ## Инварианты домена (DDD: правила живут в `core`, а не в промптах)
@@ -91,13 +91,13 @@ validate» [King] — порты принимают уже проверенны�
 - Один `LlmAgent` на роль (`model`, `verify`, `critic`) строится раз на прогон; активация — `ctx.run_node(agent, payload)`: payload
   (гипотеза/находка + скиллы + overlay) приходит моделью как user-ход, `include_contents="none"` не даёт истории
   расти между раундами. Клонов и подмены инструкций больше нет.
-- `before_model_callback`: бюджет вызовов (per-branch, per-invocation для `AgentTool`, глобальный стоп только у
+- `before_model_callback`: бюджет вызовов (per-branch, глобальный стоп только у
   корневых стадий) и окно результатов тулов; `before_tool_callback`: лог. Колбэки висят на агентах и работают
   под `run_node` без изменений.
 - Таймаут стадии — `asyncio.wait_for` вокруг `run_node` внутри обёртки стадии (деградация до «нет артефакта»),
   не `timeout=` узла (это уронило бы Workflow).
 - Resume: обёртка стадии пропускает её, если артефакт уже в State (CLI-перезапуск — новая ADK-сессия, replay
-  ADK этого не покрывает). Консультанты как `AgentTool` (Knowledge) — отдельная инвокация со своим бюджетом.
+  ADK этого не покрывает). Саб-агентов (AgentTool) нет — osv.dev это тул `osv_query` (ADR-0011).
 - Состояние: `session.state` для счётчиков и `stop_reason` (ключи в `scanner/core/workflow.py`), SQLite State
   (`.state/state.db`) как источник правды, ADK-сессии в `.state/sessions.db` для `adk web`; спаны OTLP через
   `maybe_set_otel_providers`. `adk web` рендерит граф через `graph_serialization` (`/dev/apps/fullscan/build_graph`).

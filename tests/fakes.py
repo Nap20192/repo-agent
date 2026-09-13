@@ -60,7 +60,7 @@ class FakeRun:
                 return self._findings[i]
         return None
 
-    ANNOTATIONS = ("review", "viability", "repro_status", "calibration")
+    ANNOTATIONS = ("review",)
 
     def annotate(self, fid, **fields):  # mirrors Store.Run.annotate (card 45)
         if set(fields) - set(self.ANNOTATIONS):

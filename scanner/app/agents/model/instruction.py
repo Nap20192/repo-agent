@@ -41,13 +41,6 @@ threats[]: {"cwe":"CWE-…","claim":"one falsifiable sentence","symbol":"handler
 Priority: reachable from an unauthenticated boundary and touching privileged data/exec → 80+; internal-only
 or needs auth → 40..70; speculative → below 40.
 
-intent: exactly "production" or "sample". FAIL CLOSED — write "sample" only if ALL hold, else "production":
- (a) no entity is CRITICAL or STANDARD criticality; (b) no externally reachable service/endpoint and no
- deploy/packaging descriptor (Dockerfile, k8s, systemd, CI publish); (c) no installable package or runtime
- entrypoint; (d) every file lies only under test/example/sample/demo/docs/fixtures, none under
- src/lib/pkg/internal/cmd/app/server/core; (e) no real untrusted external input crosses a boundary into
- privileged logic. Evaluate from scratch; never inherit.
-
 Answer with ONE JSON object only:
 {"architecture_model": {"entities":[...],"trust_boundaries":[...],"vuln_classes":[...],"deployment_signals":[...],"notes":[...]},
- "threat_model": {"threats":[...],"notes":[...],"intent":"production|sample"}}"""
+ "threat_model": {"threats":[...],"notes":[...]}}"""

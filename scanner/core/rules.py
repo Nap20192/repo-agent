@@ -167,9 +167,9 @@ def check_consulted(a: Anchor, evidence: list[str]) -> str | None:
     low = [e.strip().lower() for e in evidence]
     missing = []
     if knowledge and not any(e.startswith(EVIDENCE_KNOWLEDGE) for e in low):
-        missing.append("consult_knowledge (evidence knowledge:<advisory id>)")
+        missing.append("an osv_query ref (evidence knowledge:<advisory id>)")
     if domain and not any(e.startswith(EVIDENCE_DOMAIN) for e in low):
-        missing.append("consult_domain (evidence domain:<entity>)")
+        missing.append("the ownership check you read (evidence domain:<entity>)")
     if not missing:
         return None
     return f"finding is unproven: {reason}; missing {', '.join(missing)}"

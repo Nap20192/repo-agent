@@ -42,7 +42,6 @@ def test_top10_coverage_maps_every_category_to_existing_sections():
             assert part in names, who
 
 
-def test_five_agents_two_consultants():
-    assert list(sp.AGENTS) == ["model", "verify", "critic", "knowledge", "domain"] and sp.CONSULTANTS == ("knowledge", "domain")
-    assert sp.AGENTS["verify"].consults == ("knowledge", "domain") and sp.AGENTS["critic"].consults == ("knowledge", "domain")
-    assert sp.AGENTS["knowledge"].per_invocation and not sp.AGENTS["knowledge"].per_branch  # AgentTool: budget per call
+def test_three_agents_no_consultants():
+    assert list(sp.AGENTS) == ["model", "verify", "critic"]
+    assert "osv_query" in sp.AGENTS["verify"].tools and "osv_query" in sp.AGENTS["critic"].tools  # osv.dev is a lookup, not an agent

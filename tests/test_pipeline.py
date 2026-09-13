@@ -27,7 +27,7 @@ OSV = Anchor(id="a_osv", tool="osv", rule_id="GHSA-x", rule_ids=["GHSA-x"], seve
 
 def test_queue_orders_threats_anchors_and_coverage_by_priority():
     run = FakeRun()
-    run.put_artifact("threat_model", {"threats": [Threat(cwe="CWE-639", claim="idor", symbol="getOrder", priority=90).model_dump()], "intent": "production"})
+    run.put_artifact("threat_model", {"threats": [Threat(cwe="CWE-639", claim="idor", symbol="getOrder", priority=90).model_dump()]})
     wf = _workflow(run,
                    has_symbol=lambda s: s == "listOrders", locate=lambda s: ("orders.go", 5) if s == "getOrder" else None,
                    entry_points_fn=lambda: [Candidate(kind="entry", symbol="listOrders", file="list.go", line=3)], max_parallel=1)
@@ -106,10 +106,10 @@ def test_scan_node_is_the_first_edge_when_scan_fn_is_given():
 def test_model_stage_stores_grounded_architecture_and_threats_and_degrades():
     run = FakeRun([A1])
     am = {"entities": [{"name": "Server", "symbol": "main"}], "trust_boundaries": [], "vuln_classes": [], "deployment_signals": [], "notes": []}
-    tm = {"threats": [{"symbol": "main", "cwe": "CWE-89", "claim": "x", "file": "main.go", "line": 22}], "notes": [], "intent": "production"}
+    tm = {"threats": [{"symbol": "main", "cwe": "CWE-89", "claim": "x", "file": "main.go", "line": 22}], "notes": []}
     stage = fake_stage_node(run, "model", {"architecture_model": am, "threat_model": tm})
     _run(_workflow(run, model=stage, has_symbol=lambda s: s == "main", max_rounds=1))
-    assert run.artifact("architecture_model")["entities"][0]["symbol"] == "main" and run.artifact("threat_model")["intent"] == "production"
+    assert run.artifact("architecture_model")["entities"][0]["symbol"] == "main" and run.artifact("threat_model")["threats"][0]["cwe"] == "CWE-89"
     run2 = FakeRun([A1])
     _run(_workflow(run2, model=fake_stage_node(run2, "model", "not json"), max_rounds=1))
     assert run2.artifact("architecture_model") is None and any("stage model" in t for t, _ in notes_of(run2))
@@ -151,4 +151,3 @@ def test_export_records_timings_and_stop_reason():
     state = _run(_workflow(run, model=fake_stage_node(run, "model", {"architecture_model": {"entities": []}, "threat_model": {"threats": []}}), max_parallel=1))
     t = run.artifact("timings")
     assert {"model", "verify_0"} <= set(t) and state[core.STATE_STOP_REASON] == ""
-    assert all(f.calibration for f in run.findings())  # export calibrated every finding

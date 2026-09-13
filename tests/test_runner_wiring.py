@@ -13,14 +13,15 @@ def _target(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_wiring_has_every_agent_and_the_consultants(tmp_path, monkeypatch):
+def test_wiring_has_every_agent_with_its_roster(tmp_path, monkeypatch):
     monkeypatch.delenv("THREAT_MODEL", raising=False)
     monkeypatch.delenv("CRITIC", raising=False)
     kw = runner.wiring(FakeRun(), _target(tmp_path), [], "gemini-flash-lite-latest")
     try:
         assert kw["model"].name == "model" and "Go" in kw["model"].instruction  # stack overlay appended for a Go target
-        assert {"knowledge", "domain"} <= {getattr(t, "name", "") for t in kw["verifier"].tools}
-        assert {"knowledge", "domain"} <= {getattr(t, "name", "") for t in kw["critic"].tools}
+        for who in ("verifier", "critic"):
+            names = {getattr(t, "__name__", "") for t in kw[who].tools}
+            assert "osv_query" in names and not any(getattr(t, "name", "") in ("knowledge", "domain") for t in kw[who].tools)
         names = {getattr(t, "__name__", "") for t in kw["model"].tools}
         assert "report_finding" not in names and "shell" not in names and "read_file" in names
     finally:

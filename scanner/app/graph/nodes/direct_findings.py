@@ -8,7 +8,7 @@ from pathlib import Path
 
 from google.adk.workflow import FunctionNode
 
-from scanner.adapter.knowledge import enrichment_for, imported_by
+from scanner.adapter.fs import imported_by
 from scanner.app.graph.reconcile import direct_finding, split_direct
 from scanner.core import Anchor
 from scanner.core.ports import RunStore
@@ -17,15 +17,13 @@ log = logging.getLogger("scanner.graph.direct")
 
 
 def report_direct(store: RunStore, target: str, direct: list[Anchor]) -> list[str]:
-    """Direct anchors → confirmed findings through the store's dedup, no model: osv with its knowledge record
-    and an import count, gitleaks/semgrep as they are. Artifact `direct_findings` lists the ids (card 42)."""
-    cfg = getattr(store, "knowledge", None)
+    """Direct anchors → confirmed findings through the store's dedup, no model: osv with an import count,
+    gitleaks/semgrep as they are. Artifact `direct_findings` lists the ids (card 42)."""
     ids = []
     for a in direct:
-        e = enrichment_for(a.id, cfg) if a.tool == "osv" and cfg is not None else None
-        pkg = (e or {}).get("package") or (a.snippet.split() or [""])[0]
+        pkg = (a.snippet.split() or [""])[0]
         n = imported_by(Path(target), pkg) if a.tool == "osv" and pkg and target else None
-        ids.append(store.report(direct_finding(a, e, n)).id)
+        ids.append(store.report(direct_finding(a, n)).id)
     store.put_artifact("direct_findings", {"ids": ids})
     if direct:
         log.info("direct findings: %d scanner results reported without the model (%s)", len(direct),

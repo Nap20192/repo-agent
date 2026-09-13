@@ -13,13 +13,13 @@ Objective: find lookups keyed by a request-supplied object id with no ownership 
 Cite every line; all three are required for `confirmed`.
 1. **Source**: the object identifier comes from path/query/body, not from the session principal.
 2. **Sink**: the id is the whole key of a read/update/delete: `WHERE id = $1` without an owner predicate, `Order.get(id)`, `findById(req.params.id)`, `os.Open(base + name)`.
-3. **Missing control**: no comparison of the object's owner with the caller, no query scoped by the principal, no policy middleware for this object type — call `consult_domain(<entity>)` and cite `domain:<entity>`.
+3. **Missing control**: no comparison of the object's owner with the caller, no query scoped by the principal, no policy middleware for this object type — read the entity's ownership check yourself (grep / lsp_references from the handler to the query) and cite it as `domain:<entity>`.
 
 ## Counter-facts that reject
 Any one of these, if it dominates the sink on the traced path, makes the claim false:
 - the query is scoped by the principal (`AND user_id = $2`, `current_user.orders.find(id)`) or the id is derived from the session.
 - an ownership check dominates the sink (`if obj.Owner != me { 403 }` before any use).
-- the Domain Map says the object is public by design (no owner field) — a business rule, not a hole.
+- the object is public by design — no owner field anywhere in its model or queries (cite `domain:<entity>`) — a business rule, not a hole.
 
 ## Not enough to confirm
 - a missing check on a resource that is public for every authenticated user.
