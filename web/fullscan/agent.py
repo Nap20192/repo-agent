@@ -1,22 +1,11 @@
 """`adk web web --port 8080`: the same graph as `scan full`, driven from the ADK dev UI.
 
-Target comes from BUGFINDER_TARGET (default samples/02-vulnshop). The pre-pass runs once, lazily, when the
-ADK loader first reads `root_agent` (PEP 562 module __getattr__) — importing this module has no side effects.
-State lands in .state/state.db; SARIF is not exported in web mode.
+Type the target into the input: a local directory, or https://github.com/<owner>/<repo> (cloned into .targets/ on
+demand). The root node prepares the graph for that target and runs it nested; the run is closed like `scan full`
+(SARIF + summary under .runs/). Importing this module has no side effects beyond reading .env.
 """
 
-import os
-from pathlib import Path
+from scanner.app.runner import load_env, target_node
 
-_built: dict = {}
-
-
-def __getattr__(name: str):
-    if name != "root_agent":
-        raise AttributeError(name)
-    if "root_agent" not in _built:
-        from scanner.app.runner import load_env, prepare
-
-        load_env()
-        _built["store"], _built["run"], _built["root_agent"] = prepare(Path(os.environ.get("BUGFINDER_TARGET") or "samples/02-vulnshop"))
-    return _built["root_agent"]
+load_env()
+root_agent = target_node()

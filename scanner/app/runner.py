@@ -7,6 +7,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import subprocess
 import time
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from google.adk.errors._stale_session_error import StaleSessionError
 from google.adk.runners import Runner
 from google.adk.sessions.sqlite_session_service import SqliteSessionService
 from google.adk.tools.agent_tool import AgentTool
+from google.adk.workflow import FunctionNode
 from google.genai import types
 
 from scanner import core
@@ -27,9 +29,11 @@ from scanner.adapter.store import Store
 from scanner.adapter.tools import ToolContext
 from scanner.app.agents import build
 from scanner.app.agents.registry import AGENTS, ROSTER, architect_overlay, route_name
+from scanner.app.graph.helpers import why
 from scanner.app.graph.workflow import build_workflow
 from scanner.app.observe import compaction_config, setup_tracing
 from scanner.app.settings import Settings, apply_dotenv
+from scanner.app.target import resolve_target
 from scanner.core import Candidate
 from scanner.core.ports import Index
 
@@ -38,7 +42,7 @@ log = logging.getLogger("scanner.runner")
 APP_NAME = "fullscan"  # = the agent folder under web/, so CLI sessions show in the same app of the ADK UI
 SESSION_USER = "user"  # the ADK dev UI lists this user's sessions
 
-__all__ = ["ROSTER", "build_agent", "prepare", "scan_full", "standalone", "wiring"]  # ROSTER: every agent name (web/<name>)
+__all__ = ["ROSTER", "build_agent", "finish_run", "prepare", "scan_full", "standalone", "target_node", "wiring"]  # ROSTER: every agent name (web/<name>)
 
 
 def load_env(path: str = ".env") -> None:
@@ -218,6 +222,26 @@ def _shared_run(target: Path, s: Settings) -> tuple:
     return store, run, agents
 
 
+def finish_run(store, run, agent, state, runs_dir: Path = Path(".runs")) -> dict:
+    """Close a run after its graph ran: LSP index down, run status + stop reason, SARIF + summary under runs_dir/<ts>.
+    Returns the summary dict (+ 'stop_reason', 'summary_path', 'sarif_path')."""
+    idx = getattr(agent, "index", None)
+    if idx is not None:
+        idx.close()  # LSP servers die with the run
+    stop = state.get(core.STATE_STOP_REASON) or ("budget" if state.get(core.STATE_BUDGET_EXHAUSTED) else "")
+    run.finish("done", stop)
+    out = runs_dir / str(int(time.time()))
+    out.mkdir(parents=True, exist_ok=True)
+    sarif = run.write_report(out)
+    summary_path = run.write_summary(out)
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary.update(stop_reason=stop, sarif_path=str(sarif), summary_path=str(summary_path))
+    store.close()
+    if stop:
+        log.warning("run stopped early: %s", stop)
+    return summary
+
+
 def scan_full(target: Path, deps: bool = False, runs_dir: Path = Path(".runs"), settings: Settings | None = None) -> dict:
     """One full run. Returns the summary dict (+ 'stop_reason', 'summary_path', 'sarif_path')."""
     s = settings or Settings.from_env()  # the only env read of a run; everything below receives values
@@ -225,22 +249,36 @@ def scan_full(target: Path, deps: bool = False, runs_dir: Path = Path(".runs"), 
     try:
         state = asyncio.run(run_session(agent, run.target, run.id, s))
     except Exception as e:
+        idx = getattr(agent, "index", None)
+        if idx is not None:
+            idx.close()
         run.finish("failed", str(e))
         store.close()
         raise
-    finally:
-        idx = getattr(agent, "index", None)
-        if idx is not None:
-            idx.close()  # LSP servers die with the run
-    stop = state.get(core.STATE_STOP_REASON) or ("budget" if state.get(core.STATE_BUDGET_EXHAUSTED) else "")
-    run.finish("done", stop)
-    out = runs_dir / str(int(time.time()))
-    out.mkdir(parents=True, exist_ok=True)
-    sarif = run.write_report(out)
-    summary_path = run.write_summary(out)
-    summary = json.loads(summary_path.read_text())
-    summary.update(stop_reason=stop, sarif_path=str(sarif), summary_path=str(summary_path))
-    store.close()
-    if stop:
-        log.warning("run stopped early: %s", stop)
-    return summary
+    return finish_run(store, run, agent, state, runs_dir)
+
+
+def target_node(runs_dir: Path = Path(".runs")) -> FunctionNode:
+    """`adk web`'s root (web/fullscan): the message names the target — a directory or https://github.com/<owner>/<repo>
+    (cloned into .targets/) — the graph is prepared for it and run nested, then the run is closed like `scan full`
+    (SARIF + summary). A message that names nothing scannable answers with an error and starts nothing."""
+    async def fullscan(ctx, node_input) -> dict:
+        text = "".join(p.text or "" for p in (ctx.user_content.parts or [])) if ctx.user_content else ""
+        try:
+            target = await asyncio.to_thread(resolve_target, text)  # a clone may take a while: keep the loop free
+        except (ValueError, subprocess.CalledProcessError) as e:
+            return {"error": str(e)}
+        store, run, agent = prepare(target)
+        try:
+            await ctx.run_node(agent, None, run_id=f"run-{run.id}")
+        except Exception as e:  # noqa: BLE001 — the UI gets the reason as the answer, not a traceback; the run is marked failed
+            idx = getattr(agent, "index", None)
+            if idx is not None:
+                idx.close()
+            reason = why(e)  # ADK wraps the node's exception; keep the original message
+            run.finish("failed", reason)
+            store.close()
+            log.warning("run %s failed: %s", run.id, reason)
+            return {"error": reason, "target": str(target), "run": run.id}
+        return {**finish_run(store, run, agent, ctx.state, runs_dir), "target": str(target)}
+    return FunctionNode(func=fullscan, name=APP_NAME, rerun_on_resume=True)

@@ -148,10 +148,10 @@ class BrokenClient(FakeClient):
     def initialize(self): raise RuntimeError("server exploded")
 
 
-def _run_node(node, node_input=None) -> list:
+def _run_node(node, node_input=None, message: str = "go") -> list:
     """Run one Workflow node under the real ADK Runner (card 43); returns the outputs of the node's events.
     With a `node_input` the node runs as a dynamic child of a driver node (the way the graph calls it):
-    a root node only ever receives the user turn."""
+    a root node only ever receives the user turn (`message`)."""
     from google.adk.workflow import FunctionNode
 
     if node_input is not None:
@@ -166,7 +166,7 @@ def _run_node(node, node_input=None) -> list:
         r = Runner(app_name="t", node=node, session_service=svc)
         await svc.create_session(app_name="t", user_id="u", session_id="s")
         outs = []
-        msg = types.Content(role="user", parts=[types.Part(text="go")])
+        msg = types.Content(role="user", parts=[types.Part(text=message)])
         async for ev in r.run_async(user_id="u", session_id="s", new_message=msg):
             if ev.output is not None:
                 outs.append(ev.output)
