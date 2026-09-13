@@ -19,7 +19,7 @@ SAFE_URL = re.compile(r"^https://github\.com/[\w.-]+/[\w.-]+(?:\.git)?$")
 
 
 def load_dataset(path: str | Path) -> list[dict]:
-    return json.loads(Path(path).read_text())["cases"]
+    return json.loads(Path(path).read_text(encoding="utf-8"))["cases"]
 
 
 def score(findings: list[dict], expected: list[dict], tolerance: int) -> dict:

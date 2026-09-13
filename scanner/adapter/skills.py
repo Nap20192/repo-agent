@@ -27,7 +27,7 @@ _BY_KIND = {"dependency": "dependency-advisory", "authz": "authz-idor", "secret"
 
 
 def _read(path: Path) -> tuple[str, dict, str]:
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     m = re.match(r"---\n(.*?)\n---\n", text, re.DOTALL)
     fm = dict(re.findall(r"^(\w+):\s*(.*)$", m.group(1), re.MULTILINE)) if m else {}
     cwes = [c.strip().upper() for c in re.split(r"[,\s]+", fm.get("cwes", "").strip("[]")) if c.strip()]

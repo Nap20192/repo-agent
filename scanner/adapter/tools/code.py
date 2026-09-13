@@ -33,7 +33,7 @@ def code_tools(target: Path, run=None) -> list[Callable]:
             return err(f"{path}: not a file inside the target")
         if p.stat().st_size > FILE_CAP:
             return err(f"{path}: file larger than {FILE_CAP} bytes; use grep or lsp_definition")
-        lines = p.read_text(errors="replace").splitlines()
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
         if start > len(lines):
             return err(f"{path}: start {start} is past the last line ({len(lines)})")
         start = max(start, 1)

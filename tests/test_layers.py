@@ -11,7 +11,7 @@ IMPORT = re.compile(r"^\s*(?:from|import)\s+(scanner(?:\.\w+)*|tests(?:\.\w+)*)"
 
 
 def _imports(path: Path) -> set[str]:
-    return set(IMPORT.findall(path.read_text()))
+    return set(IMPORT.findall(path.read_text(encoding="utf-8")))
 
 
 def test_core_is_a_leaf():

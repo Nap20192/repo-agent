@@ -34,11 +34,19 @@ def test_dotenv_process_env_wins(tmp_path, monkeypatch):
     assert s.max_rounds == 1 and s.llm_model == "m"
 
 
+def test_dotenv_inline_comments_and_utf8(tmp_path):
+    env = tmp_path / ".env"
+    lines = ["BUGFINDER_TARGET=      # цель по умолчанию для web (adk web)", "LLM_MODEL=m   # модель",
+             "URL=http://h/#frag", "Q='a # b'  # c"]
+    env.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert load_dotenv(env) == {"BUGFINDER_TARGET": "", "LLM_MODEL": "m", "URL": "http://h/#frag", "Q": "a # b"}
+
+
 def test_no_env_reads_outside_settings():
     owned = ["scanner/app/runner.py", "scanner/app/graph.py", "scanner/app/pipeline.py", "scanner/app/graph_nodes.py", "scanner/adapter/knowledge.py",
              "scanner/adapter/index/lsp.py", "scanner/app/observe.py"]
     root = Path(__file__).resolve().parent.parent
-    offenders = [f for f in owned if re.search(r"os\.(environ|getenv)", (root / f).read_text())]
+    offenders = [f for f in owned if re.search(r"os\.(environ|getenv)", (root / f).read_text(encoding="utf-8"))]
     assert offenders == []
 
 

@@ -18,5 +18,5 @@ def __getattr__(name: str):
         from scanner.app.runner import load_env, prepare
 
         load_env()
-        _built["store"], _built["run"], _built["root_agent"] = prepare(Path(os.environ.get("BUGFINDER_TARGET", "samples/02-vulnshop")))
+        _built["store"], _built["run"], _built["root_agent"] = prepare(Path(os.environ.get("BUGFINDER_TARGET") or "samples/02-vulnshop"))
     return _built["root_agent"]

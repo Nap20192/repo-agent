@@ -9,7 +9,7 @@ from scanner import main
 
 ROOT = Path(__file__).resolve().parent.parent
 DATASET = ROOT / "eval" / "dataset.json"
-CASES = json.loads(DATASET.read_text())["cases"]
+CASES = json.loads(DATASET.read_text(encoding="utf-8"))["cases"]
 LOCAL = [c for c in CASES if "url" not in c]
 
 
@@ -18,7 +18,7 @@ def test_expected_lines_exist_and_hold_their_sink(case):
     target = ROOT / case["target"]
     assert target.is_dir(), case["target"]
     for e in case["expected"]:
-        lines = (target / e["file"]).read_text().splitlines()
+        lines = (target / e["file"]).read_text(encoding="utf-8").splitlines()
         assert e["line"] <= len(lines), f"{case['name']}: {e['file']}:{e['line']} past EOF"
         if "sink" in e:
             assert e["sink"] in lines[e["line"] - 1], f"{case['name']}: {e['file']}:{e['line']} lacks {e['sink']!r}"
@@ -29,7 +29,7 @@ def test_new_samples_cover_every_class_with_a_safe_neighbour():
     assert {e["cwe"] for e in by_name["flaskshop"]["expected"]} == {"CWE-89", "CWE-78", "CWE-22", "CWE-918", "CWE-79"}
     assert {e["cwe"] for e in by_name["expressshop"]["expected"]} >= {"CWE-89", "CWE-78", "CWE-22", "CWE-601", "CWE-95"}
     assert by_name["nodegoat"]["url"].startswith("https://github.com/OWASP/NodeGoat")
-    src = (ROOT / "samples/11-expressshop/server.js").read_text()
+    src = (ROOT / "samples/11-expressshop/server.js").read_text(encoding="utf-8")
     assert "=> {" in src and "app.get(" in src  # inline arrow handlers, for the entry-point detector
 
 
