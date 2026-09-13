@@ -26,7 +26,7 @@ def run(target: Path) -> list[Anchor]:
     if not manifests:
         raise RuntimeError("no dependency manifests (go.mod, package-lock.json, requirements.txt, ...)")
     args = [a for m in manifests for a in ("-L", m)]
-    p = subprocess.run(["osv-scanner", "--format", "json", *args], cwd=target, capture_output=True, text=True,
+    p = subprocess.run(["osv-scanner", "--format", "json", *args], cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=600, check=False)  # exit 1 = vulnerabilities found, JSON still on stdout
     if not p.stdout.strip():
         raise RuntimeError(p.stderr.strip()[:300] or "no output")

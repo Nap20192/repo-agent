@@ -35,7 +35,7 @@ def clone(url: str, into: Path = TARGETS) -> Path:
     tmp = into / f".{owner}-{repo}.{os.getpid()}.part"
     log.info("cloning %s → %s", url, dest)
     try:
-        subprocess.run(["git", "clone", "--depth", "1", "--", m.group(0), str(tmp)], check=True, capture_output=True, text=True,
+        subprocess.run(["git", "clone", "--depth", "1", "--", m.group(0), str(tmp)], check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=300, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
         tmp.rename(dest)
     finally:

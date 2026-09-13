@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 
@@ -20,10 +21,10 @@ def scan_node(store: RunStore, scan_fn: Callable[[], ScanResult] | None) -> Func
     if scan_fn is None:
         return FunctionNode(func=lambda node_input: {"anchors": len(store.anchors())}, name="scan")
 
-    def scan(node_input) -> dict:  # node_input: the user turn that started the run, unused
+    async def scan(ctx, node_input) -> dict:  # node_input: the user turn that started the run, unused
         if (cached := store.artifact("scan")) is not None:
             return {k: cached[k] for k in ("anchors", "ran", "failed")}
-        res = scan_fn()
+        res = await asyncio.to_thread(scan_fn)  # minutes of subprocesses: off the event loop, adk web stays responsive
         for tool, why in res.failed.items():
             log.warning("static: %s failed: %s", tool, why)
         store.save_anchors(res.anchors)

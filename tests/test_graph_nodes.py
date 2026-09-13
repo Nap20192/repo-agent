@@ -144,6 +144,22 @@ def test_scan_node_saves_anchors_and_writes_the_scan_artifact():
     assert run.artifact("scan") == {"anchors": 2, "by_tool": {"gosec": 2}, "ran": ["gosec", "semgrep"], "failed": {"osv": "no manifests"}}
 
 
+def test_scan_node_runs_the_scanners_off_the_event_loop():
+    """The pre-pass is minutes of subprocesses: it must not block adk web's loop (the SSE stream went silent and the
+    UI cancelled the run)."""
+    import threading
+
+    from scanner.adapter.scanners import ScanResult
+    run = FakeRun()
+    seen = {}
+
+    def scan():
+        seen["thread"] = threading.get_ident()
+        return ScanResult(anchors=[A1], ran=["gosec"])
+    _run_node(graph_nodes.scan_node(run, scan))
+    assert seen["thread"] != threading.get_ident() and A1.id in [a.id for a in run.anchors()]
+
+
 def test_scan_node_is_skipped_on_resume_when_anchors_exist():
     from scanner.adapter.scanners import ScanResult
     run = FakeRun([A1])

@@ -12,7 +12,8 @@ def run_shell(target, command: str) -> dict:
     """The shell tool's body, reused by grep and consult_domain."""
     # ponytail: host exec without sandbox; run untrusted targets in Docker before scanning.
     try:
-        p = subprocess.run(command, shell=True, cwd=target, capture_output=True, text=True, timeout=SHELL_TIMEOUT, check=False)
+        p = subprocess.run(command, shell=True, cwd=target, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=SHELL_TIMEOUT, check=False)
     except subprocess.TimeoutExpired:
         return err(f"timeout after {SHELL_TIMEOUT}s")
     except Exception as e:  # noqa: BLE001 — a tool never raises into the model

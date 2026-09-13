@@ -270,7 +270,7 @@ def target_node(runs_dir: Path = Path(".runs")) -> FunctionNode:
         except (ValueError, subprocess.SubprocessError, OSError) as e:  # bad input, git timeout/failure, no git binary
             log.warning("fullscan: %s", e)
             return {"error": core.redact_secrets(str(e))}
-        store, run, agent = prepare(target, settings=s)
+        store, run, agent = await asyncio.to_thread(prepare, target, settings=s)  # index build + entry points: off the loop
         try:
             await ctx.run_node(agent, None, run_id=f"run-{run.id}")
         except Exception as e:  # noqa: BLE001 — the UI gets the reason as the answer, not a traceback; the run is marked failed
