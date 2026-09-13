@@ -1,6 +1,6 @@
 """Card 45 wave 1 (agent C): the deterministic plan/fold/route/dedupe/calibrate functions the graph nodes wrap."""
 
-from scanner.app import plan
+from scanner.app.graph import planning as plan
 from scanner.core import Finding, Hypothesis
 
 

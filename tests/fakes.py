@@ -227,7 +227,7 @@ def fake_critic_node(store, name: str = "critic", fail: bool = False):
 
 def _workflow(run, **kw):
     """The Workflow with the node doubles and a FakeRun."""
-    from scanner.app.pipeline import build_workflow
+    from scanner.app.graph.workflow import build_workflow
 
     return build_workflow(
         store=run, target="/t", verifier=kw.pop("verifier", fake_verifier_node(run)),

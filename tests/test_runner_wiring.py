@@ -5,7 +5,7 @@ from pathlib import Path
 
 from scanner.app import runner
 from scanner.app.agents.registry import REGISTRY, route_name
-from scanner.app.pipeline import ScanWorkflow
+from scanner.app.graph.workflow import ScanWorkflow
 from tests.fakes import FakeRun
 
 

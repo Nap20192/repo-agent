@@ -1,5 +1,5 @@
 from scanner import core
-from scanner.app.reconcile import (
+from scanner.app.graph.reconcile import (
     adversarial_sweep,
     coverage,
     direct_finding,
@@ -88,7 +88,7 @@ def test_adversarial_sweep_is_deterministic_fraction():
 
 
 def test_coverage_mints_anchor_for_symbol_less_entry():
-    from scanner.app.reconcile import coverage
+    from scanner.app.graph.reconcile import coverage
     from scanner.core import Candidate
     eps = [Candidate(kind="entry", file="s.ts", line=1, symbol="", route=["GET /x"]),
            Candidate(kind="entry", file="h.go", line=9, symbol="named")]
@@ -100,7 +100,7 @@ def test_coverage_mints_anchor_for_symbol_less_entry():
 
 
 def test_coverage_examines_every_route_of_a_file_with_an_anchor():
-    from scanner.app.reconcile import coverage
+    from scanner.app.graph.reconcile import coverage
     from scanner.core import Candidate
     anchors = [Anchor(id="a_s", tool="semgrep", cwe="CWE-89", severity="high", file="server.js", line=13)]
     eps = [Candidate(kind="entry", file="server.js", line=13, symbol="search"),
@@ -128,7 +128,7 @@ def _has(sym):
 
 
 def test_ground_artifacts_drops_fabrications():
-    from scanner.app.reconcile import ground_artifacts
+    from scanner.app.graph.reconcile import ground_artifacts
     am = {"entities": [{"name": "Server", "grounding_symbol": "Server"}, {"name": "H", "grounding_symbol": "searchHandler"}],
           "vuln_classes": [{"cwe": "CWE-89", "wstg_id": "WSTG-174"}, {"cwe": "CWE-999", "wstg_id": "WSTG-999"}], "notes": []}
     dm = {"entities": [], "roles": [], "rules": [{"id": "r1", "statement": "Order visible to owner", "entity": "Order", "symbol": "Server.login"},
@@ -145,7 +145,7 @@ def test_ground_artifacts_drops_fabrications():
 
 
 def test_ground_artifacts_tolerates_missing_artifacts():
-    from scanner.app.reconcile import ground_artifacts
+    from scanner.app.graph.reconcile import ground_artifacts
     assert ground_artifacts(None, None, None, _has, set()) == (None, None, None, [])
 
 
@@ -207,7 +207,7 @@ def test_direct_finding_semgrep_error_level():
 
 
 def test_split_direct_caps_each_tool_by_severity():
-    from scanner.app.reconcile import split_direct
+    from scanner.app.graph.reconcile import split_direct
     ls = [Anchor(id=f"g{i}", tool="gitleaks", rule_id="k", cwe="CWE-798", severity="high", file="a", line=i)
           for i in range(5)]
     sg = [Anchor(id=f"s{i}", tool="semgrep", rule_id="r", cwe="CWE-89", severity="critical" if i == 4 else "high",
@@ -218,7 +218,7 @@ def test_split_direct_caps_each_tool_by_severity():
 
 def test_coverage_examines_every_handler_of_a_file_with_an_anchor():
     """NodeGoat run 17: one open-redirect anchor in routes/index.js must not mark its 20 handlers as covered."""
-    from scanner.app.reconcile import coverage
+    from scanner.app.graph.reconcile import coverage
     from scanner.core import Candidate
     anchors = [Anchor(id="a_r", tool="semgrep", cwe="CWE-601", severity="medium", file="index.js", line=72)]
     eps = [Candidate(kind="entry", file="index.js", line=34, symbol="handleLoginRequest", route=["POST /login"]),
@@ -228,7 +228,7 @@ def test_coverage_examines_every_handler_of_a_file_with_an_anchor():
 
 
 def test_direct_osv_title_keeps_advisory_ids_and_gitleaks_is_redacted():
-    from scanner.app.reconcile import direct_finding
+    from scanner.app.graph.reconcile import direct_finding
     osv = Anchor(id="o", tool="osv", rule_id="GHSA-23hp-3jrh-7fpw", rule_ids=["GHSA-23hp-3jrh-7fpw"], severity="high",
                  file="package-lock.json", line=1, snippet="tar 4.4.8", message="tar@4.4.8: 1 advisories (GHSA-23hp-3jrh-7fpw)")
     assert "GHSA-23hp-3jrh-7fpw" in direct_finding(osv).title
@@ -248,7 +248,7 @@ def test_bare_quote_strips_location_prefix_and_html_entities():
 # --- card 44: planner ---------------------------------------------------------------------------------------
 
 def test_hunt_classes_by_route_file_and_symbol():
-    from scanner.app.reconcile import DEFAULT_HUNT, hunt_classes
+    from scanner.app.graph.reconcile import DEFAULT_HUNT, hunt_classes
     assert hunt_classes("POST /login", "session.js", "handleLoginRequest")[:3] == ["CWE-287", "CWE-307", "CWE-522"]
     assert hunt_classes("POST /profile", "profile.js", "handleProfileUpdate")[:2] == ["CWE-79", "CWE-639"]
     assert hunt_classes("GET /allocations/:userId", "allocations.js", "")[:2] == ["CWE-639", "CWE-862"]
@@ -286,13 +286,13 @@ def test_file_baselines_cover_source_files_nobody_reads():
 
 
 def test_file_baselines_are_capped():
-    from scanner.app.reconcile import FILE_BASELINE_MAX
+    from scanner.app.graph.reconcile import FILE_BASELINE_MAX
     hyps, _ = coverage([], [], set(), files=[f"f{i}.py" for i in range(FILE_BASELINE_MAX + 5)])
     assert len(hyps) == FILE_BASELINE_MAX
 
 
 def test_coverage_one_handler_under_two_routes_is_one_baseline():
-    from scanner.app.reconcile import coverage
+    from scanner.app.graph.reconcile import coverage
     from scanner.core import Candidate
     eps = [Candidate(kind="entry", file="routes.js", line=10, symbol="handleThing", route=["GET /a"]),
            Candidate(kind="entry", file="routes.js", line=15, symbol="handleThing", route=["POST /a"])]

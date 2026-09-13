@@ -27,8 +27,8 @@ from scanner.adapter.store import Store
 from scanner.adapter.tools import ToolContext
 from scanner.app.agents import build
 from scanner.app.agents.registry import AGENTS, ROSTER, architect_overlay, route_name
+from scanner.app.graph.workflow import build_workflow
 from scanner.app.observe import compaction_config, setup_tracing
-from scanner.app.pipeline import build_workflow
 from scanner.app.settings import Settings, apply_dotenv
 from scanner.core import Candidate
 from scanner.core.ports import Index

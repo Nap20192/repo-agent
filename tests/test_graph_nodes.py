@@ -1,7 +1,7 @@
 """Card 43 steps 3–4: the Workflow nodes, run one at a time under the real ADK Runner with the fakes."""
 
 from scanner import core
-from scanner.app import graph_nodes
+from scanner.app.graph import nodes as graph_nodes
 from scanner.core import Anchor, Candidate, Dossier, Finding, Hypothesis
 from scanner.core.workflow import ScanSkeleton
 from tests.fakes import A1, A2, FakeRun, _run_node
@@ -106,7 +106,7 @@ def test_triage_sweep_without_an_agent_flags_every_file():
 # --- shared helpers (scanner/app/graph.py) -------------------------------------------------------------------
 
 def test_parse_json_and_dossier_from_store():
-    from scanner.app.graph import dossier_from_store, parse_json
+    from scanner.app.graph.helpers import dossier_from_store, parse_json
     assert parse_json("junk {\"a\": {\"b\": 1}} tail") == {"a": {"b": 1}}
     assert parse_json("nope") is None
     h = Hypothesis(id="h0-1", anchor_id="a_1")
@@ -117,7 +117,7 @@ def test_parse_json_and_dossier_from_store():
 
 
 def test_pick_agent_unknown_name_falls_back_and_no_router_is_generic():
-    from scanner.app.graph import pick_agent
+    from scanner.app.graph.helpers import pick_agent
     h = Hypothesis(id="h0-1", anchor_id="a_1", cwe="CWE-89", reads=["main.go"])
     assert pick_agent(h, "investigate", {}, lambda item, lang, role: ("nope", "x"), "generic") == ("generic", "", "")
     assert pick_agent(h, "investigate", {"taint": "t"}, None, "generic") == ("generic", "", "")

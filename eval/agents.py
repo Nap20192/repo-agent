@@ -35,8 +35,8 @@ from scanner.adapter.tools.consult.domain import map_only
 from scanner.app.agents import build
 from scanner.app.agents import registry as sp
 from scanner.app.agents.registry import AGENTS
-from scanner.app.graph import parse_json, text_of
-from scanner.app.reconcile import KNOWN_WSTG
+from scanner.app.graph.helpers import parse_json, text_of
+from scanner.app.graph.reconcile import KNOWN_WSTG
 from scanner.core import (
     Anchor,
     ArchitectureModel,

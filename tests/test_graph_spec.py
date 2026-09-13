@@ -12,7 +12,7 @@ from google.adk.cli.utils.graph_serialization import serialize_app_info
 from google.adk.workflow import FunctionNode
 
 from scanner import core
-from scanner.app.pipeline import NODES
+from scanner.app.graph.workflow import NODES
 from scanner.core import Anchor, Candidate
 from tests.fakes import A1, FakeRun, _run, _workflow, fake_stage_node, fake_verifier_node, notes_of
 

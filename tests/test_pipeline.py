@@ -269,7 +269,7 @@ def test_plan_grounds_artifacts_before_the_queue():
 def test_workflow_is_the_static_shannon_graph():
     from google.adk.workflow import JoinNode, Workflow
 
-    from scanner.app.pipeline import NODES
+    from scanner.app.graph.workflow import NODES
     wf = _workflow(FakeRun())
     assert isinstance(wf, Workflow) and wf.name == "scan"
     names = [n.name for n in wf.graph.nodes]

@@ -43,7 +43,7 @@ def test_dotenv_inline_comments_and_utf8(tmp_path):
 
 
 def test_no_env_reads_outside_settings():
-    owned = ["scanner/app/runner.py", "scanner/app/graph.py", "scanner/app/pipeline.py", "scanner/app/graph_nodes.py", "scanner/adapter/knowledge.py",
+    owned = ["scanner/app/runner.py", "scanner/app/graph/helpers.py", "scanner/app/graph/workflow.py", "scanner/app/graph/workers.py", "scanner/adapter/knowledge.py",
              "scanner/adapter/index/lsp.py", "scanner/app/observe.py"]
     root = Path(__file__).resolve().parent.parent
     offenders = [f for f in owned if re.search(r"os\.(environ|getenv)", (root / f).read_text(encoding="utf-8"))]

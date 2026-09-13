@@ -87,3 +87,21 @@ def dossier_from_store(findings: list[Finding], h: Hypothesis) -> Dossier:
     if best:
         d.verdict, d.finding_id, d.evidence = best.status, best.id, list(best.evidence)
     return d
+
+
+def why(e: Exception) -> str:
+    """ADK wraps a dynamic node's exception (DynamicNodeFailError.error): keep the original message."""
+    cause = getattr(e, "error", None)
+    return f"{e}: {cause}" if cause is not None else str(e)
+
+
+def model_json(out) -> dict | None:
+    """The model's JSON from a node output: a dict (FunctionNode/output_schema), text (LlmAgent) or nothing."""
+    if isinstance(out, dict):
+        return out
+    return parse_json(out) if isinstance(out, str) else None
+
+
+def llm_findings(store: RunStore, status: str = core.CONFIRMED) -> list[Finding]:
+    """The model's findings with `status` (the direct lane's are never reviewed / critiqued / confirmed)."""
+    return [f for f in store.findings() if f.status == status and f.source != "direct"]

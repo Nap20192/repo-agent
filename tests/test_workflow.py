@@ -14,7 +14,7 @@ from scanner import core, main
 from scanner.adapter import static
 from scanner.adapter.store import Run, Store
 from scanner.app import runner
-from scanner.app.pipeline import build_workflow
+from scanner.app.graph.workflow import build_workflow
 from tests.fakes import fake_stage_node, fake_verifier_node
 
 SAMPLE = Path(__file__).resolve().parent.parent / "samples" / "02-vulnshop"
